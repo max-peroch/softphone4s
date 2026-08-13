@@ -11,7 +11,7 @@ object Dependencies {
   private val scribeVersion        = "3.19.0"
 
   // Audio
-  val sounds4s = "io.github.max-peroch" %% "sounds4s" % "0.1.0"
+  val sound4s = "io.github.max-peroch" %% "sound4s" % "0.2.0"
 
   // Effects & streaming
   val catsEffect = "org.typelevel" %% "cats-effect" % catsEffectVersion

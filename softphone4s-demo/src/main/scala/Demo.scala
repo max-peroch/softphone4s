@@ -8,7 +8,7 @@ import softphone4s.{Softphone, SoftphoneStreaming}
 import softphone4s.config.SoftphoneConfig
 import softphone4s.model.Callee
 import softphone4s.otel4s.TracedSoftphone
-import sounds4s.{AudioFile, SoundStreaming, ResourceName}
+import sound4s.{AudioFile, SoundStreaming, ResourceName}
 import fs2.Stream
 
 import javax.sound.sampled.AudioFormat

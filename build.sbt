@@ -55,7 +55,7 @@ lazy val softphone4sDemo = project
     run / connectInput  := true,
     publish / skip      := true,
     libraryDependencies := Seq(
-      sounds4s,
+      sound4s,
       scribe,
       scribeSlf4j,
       log4catsSlf4j,
