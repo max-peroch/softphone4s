@@ -383,10 +383,10 @@ object CallFsm {
       .flatMap(_.stripPrefix("Signal=").trim.toIntOption)
 
   private def parseDtmfFromBare(body: String): Option[Int] =
-    body.trim match {
-      case s if s.length == 1 => charToDigitCode(s.head)
-      case _                  => None
-    }
+    Some(body.trim)
+      .filter(_.length == 1)
+      .flatMap(_.headOption)
+      .flatMap(charToDigitCode)
 
   private def charToDigitCode(c: Char): Option[Int] =
     if c >= '0' && c <= '9' then Some(c - '0')

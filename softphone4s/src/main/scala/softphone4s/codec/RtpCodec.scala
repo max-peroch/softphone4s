@@ -7,7 +7,7 @@ object RtpCodec {
 
   val HeaderLength = 12 // fixed header, no CSRC, no extension
 
-  case class RtpHeader(
+  final case class RtpHeader(
       version: Int,
       payloadType: Int,
       marker: Boolean,

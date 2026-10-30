@@ -37,14 +37,13 @@ object SrvOrdering {
         draws: List[Double],
         acc: List[SrvRecord]
     ): (List[SrvRecord], List[Double]) =
-      pool match {
-        case Nil => (acc.reverse, draws)
-        case _   =>
+      (pool.filter(_.weight == 0) ++ pool.filter(_.weight > 0)) match {
+        case Nil                         => (acc.reverse, draws)
+        case listed @ (firstListed :: _) =>
           val (draw, rest) = draws match {
             case d :: tail => (d.max(0.0).min(0.999999999), tail)
             case Nil       => (0.0, Nil)
           }
-          val listed = pool.filter(_.weight == 0) ++ pool.filter(_.weight > 0)
           val total  = listed.map(_.weight.toLong).sum
           val point  = (draw * (total + 1)).toLong
           val picked = listed
@@ -52,7 +51,7 @@ object SrvOrdering {
               (Some(r), sum + r.weight)
             }
             .collectFirst { case (Some(r), sum) if sum >= point => r }
-            .getOrElse(listed.head)
+            .getOrElse(firstListed)
           go(pool.diff(List(picked)), rest, picked :: acc)
       }
     go(group, draws, Nil)

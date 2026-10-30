@@ -434,24 +434,29 @@ class SoftphoneStreaming[F[_]: Async: Network] private (
   ): F[Unit] = {
     val callId = invite.request.headers.callId
     Channel.bounded[F, DialogInput[F]](128).flatMap { channel =>
-      routes.update(_ + (callId -> channel)) >>
-        supervisor
-          .supervise(
-            inboundCall(invite, account, channel)
-              .handleErrorWith { error =>
-                logger.error(Map("error" -> String.valueOf(error.getMessage)))(
-                  "Could not take the incoming call"
-                ) >> invite.respond(
-                  TransactionMessages.responseTo(
-                    invite.request,
-                    FailureStatus.ServerInternalError.value,
-                    FailureStatus.ServerInternalError.reason
+      // Registered and handed to a fiber that unregisters it, or neither.
+      Async[F].uncancelable(_ =>
+        routes.update(_ + (callId -> channel)) >>
+          supervisor
+            .supervise(
+              inboundCall(invite, account, channel)
+                .handleErrorWith { error =>
+                  logger
+                    .error(Map("error" -> String.valueOf(error.getMessage)))(
+                      "Could not take the incoming call"
+                    ) >> invite.respond(
+                    TransactionMessages.responseTo(
+                      invite.request,
+                      FailureStatus.ServerInternalError.value,
+                      FailureStatus.ServerInternalError.reason
+                    )
                   )
-                )
-              }
-              .guarantee(routes.update(_ - callId))
-          )
-          .void
+                }
+                .guarantee(routes.update(_ - callId))
+            )
+            .void
+            .onError(_ => routes.update(_ - callId))
+      )
     }
   }
 

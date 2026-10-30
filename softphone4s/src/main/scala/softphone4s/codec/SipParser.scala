@@ -230,11 +230,17 @@ object SipParser {
   /** The lines of `text`, split on LF with a trailing CR dropped, keeping empty
     * ones (the same as `split("\r?\n", -1)`, without a regex).
     */
-  private[codec] def splitLines(text: String): List[String] = {
+  private[codec] def splitLines(text: String): NonEmptyList[String] = {
     @tailrec
-    def go(from: Int, acc: List[String]): List[String] =
+    def go(from: Int, acc: List[String]): NonEmptyList[String] =
       text.indexOf('\n', from) match {
-        case -1 => (text.substring(from) :: acc).reverse
+        // There is always a last line, though it may be empty.
+        case -1 =>
+          NonEmptyList
+            .fromList(acc.reverse)
+            .fold(
+              NonEmptyList.one(text.substring(from))
+            )(_ :+ text.substring(from))
         case nl =>
           val end =
             if nl > from && text.charAt(nl - 1) == '\r' then nl - 1 else nl

@@ -16,7 +16,7 @@ import scala.concurrent.duration.*
   * RTP port range. Loadable via pureconfig — see the `given
   * ConfigReader[SoftphoneConfig]` below.
   */
-case class SoftphoneConfig(
+final case class SoftphoneConfig(
     user: String,
     password: String,
     realm: String,

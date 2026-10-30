@@ -19,7 +19,7 @@ class SipLineSplittingSuite extends ScalaCheckSuite {
         Gen.listOfN(n, Gen.oneOf("ab\r\n :".toList)).map(_.mkString)
       )
     forAll(lines)(s =>
-      assertEquals(SipParser.splitLines(s), s.split("\r?\n", -1).toList)
+      assertEquals(SipParser.splitLines(s).toList, s.split("\r?\n", -1).toList)
     )
   }
 

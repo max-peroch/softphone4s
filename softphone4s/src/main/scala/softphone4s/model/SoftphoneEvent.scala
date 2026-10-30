@@ -8,7 +8,7 @@ import fs2.Chunk
   * #, 12-15 = A-D 1 E R vol — E=end-bit (bit 7), R=reserved (bit 6), volume (6
   * bits) 2-3 duration — 16-bit sample count at the event clock rate
   */
-case class SoftphoneEvent(
+final case class SoftphoneEvent(
     event: Int,
     endBit: Boolean,
     volume: Int,
