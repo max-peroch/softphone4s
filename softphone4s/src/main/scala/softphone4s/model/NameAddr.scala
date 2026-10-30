@@ -86,7 +86,7 @@ object NameAddr {
     }
 
   private def unescape(s: String): String =
-    s.replaceAll("""\\(.)""", "$1")
+    UriSyntax.unescape(s)
 
   given Eq[NameAddr]   = Eq.fromUniversalEquals
   given Show[NameAddr] = Show.show(_.render)

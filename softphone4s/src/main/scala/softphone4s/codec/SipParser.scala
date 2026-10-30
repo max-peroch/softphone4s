@@ -35,9 +35,7 @@ object SipParser {
       else {
         val (headerEnd, bodyStart) = findBodyStart(arr, start, end)
         val lines                  =
-          new String(arr, start, headerEnd - start, UTF_8)
-            .split("\r?\n", -1)
-            .toList
+          splitLines(new String(arr, start, headerEnd - start, UTF_8))
         for {
           fields <- Right(fieldsOf(lines.tail))
           length <- contentLength(fields)
@@ -65,11 +63,7 @@ object SipParser {
           Framing.Invalid(ParseError.MessageTooLarge(slice.length, maxSize))
         else Framing.NeedMore
       else {
-        val lines =
-          new String(arr, start, headerEnd - start, UTF_8)
-            .split("\r?\n", -1)
-            .toList
-        contentLength(fieldsOf(lines.tail)) match {
+        contentLengthOf(arr, start, headerEnd) match {
           case Left(err)   => Framing.Invalid(err)
           case Right(None) => Framing.Invalid(ParseError.MissingContentLength)
           case Right(Some(body)) =>
@@ -81,6 +75,112 @@ object SipParser {
         }
       }
     }
+  }
+
+  /** The Content-Length of the header block `arr[start, headerEnd)`, found by
+    * scanning bytes where the block is plain, and by decoding it to text
+    * otherwise.
+    */
+  private[codec] def contentLengthOf(
+      arr: Array[Byte],
+      start: Int,
+      headerEnd: Int
+  ): Either[ParseError, Option[Int]] =
+    scanContentLength(arr, start, headerEnd)
+      .getOrElse(contentLengthViaText(arr, start, headerEnd))
+
+  private[codec] def contentLengthViaText(
+      arr: Array[Byte],
+      start: Int,
+      headerEnd: Int
+  ): Either[ParseError, Option[Int]] =
+    contentLength(
+      fieldsOf(
+        splitLines(new String(arr, start, headerEnd - start, UTF_8)).tail
+      )
+    )
+
+  /** `None` when the block has anything the scan does not handle (a folded
+    * line, or a value that is not plain digits), so the text path decides.
+    */
+  private def scanContentLength(
+      arr: Array[Byte],
+      start: Int,
+      headerEnd: Int
+  ): Option[Either[ParseError, Option[Int]]] = {
+
+    // The end of the line starting at `from`, before its CR or LF.
+    def lineEnd(from: Int): Int = {
+      @tailrec def go(i: Int): Int =
+        if i >= headerEnd || arr(i) == '\n' then i else go(i + 1)
+      val nl = go(from)
+      if nl > from && arr(nl - 1) == '\r' then nl - 1 else nl
+    }
+
+    def isSpace(b: Byte): Boolean = b == ' ' || b == '\t'
+
+    def lower(b: Byte): Int = if b >= 'A' && b <= 'Z' then b + 32 else b
+
+    def nameIs(from: Int, to: Int, name: String): Boolean =
+      to - from == name.length && name.indices.forall(i =>
+        lower(arr(from + i)) == name.charAt(i)
+      )
+
+    // The digits after the colon of the line [ls, le); `None` if not plain.
+    def digits(from: Int, to: Int): Option[Int] = {
+      val a = (from until to).find(i => !isSpace(arr(i))).getOrElse(to)
+      val b =
+        (a until to).reverse.find(i => !isSpace(arr(i))).map(_ + 1).getOrElse(a)
+      Option
+        .when(
+          b > a && b - a <= 9 && (a until b).forall(i =>
+            arr(i) >= '0' && arr(i) <= '9'
+          )
+        )(
+          (a until b).foldLeft(0)((n, i) => n * 10 + (arr(i) - '0'))
+        )
+    }
+
+    @tailrec
+    def go(ls: Int): Option[Either[ParseError, Option[Int]]] =
+      if ls >= headerEnd then Some(Right(None))
+      else {
+        val le   = lineEnd(ls)
+        val next = (le until headerEnd)
+          .find(i => arr(i) == '\n')
+          .map(_ + 1)
+          .getOrElse(headerEnd)
+        if le > ls && isSpace(arr(ls)) then None // folded line
+        else {
+          val colon = (ls until le).find(i => arr(i) == ':')
+          colon match {
+            case None    => go(next)
+            case Some(c) =>
+              val nameEnd = (ls until c).reverse
+                .find(i => !isSpace(arr(i)))
+                .map(_ + 1)
+                .getOrElse(ls)
+              if nameIs(ls, nameEnd, "content-length") || nameIs(
+                  ls,
+                  nameEnd,
+                  "l"
+                )
+              then
+                // A folded next line would extend this value.
+                if next < headerEnd && isSpace(arr(next)) then None
+                else digits(c + 1, le).map(n => Right(Some(n)))
+              else go(next)
+          }
+        }
+      }
+
+    // Skip the start line.
+    val first     = lineEnd(start)
+    val firstNext = (first until headerEnd)
+      .find(i => arr(i) == '\n')
+      .map(_ + 1)
+      .getOrElse(headerEnd)
+    go(firstNext)
   }
 
   // -------------------------------------------------------------------------
@@ -125,6 +225,22 @@ object SipParser {
       case Some(n) => Right(new String(arr, bodyStart, n, UTF_8))
       case None    => Right(new String(arr, bodyStart, available, UTF_8))
     }
+  }
+
+  /** The lines of `text`, split on LF with a trailing CR dropped, keeping empty
+    * ones (the same as `split("\r?\n", -1)`, without a regex).
+    */
+  private[codec] def splitLines(text: String): List[String] = {
+    @tailrec
+    def go(from: Int, acc: List[String]): List[String] =
+      text.indexOf('\n', from) match {
+        case -1 => (text.substring(from) :: acc).reverse
+        case nl =>
+          val end =
+            if nl > from && text.charAt(nl - 1) == '\r' then nl - 1 else nl
+          go(nl + 1, text.substring(from, end) :: acc)
+      }
+    go(0, Nil)
   }
 
   // -------------------------------------------------------------------------
@@ -293,14 +409,14 @@ object SipParser {
   }
 
   private def parseCseq(value: String): Option[CSeq] =
-    value.trim.split("\\s+", 2) match {
-      case Array(seqStr, methodStr) =>
-        for {
-          seq    <- seqStr.toIntOption.flatMap(CSeqNumber(_).toOption)
-          method <- parseMethod(methodStr).toOption
-        } yield CSeq(seq, method)
-      case _ => None
-    }
+    val v   = value.trim
+    val gap = v.indexWhere(_.isWhitespace)
+    if gap < 0 then None
+    else
+      for {
+        seq    <- v.take(gap).toIntOption.flatMap(CSeqNumber(_).toOption)
+        method <- parseMethod(v.drop(gap)).toOption
+      } yield CSeq(seq, method)
 
   // -------------------------------------------------------------------------
   // Start line

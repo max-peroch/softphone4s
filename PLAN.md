@@ -43,7 +43,7 @@ Each phase ships on its own with tests, and updates README and CHANGELOG.
 Delivered, with where it differs from the list below:
 
 - Items 1, 3 and 5 as written, plus the headers the stack acts on are typed (`Via`, `NameAddr`, `Tag`, `Branch`, `CallId`, `CSeqNumber`, `MaxForwards`, `MediaType`, Digest challenges and credentials). Unmodelled headers are carried in order as `ExtensionHeader`s. The `Update`, `Prack` and `Refer` methods are still to add, with their phases.
-- Item 2: the parser works on bytes, frames streams by `Content-Length`, and reports typed `ParseError`s. It is covered by property-based round trips and by a suite modelled on RFC 4475 (written for this project, not copied, so it is not the RFC's own message set). The baseline for the JMH benchmarks is in `softphone4s-bench/BASELINE.md`: parsing an INVITE takes about 56 µs and allocates about 38 KB, which is the first thing to optimise.
+- Item 2: the parser works on bytes, frames streams by `Content-Length`, and reports typed `ParseError`s. It is covered by property-based round trips and by a suite modelled on RFC 4475 (written for this project, not copied, so it is not the RFC's own message set). The JMH baseline is in `softphone4s-bench/BASELINE.md`: parsing an INVITE took about 56 µs and 38 KB, and a first round of profile-guided optimisation brought it to about 28 µs and 30 KB (a response parses in 16 µs, framing in 2 µs).
 - Item 4: `Entropy[F]`, `Transport[F]` and `Timers[F, Id]` with `TimerAction` exist, and `CallFsm` now emits timer actions for its invite and BYE timers.
 - `softphone4s-core` was **not** split out; see the decision under "Open decisions".
 
@@ -136,5 +136,5 @@ PRACK/100rel, REFER transfer, session timers, WebSocket transport, DTLS-SRTP, fu
 
 - Opus implementation (pure Scala/Java port vs. optional native module).
 - Whether and when to split `softphone4s-core` (tried and reverted at the end of Phase 0, see "Module layout"); revisit when something besides the runtime wants the pure protocol, or if the parser moves to `scodec.bits.ByteVector`.
-- Parser performance (see `softphone4s-bench/BASELINE.md`): where the allocation comes from, and a target for Phase 6's load test.
+- Parser performance (see `softphone4s-bench/BASELINE.md`): what is left after the first round is ip4s hostname validation, `cats` traversal overhead and per-header allocation; decide a target for Phase 6's load test before optimising further.
 - Which Docker images and versions pin the interop suite.

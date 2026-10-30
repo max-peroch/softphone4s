@@ -68,6 +68,6 @@ object AuthChallenge {
   private def unquote(s: String): Option[String] =
     if !s.startsWith("\"") then Some(s)
     else if s.length >= 2 && s.endsWith("\"") then
-      Some(s.slice(1, s.length - 1).replaceAll("""\\(.)""", "$1"))
+      Some(UriSyntax.unescape(s.slice(1, s.length - 1)))
     else None
 }

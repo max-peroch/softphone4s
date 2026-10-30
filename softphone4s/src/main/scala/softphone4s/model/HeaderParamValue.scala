@@ -8,11 +8,20 @@ import cats.{Eq, Show}
 opaque type HeaderParamValue = String
 
 object HeaderParamValue {
-  private val syntax =
-    s"""(?:[${UriSyntax.TokenChars}\\[\\]:]+|"(?:[^"\\\\]|\\\\.)*")""".r
+  // A token or host, or a quoted string; escapes are not `%HH` here.
+  private val unquoted =
+    new UriSyntax.Syntax(
+      UriSyntax.ParamValueChars,
+      nonEmpty = true,
+      escapes = false
+    )
 
   def apply(s: String): Either[String, HeaderParamValue] =
-    UriSyntax.check("header parameter value", syntax, s)
+    Either.cond(
+      unquoted.matches(s) || UriSyntax.isQuotedString(s),
+      s,
+      s"invalid header parameter value: '$s'"
+    )
 
   extension (v: HeaderParamValue) def value: String = v
 
