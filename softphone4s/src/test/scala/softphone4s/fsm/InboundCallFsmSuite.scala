@@ -580,4 +580,22 @@ class InboundCallFsmSuite extends FunSuite {
       (answered, Nil)
     )
   }
+
+  test("a 200 to our UPDATE applies its answer and is not ACKed") {
+    val (updating, _) =
+      step(active, SessionChangeRequested(SessionChange.HoldByUpdate))
+    val dialog = updating match {
+      case Reinviting(d, _) => d
+      case other            => fail(s"unexpected $other")
+    }
+    val ok = SipResponse(
+      200,
+      "OK",
+      request(SipMethod.Update, dialog.localCseq.value).headers
+    )
+    assertEquals(
+      step(updating, ResponseReceived(ok)),
+      (Active(dialog), List(ApplyAnswer(ok)))
+    )
+  }
 }

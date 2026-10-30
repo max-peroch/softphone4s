@@ -3,6 +3,7 @@ package softphone4s
 import cats.data.NonEmptyList
 import cats.effect.Resource
 import fs2.{Pipe, Stream}
+import softphone4s.fsm.SessionChange
 import softphone4s.model.{AccountId, Callee, DtmfDigit}
 import softphone4s.registration.Registration
 
@@ -25,15 +26,18 @@ trait Call[F[_]] {
   /** Suspends until the remote party ends the call. */
   def awaitHangup: F[Unit]
 
-  /** Asks the remote party to put the call on hold (a re-INVITE offering
-    * `sendonly`). Returns once the request is queued; the call carries on if it
-    * is refused, and a clash with the remote party's own re-INVITE (491) is
-    * retried after a random delay.
+  /** Asks the remote party to change the session: a re-INVITE or UPDATE
+    * offering the given media direction. Returns once the request is queued;
+    * the call carries on if it is refused, and a clash with the remote party's
+    * own request (491) is retried after a random delay.
     */
-  def hold: F[Unit]
+  def changeSession(change: SessionChange): F[Unit]
+
+  /** Puts the call on hold (a re-INVITE offering `sendonly`). */
+  def hold: F[Unit] = changeSession(SessionChange.Hold)
 
   /** Takes the call off hold (a re-INVITE offering `sendrecv`). */
-  def resume: F[Unit]
+  def resume: F[Unit] = changeSession(SessionChange.Resume)
 }
 
 trait Softphone[F[_]] {

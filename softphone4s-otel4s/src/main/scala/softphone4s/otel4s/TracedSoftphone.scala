@@ -8,6 +8,7 @@ import io.opentelemetry.context.ContextStorage
 import org.typelevel.otel4s.Attribute
 import org.typelevel.otel4s.trace.{SpanKind, SpanOps, Tracer}
 import softphone4s.{Call, IncomingCall, Softphone}
+import softphone4s.fsm.SessionChange
 import softphone4s.model.{AccountId, Callee, DtmfDigit}
 import softphone4s.registration.Registration
 
@@ -41,11 +42,10 @@ private final class TracedCall[F[_]: Async](
   def awaitHangup: F[Unit] =
     tracer.span("softphone4s.call.awaitHangup").surround(underlying.awaitHangup)
 
-  def hold: F[Unit] =
-    tracer.span("softphone4s.call.hold").surround(underlying.hold)
-
-  def resume: F[Unit] =
-    tracer.span("softphone4s.call.resume").surround(underlying.resume)
+  def changeSession(change: SessionChange): F[Unit] =
+    tracer
+      .span("softphone4s.call.changeSession")
+      .surround(underlying.changeSession(change))
 }
 
 /** `Softphone` decorator adding OpenTelemetry spans around call setup, media,

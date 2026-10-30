@@ -204,7 +204,7 @@ object SipMessages {
       )
 
     // -----------------------------------------------------------------------
-    // re-INVITE
+    // re-INVITE and UPDATE
     // -----------------------------------------------------------------------
 
     /** A re-INVITE within `dialog` offering `direction` (RFC 3261 §14.1). Its
@@ -216,20 +216,30 @@ object SipMessages {
         branch: Branch,
         direction: MediaDirection
     ): SipRequest =
+      buildSessionRequest(dialog, branch, SessionChange(direction))
+
+    /** The re-INVITE or UPDATE that carries `change`, with the dialog's current
+      * local CSeq (already advanced for it) and an SDP offer.
+      */
+    def buildSessionRequest(
+        dialog: SipDialog,
+        branch: Branch,
+        change: SessionChange
+    ): SipRequest =
       SipRequest(
-        method = SipMethod.Invite,
+        method = change.method.sipMethod,
         requestUri = dialog.route.requestUri,
         headers = SipHeaders(
           callId = dialog.callId,
           from = NameAddr.withTag(dialog.localUri, dialog.localTag),
           to = remoteParty(dialog),
           vias = vias(e, branch),
-          cseq = CSeq(dialog.localCseq, SipMethod.Invite),
+          cseq = CSeq(dialog.localCseq, change.method.sipMethod),
           contacts = contacts(e),
           contentType = Some(MediaType.Sdp),
           routes = dialog.route.routes
         ),
-        body = SdpCodec.buildOffer(e.ip, e.rtpPort, direction)
+        body = SdpCodec.buildOffer(e.ip, e.rtpPort, change.direction)
       )
 
     def buildByeOk(req: SipRequest): SipResponse =

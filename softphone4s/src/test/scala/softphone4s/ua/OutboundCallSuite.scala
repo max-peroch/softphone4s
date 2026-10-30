@@ -733,4 +733,27 @@ class OutboundCallSuite extends CatsEffectSuite {
       }
     }
   }
+
+  // ---- Session requests from the remote, and UPDATE from us -------------------------
+
+  test("a hold by UPDATE sends an UPDATE that is answered without an ACK") {
+    fixture(port"19022").use { f =>
+      for {
+        established <- established(f)
+        (invite, _) = established
+        _ <- f.call.changeSession(softphone4s.fsm.SessionChange.HoldByUpdate)
+        update <- nextOf(f.peer, SipMethod.Update)
+        _      <- reply(f.peer, okTo(update, "recvonly"))
+        ack    <- nextOf(f.peer, SipMethod.Ack).timeout(700.millis).attempt
+      } yield {
+        assertEquals(update.headers.callId, invite.headers.callId)
+        assertEquals(
+          update.headers.cseq.seq.value,
+          invite.headers.cseq.seq.value + 1
+        )
+        assert(update.body.contains("a=sendonly"), update.body)
+        assert(ack.isLeft, "an UPDATE's 200 is not ACKed")
+      }
+    }
+  }
 }

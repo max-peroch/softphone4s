@@ -268,12 +268,18 @@ object InboundCallFsm {
           sendReinvite(dialog, change)
 
         case (Reinviting(dialog, change), ResponseReceived(response))
-            if response.headers.cseq.method == SipMethod.Invite &&
+            if response.headers.cseq.method == change.method.sipMethod &&
               response.headers.cseq.seq == dialog.localCseq =>
           Reinvite.outcome(response) match {
             case Reinvite.Outcome.Progress => State.pure(Nil)
             case Reinvite.Outcome.Accepted =>
-              go(Active(dialog), List(SendAck(dialog), ApplyAnswer(response)))
+              go(
+                Active(dialog),
+                // Only an INVITE's 2xx is ACKed.
+                Option
+                  .when(change.method == SessionMethod.Invite)(SendAck(dialog))
+                  .toList :+ ApplyAnswer(response)
+              )
             case Reinvite.Outcome.Glare =>
               go(
                 Retrying(dialog, change),

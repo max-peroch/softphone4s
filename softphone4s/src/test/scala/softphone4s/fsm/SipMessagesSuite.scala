@@ -269,4 +269,21 @@ class SipMessagesSuite extends FunSuite {
         .contains("a=sendrecv")
     )
   }
+
+  test("an UPDATE is built like the re-INVITE, with its own method and CSeq") {
+    val d =
+      routedDialog("<sip:p1.example.com;lr>").copy(localCseq = cseqNumber(5))
+    val r = endpoint.buildSessionRequest(
+      d,
+      branch("z9hG4bKu"),
+      SessionChange.HoldByUpdate
+    )
+    assertEquals(r.method, SipMethod.Update)
+    assertEquals(r.headers.cseq, CSeq(cseqNumber(5), SipMethod.Update))
+    assertEquals(
+      r.headers.routes.map(_.render),
+      List("<sip:p1.example.com;lr>")
+    )
+    assert(r.body.contains("a=sendonly"), r.body)
+  }
 }

@@ -214,11 +214,8 @@ private[softphone4s] class OutboundCall[F[_]: Async] private (
       .filter(_.isAcceptable)
       .traverse_(o => media.retarget(o.ip, o.port, o.direction))
 
-  def hold: F[Unit] =
-    events.send(SipEvent.SessionChangeRequested(SessionChange.Hold)).void
-
-  def resume: F[Unit] =
-    events.send(SipEvent.SessionChangeRequested(SessionChange.Resume)).void
+  def changeSession(change: SessionChange): F[Unit] =
+    events.send(SipEvent.SessionChangeRequested(change)).void
 
   private def forward(transaction: ClientTransaction[F]): F[Unit] =
     transaction.notices
@@ -353,9 +350,11 @@ private[softphone4s] class OutboundCall[F[_]: Async] private (
 
       case SendReinvite(dialog, change) =>
         (newBranch(), destinationFor(dialog)).flatMapN { (branch, to) =>
-          logger.debug(Map("change" -> change.toString))("Sending re-INVITE") >>
+          logger.debug(Map("change" -> change.toString))(
+            "Sending a session change"
+          ) >>
             startClient(
-              endpoint.buildReinvite(dialog, branch, change.direction),
+              endpoint.buildSessionRequest(dialog, branch, change),
               to
             )
         }

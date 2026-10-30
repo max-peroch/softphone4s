@@ -96,11 +96,8 @@ private[softphone4s] final class InboundCall[F[_]: Async] private (
     }
   def awaitHangup: F[Unit] = callEnded.get.void
 
-  def hold: F[Unit] =
-    events.send(InboundEvent.SessionChangeRequested(SessionChange.Hold)).void
-
-  def resume: F[Unit] =
-    events.send(InboundEvent.SessionChangeRequested(SessionChange.Resume)).void
+  def changeSession(change: SessionChange): F[Unit] =
+    events.send(InboundEvent.SessionChangeRequested(change)).void
 
   /** True while the call can still be answered or is under way. */
   private[softphone4s] def isOpen: F[Boolean] =
@@ -205,9 +202,11 @@ private[softphone4s] final class InboundCall[F[_]: Async] private (
 
       case SendReinvite(dialog, change) =>
         (entropy.branch, destinationFor(dialog)).flatMapN { (branch, to) =>
-          logger.debug(Map("change" -> change.toString))("Sending re-INVITE") >>
+          logger.debug(Map("change" -> change.toString))(
+            "Sending a session change"
+          ) >>
             startClient(
-              endpoint.buildReinvite(dialog, branch, change.direction),
+              endpoint.buildSessionRequest(dialog, branch, change),
               to
             )
         }

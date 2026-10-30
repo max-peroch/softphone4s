@@ -980,4 +980,57 @@ class CallFsmSuite extends FunSuite {
     assertEquals(state, ByeSent(active.dialog))
     assertEquals(actions, Nil)
   }
+
+  // ---- A session change by UPDATE ----------------------------------------------
+
+  private def updateResponse(code: Int, number: Int) = {
+    val r = resp(
+      code,
+      "X",
+      to = "<sip:callee@host>;tag=rtag",
+      method = SipMethod.Update
+    )
+    r.copy(headers = r.headers.copy(cseq = cseq(number, SipMethod.Update)))
+  }
+
+  private lazy val updating: Reinviting =
+    step(active, SessionChangeRequested(SessionChange.HoldByUpdate)) match {
+      case (r: Reinviting, _) => r
+      case (other, _)         => fail(s"expected Reinviting, got $other")
+    }
+
+  test("a hold by UPDATE sends an UPDATE with the next CSeq") {
+    val next = active.dialog.copy(localCseq = active.dialog.localCseq.next)
+    assertEquals(updating, Reinviting(next, SessionChange.HoldByUpdate))
+    assertEquals(
+      step(active, SessionChangeRequested(SessionChange.HoldByUpdate))._2,
+      List(SendReinvite(next, SessionChange.HoldByUpdate))
+    )
+  }
+
+  test("a 200 to the UPDATE applies its answer and is not ACKed") {
+    val ok = updateResponse(200, updating.dialog.localCseq.value)
+    assertEquals(
+      step(updating, ResponseReceived(ok)),
+      (Active(updating.dialog), List(ApplyAnswer(ok)))
+    )
+  }
+
+  test("a response to an INVITE is not taken for the UPDATE's answer") {
+    val other = reinviteResponse(200, updating.dialog.localCseq.value)
+    assertEquals(step(updating, ResponseReceived(other))._1, updating)
+  }
+
+  test("a 491 to the UPDATE is retried with the same method") {
+    val (waiting, _) = step(
+      updating,
+      ResponseReceived(updateResponse(491, updating.dialog.localCseq.value))
+    )
+    assertEquals(waiting, Retrying(updating.dialog, SessionChange.HoldByUpdate))
+    val (again, resent) = step(waiting, TimerFired(CallTimer.ReinviteRetry))
+    assert(resent.exists {
+      case SendReinvite(_, SessionChange.HoldByUpdate) => true; case _ => false
+    })
+    assert(again.isInstanceOf[Reinviting])
+  }
 }
