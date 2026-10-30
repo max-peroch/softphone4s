@@ -289,10 +289,8 @@ object CallFsm {
       kind: AuthKind,
       challenges: List[AuthChallenge]
   ): Transition =
-    challenges
-      .collectFirst {
-        case AuthChallenge.Digest(c) if c.isAnswerable => c
-      }
+    AuthChallenge
+      .best(challenges)
       .filter(challenge => mayAnswer(ctx, kind, challenge))
       .fold(reject(response)) { challenge =>
         val newCtx = ctx.copy(

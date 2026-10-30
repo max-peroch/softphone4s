@@ -247,6 +247,7 @@ private[softphone4s] class OutboundCall[F[_]: Async] private (
               kind,
               SipMethod.Invite,
               ctx.callee,
+              endpoint.offerBody,
               challenge,
               cnonce,
               nonceCount

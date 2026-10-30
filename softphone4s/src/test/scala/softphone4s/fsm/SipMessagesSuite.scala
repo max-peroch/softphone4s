@@ -131,6 +131,7 @@ class SipMessagesSuite extends FunSuite {
         AuthKind.Origin,
         method,
         uri("sip:sip.example.com"),
+        "",
         challenge,
         cnonce,
         NonceCount.One

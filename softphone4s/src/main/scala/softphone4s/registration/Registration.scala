@@ -167,6 +167,7 @@ object Registration {
                     kind,
                     SipMethod.Register,
                     registrarUri,
+                    "",
                     challenge,
                     cnonce,
                     count

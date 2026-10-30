@@ -23,6 +23,9 @@ object SipMessages {
     // INVITE
     // -----------------------------------------------------------------------
 
+    /** The SDP offer an INVITE from this endpoint carries. */
+    def offerBody: String = SdpCodec.buildOffer(e.ip, e.rtpPort)
+
     def buildInvite(
         callee: SipUri,
         callId: CallId,
@@ -49,12 +52,14 @@ object SipMessages {
       )
 
     /** The Authorization or Proxy-Authorization header answering `challenge` on
-      * a retried `method` request to `target`.
+      * a retried `method` request to `target` carrying `body` (which `auth-int`
+      * hashes).
       */
     def authorizationFor(
         kind: AuthKind,
         method: SipMethod,
         target: SipUri,
+        body: String,
         challenge: DigestChallenge,
         cnonce: Cnonce,
         nonceCount: NonceCount
@@ -66,6 +71,7 @@ object SipMessages {
             challenge,
             method.toString.toUpperCase,
             target.render,
+            body,
             e.credentials,
             cnonce,
             nonceCount

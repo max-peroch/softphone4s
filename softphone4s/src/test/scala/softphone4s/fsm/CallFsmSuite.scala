@@ -172,28 +172,36 @@ class CallFsmSuite extends FunSuite {
     assertEquals(state, Failed(401, "Unauthorized"))
   }
 
-  test("a 401 offering SHA-256 then MD5 is answered with the MD5 challenge") {
+  private def challengeChosen(algorithms: String*): List[String] = {
     val (_, actions) = step(
       Inviting(baseCtx),
       ResponseReceived(
         resp(
           401,
           "Unauthorized",
-          wwwAuth = List(
-            """Digest realm="r", nonce="n1", algorithm=SHA-256""",
-            """Digest realm="r", nonce="n2", algorithm=MD5"""
+          wwwAuth = algorithms.toList.map(a =>
+            s"""Digest realm="r", nonce="$a", algorithm=$a"""
           )
         )
       )
     )
-    val nonces = actions.collect { case RetryInviteWithAuth(_, _, c) =>
-      c.nonce.value
-    }
-    assertEquals(nonces, List("n2"))
+    actions.collect { case RetryInviteWithAuth(_, _, c) => c.nonce.value }
   }
 
-  test("a challenge offering only auth-int cannot be answered") {
-    val (state, _) = step(
+  test(
+    "a 401 offering MD5 then SHA-256 is answered with SHA-256, the stronger"
+  ) {
+    assertEquals(challengeChosen("MD5", "SHA-256"), List("SHA-256"))
+    assertEquals(challengeChosen("SHA-256", "MD5"), List("SHA-256"))
+  }
+
+  test("an algorithm we do not support is skipped for one we do") {
+    assertEquals(challengeChosen("SHA-512-256", "MD5"), List("MD5"))
+    assertEquals(challengeChosen("SHA-512-256"), Nil)
+  }
+
+  test("a challenge offering only auth-int is answered, over the body") {
+    val (state, actions) = step(
       Inviting(baseCtx),
       ResponseReceived(
         resp(
@@ -203,7 +211,8 @@ class CallFsmSuite extends FunSuite {
         )
       )
     )
-    assertEquals(state, Failed(401, "Unauthorized"))
+    assert(state.isInstanceOf[Inviting])
+    assert(actions.exists(isRetry))
   }
 
   test(

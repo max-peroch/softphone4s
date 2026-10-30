@@ -7,6 +7,7 @@ import com.comcast.ip4s.*
 import fs2.Stream
 import munit.CatsEffectSuite
 import org.typelevel.log4cats.noop.NoOpLogger
+import softphone4s.DigestVerifier
 import softphone4s.SipLiterals.*
 import softphone4s.config.SoftphoneConfig
 import softphone4s.fsm.CallTimer
@@ -372,6 +373,59 @@ class OutboundCallSuite extends CatsEffectSuite {
           .last
           .timeoutTo(300.millis, IO.pure(None))
       } yield assertEquals(extra, None)
+    }
+  }
+
+  private def unauthorizedWith(
+      invite: SipRequest,
+      challenge: String
+  ): SipResponse = {
+    val base = answerTo(invite, 401, "Unauthorized")
+    base.copy(headers =
+      base.headers.copy(wwwAuthenticate = List(AuthChallenge.parse(challenge)))
+    )
+  }
+
+  test(
+    "an INVITE challenged with SHA-256 is retried with a response the server can verify"
+  ) {
+    fixture(port"19008").use { f =>
+      for {
+        first <- nextOf(f.peer, SipMethod.Invite)
+        _     <- reply(
+          f.peer,
+          unauthorizedWith(
+            first,
+            """Digest realm="test.local", nonce="n1", algorithm=SHA-256, qop="auth""""
+          )
+        )
+        retry <- nextOf(f.peer, SipMethod.Invite)
+      } yield assertEquals(
+        DigestVerifier.verify(retry, "test").map(v => (v.valid, v.algorithm)),
+        Some((true, "SHA-256"))
+      )
+    }
+  }
+
+  test("auth-int hashes the SDP offer the retried INVITE carries") {
+    fixture(port"19009").use { f =>
+      for {
+        first <- nextOf(f.peer, SipMethod.Invite)
+        _     <- reply(
+          f.peer,
+          unauthorizedWith(
+            first,
+            """Digest realm="test.local", nonce="n1", qop="auth-int""""
+          )
+        )
+        retry <- nextOf(f.peer, SipMethod.Invite)
+      } yield {
+        assert(retry.body.nonEmpty)
+        assertEquals(
+          DigestVerifier.verify(retry, "test").map(_.valid),
+          Some(true)
+        )
+      }
     }
   }
 }

@@ -18,6 +18,20 @@ enum AuthChallenge {
 
 object AuthChallenge {
 
+  /** The challenge to answer: of the Digest challenges we can answer, the one
+    * with the strongest algorithm, the first of equals (a server lists its
+    * preference first, RFC 7616 §3.7).
+    */
+  def best(challenges: List[AuthChallenge]): Option[DigestChallenge] =
+    challenges
+      .collect { case Digest(c) if c.isAnswerable => c }
+      .foldLeft(Option.empty[DigestChallenge]) {
+        case (Some(kept), c)
+            if kept.algorithm.strength >= c.algorithm.strength =>
+          Some(kept)
+        case (_, c) => Some(c)
+      }
+
   /** Total: never fails, see [[AuthChallenge]]. */
   def parse(value: String): AuthChallenge = {
     val v      = value.trim

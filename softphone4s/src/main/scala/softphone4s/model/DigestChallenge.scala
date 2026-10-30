@@ -14,10 +14,16 @@ final case class DigestChallenge(
     staleness: Staleness = Staleness.Fresh
 ) {
 
-  /** Whether we can answer: no qop, or `auth` among them (`auth-int` would need
-    * the body hash).
+  /** The quality of protection we answer with: `auth` if offered, else
+    * `auth-int`, else none (the RFC 2069 form, when the server offers none).
     */
-  def isAnswerable: Boolean = qop.isEmpty || qop.contains(Qop.Auth)
+  def chosenQop: Option[Qop] =
+    if qop.contains(Qop.Auth) then Some(Qop.Auth)
+    else if qop.contains(Qop.AuthInt) then Some(Qop.AuthInt)
+    else None
+
+  /** Whether we can answer: no qop offered, or one we know. */
+  def isAnswerable: Boolean = qop.isEmpty || chosenQop.isDefined
 
   def render: String = {
     val opaqueText =

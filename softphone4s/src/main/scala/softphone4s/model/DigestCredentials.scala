@@ -6,7 +6,7 @@ package softphone4s.model
   * @param uri
   *   the digest-uri: the request-URI the response was computed over.
   * @param qop
-  *   present when the challenge offered `auth`.
+  *   present when the challenge offered `auth` or `auth-int`.
   */
 final case class DigestCredentials(
     username: String,
@@ -26,7 +26,7 @@ final case class DigestCredentials(
       else s", algorithm=${algorithm.token}"
     val opaqueText = opaque.fold("")(o => s", opaque=${q(o)}")
     val qopText    = qop.fold("") { r =>
-      s", qop=${Qop.Auth.token}, nc=${r.nonceCount.render}, cnonce=${q(r.cnonce.value)}"
+      s", qop=${r.qop.token}, nc=${r.nonceCount.render}, cnonce=${q(r.cnonce.value)}"
     }
     s"Digest username=${q(username)}, realm=${q(realm)}, nonce=${q(nonce.value)}, uri=${q(uri)}, response=${q(response)}" +
       algorithmText + opaqueText + qopText
@@ -34,5 +34,9 @@ final case class DigestCredentials(
 }
 
 object DigestCredentials {
-  final case class QopResponse(nonceCount: NonceCount, cnonce: Cnonce)
+  final case class QopResponse(
+      qop: Qop,
+      nonceCount: NonceCount,
+      cnonce: Cnonce
+  )
 }

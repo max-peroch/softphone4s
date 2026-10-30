@@ -40,7 +40,7 @@ class AuthChallengeSuite extends FunSuite {
     List(
       "Negotiate abc123",
       "Basic realm=\"x\"",
-      """Digest realm="r", nonce="n", algorithm=SHA-256""",
+      """Digest realm="r", nonce="n", algorithm=SHA-512-256""",
       """Digest realm="r"""",
       """Digest nonce="n"""",
       """Digest realm="r", nonce="""",
@@ -80,5 +80,35 @@ class AuthChallengeSuite extends FunSuite {
         case other => fail(s"unexpected: $other")
       }
     }
+  }
+
+  test("SHA-256 and SHA-256-sess are Digest challenges we can answer") {
+    List(
+      "SHA-256"      -> DigestAlgorithm.Sha256,
+      "sha-256"      -> DigestAlgorithm.Sha256,
+      "SHA-256-sess" -> DigestAlgorithm.Sha256Sess
+    ).foreach { (token, algorithm) =>
+      AuthChallenge.parse(
+        s"""Digest realm="r", nonce="n", algorithm=$token"""
+      ) match {
+        case AuthChallenge.Digest(c) =>
+          assertEquals(c.algorithm, algorithm, token)
+        case other => fail(s"unexpected for $token: $other")
+      }
+    }
+  }
+
+  test(
+    "SHA-256 is stronger than MD5, and a -sess form is as strong as its base"
+  ) {
+    assert(DigestAlgorithm.Sha256.strength > DigestAlgorithm.Md5.strength)
+    assertEquals(
+      DigestAlgorithm.Sha256Sess.strength,
+      DigestAlgorithm.Sha256.strength
+    )
+    assertEquals(DigestAlgorithm.Md5Sess.strength, DigestAlgorithm.Md5.strength)
+    assert(
+      DigestAlgorithm.Sha256Sess.session && !DigestAlgorithm.Sha256.session
+    )
   }
 }

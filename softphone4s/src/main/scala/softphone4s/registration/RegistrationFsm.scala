@@ -272,8 +272,8 @@ object RegistrationFsm {
       lifetime: Expires
   ): Transition = {
     val made = context.authAttempts.getOrElse(kind, 0)
-    challenges
-      .collectFirst { case AuthChallenge.Digest(c) if c.isAnswerable => c }
+    AuthChallenge
+      .best(challenges)
       .filter(c =>
         made == 0 || (made < MaxAuthAttempts && c.staleness == Staleness.Stale)
       )
@@ -363,8 +363,8 @@ object RegistrationFsm {
       giveUp: Transition
   ): Transition = {
     val made = context.authAttempts.getOrElse(kind, 0)
-    challenges
-      .collectFirst { case AuthChallenge.Digest(c) if c.isAnswerable => c }
+    AuthChallenge
+      .best(challenges)
       .filter(_ => made == 0)
       .fold(giveUp) { challenge =>
         val next = context.copy(
