@@ -8,7 +8,6 @@ import fs2.io.net.Network
 import munit.CatsEffectSuite
 import org.typelevel.log4cats.noop.NoOpLogger
 import softphone4s.config.SoftphoneConfig
-import softphone4s.fsm.SipMessageBuilder
 import softphone4s.model.*
 import softphone4s.model.SoftphoneError
 
@@ -21,8 +20,8 @@ class OutboundCallSuite extends CatsEffectSuite {
   private val rtpPort    = port"19000"
   private val testConfig =
     SoftphoneConfig(user = "test", password = "test", realm = "test.local")
-  private val builder = SipMessageBuilder
-    .create(testConfig, localIp, sipPort, rtpPort)
+  private val endpoint = LocalEndpoint
+    .from(testConfig, localIp, sipPort, rtpPort)
     .fold(err => throw err, identity)
 
   private def uri(s: String): SipUri =
@@ -63,7 +62,7 @@ class OutboundCallSuite extends CatsEffectSuite {
           "test@call",
           uri("sip:bob@test.local"),
           _ => IO.unit,
-          builder,
+          endpoint,
           supervisor,
           random,
           media,

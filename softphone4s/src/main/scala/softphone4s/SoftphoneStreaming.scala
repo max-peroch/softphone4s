@@ -10,7 +10,6 @@ import fs2.concurrent.Channel
 import fs2.io.net.Network
 import org.typelevel.log4cats.StructuredLogger
 import softphone4s.config.SoftphoneConfig
-import softphone4s.fsm.*
 import softphone4s.model.*
 import softphone4s.transport.{RtpTransport, SipTransport}
 import softphone4s.ua.{MediaSession, OutboundCall}
@@ -48,7 +47,7 @@ class SoftphoneStreaming[F[_]: Async: Network] private (
   ): Resource[F, Call[F]] =
     for {
       target <- Resource.eval(
-        Async[F].fromEither(SipMessageBuilder.calleeUri(callee, config.realm))
+        Async[F].fromEither(callee.toSipUri(config.realm))
       )
       calleeAddr <- Resource.eval(resolveCalleeAddress(target))
       localIp    <- Resource.eval(
@@ -56,9 +55,9 @@ class SoftphoneStreaming[F[_]: Async: Network] private (
           logger.info(Map("address" -> ip.toString))("Advertising local IP")
         )
       )
-      builder <- Resource.eval(allocateBuilder(localIp))
-      callId  <- Resource.eval(newCallId(localIp))
-      sipCh   <- Resource.make(
+      endpoint <- Resource.eval(allocateEndpoint(localIp))
+      callId   <- Resource.eval(newCallId(localIp))
+      sipCh    <- Resource.make(
         Channel
           .bounded[F, SipMessage](128)
           .flatTap(ch => routes.update(_ + (callId -> ch)))
@@ -70,7 +69,7 @@ class SoftphoneStreaming[F[_]: Async: Network] private (
         target,
         sipIn,
         sendSip,
-        builder,
+        endpoint,
         extraHeaders
       )
     } yield call
@@ -106,7 +105,7 @@ class SoftphoneStreaming[F[_]: Async: Network] private (
       )
       .handleError(_ => config.localIpFallback)
 
-  private def allocateBuilder(localIp: IpAddress): F[SipMessageBuilder] =
+  private def allocateEndpoint(localIp: IpAddress): F[LocalEndpoint] =
     nextCallIndex.getAndUpdate(_ + 1).flatMap { callIndex =>
       val portsPerCall = 2
       val rtpPortInt   = config.baseRtpPort.value + callIndex * portsPerCall
@@ -115,11 +114,10 @@ class SoftphoneStreaming[F[_]: Async: Network] private (
           Port.fromInt(rtpPortInt),
           SoftphoneError.RtpPortExhausted(rtpPortInt)
         )
-        builder <- Async[F].fromEither(
-          SipMessageBuilder
-            .create(config, localIp, config.localSipPort, rtpPort)
+        endpoint <- Async[F].fromEither(
+          LocalEndpoint.from(config, localIp, config.localSipPort, rtpPort)
         )
-      } yield builder
+      } yield endpoint
     }
 
   private def buildCall(
@@ -127,7 +125,7 @@ class SoftphoneStreaming[F[_]: Async: Network] private (
       callee: SipUri,
       sipIn: Stream[F, SipMessage],
       sendSip: SipMessage => F[Unit],
-      builder: SipMessageBuilder,
+      endpoint: LocalEndpoint,
       extraHeaders: Map[String, List[String]]
   ): Resource[F, OutboundCall[F]] =
     for {
@@ -135,8 +133,8 @@ class SoftphoneStreaming[F[_]: Async: Network] private (
       media      <- Resource.eval(
         MediaSession.create(
           pcmFrameBytes,
-          builder.bindAddress,
-          builder.localRtpPort
+          endpoint.bindAddress,
+          endpoint.rtpPort
         )
       )
       call <- Resource.eval(
@@ -144,7 +142,7 @@ class SoftphoneStreaming[F[_]: Async: Network] private (
           callId,
           callee,
           sendSip,
-          builder,
+          endpoint,
           supervisor,
           random,
           media,

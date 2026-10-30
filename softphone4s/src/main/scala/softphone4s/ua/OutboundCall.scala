@@ -9,6 +9,7 @@ import org.typelevel.log4cats.StructuredLogger
 import softphone4s.Call
 import softphone4s.codec.{DigestAuth, SdpCodec}
 import softphone4s.fsm.*
+import softphone4s.fsm.SipMessages.*
 import softphone4s.model.*
 import SipAction.*
 import TerminationReason.*
@@ -22,7 +23,7 @@ private[softphone4s] class OutboundCall[F[_]: Async] private (
     hangupSignal: Deferred[F, Unit],
     stateRef: Ref[F, CallState],
     sendSip: SipMessage => F[Unit],
-    builder: SipMessageBuilder,
+    endpoint: LocalEndpoint,
     supervisor: Supervisor[F],
     inviteBranch: Ref[F, String],
     nonceCounts: Ref[F, Map[String, Int]],
@@ -110,7 +111,7 @@ private[softphone4s] class OutboundCall[F[_]: Async] private (
               Map("callee" -> callee.render, "callId" -> callId)
             )("Sending INVITE") >>
             sendSip(
-              builder.buildInvite(
+              endpoint.buildInvite(
                 callee,
                 callId,
                 localTag,
@@ -132,7 +133,7 @@ private[softphone4s] class OutboundCall[F[_]: Async] private (
                 (m + (nonce -> next), next)
               }
             }
-          authHeader = builder.computeAuthHeader(
+          authHeader = endpoint.computeAuthHeader(
             ctx.callee,
             headerName,
             challengeValue,
@@ -149,7 +150,7 @@ private[softphone4s] class OutboundCall[F[_]: Async] private (
             )
           )("Retrying INVITE with authentication")
           _ <- sendSip(
-            builder.buildInvite(
+            endpoint.buildInvite(
               ctx.callee,
               ctx.callId,
               ctx.localTag,
@@ -164,10 +165,10 @@ private[softphone4s] class OutboundCall[F[_]: Async] private (
         newBranch().flatMap { branch =>
           logger.debug("Sending ACK") >>
             sendSip(
-              builder.buildAck(
+              endpoint.buildAck(
                 dialog,
                 branch,
-                remoteSdpForAnswer.map(_ => builder.buildSdpAnswer)
+                remoteSdpForAnswer.map(_ => endpoint.buildSdpAnswer)
               )
             )
         }
@@ -177,39 +178,39 @@ private[softphone4s] class OutboundCall[F[_]: Async] private (
           logger.debug(
             Map("statusCode" -> response.statusCode.toString)
           )("Sending ACK for non-2xx response") >>
-            sendSip(builder.buildAckForNon2xx(ctx, response, branch))
+            sendSip(endpoint.buildAckForNon2xx(ctx, response, branch))
         }
 
       case SendCancel(ctx) =>
         inviteBranch.get.flatMap { branch =>
           logger.debug("Sending CANCEL") >> sendSip(
-            builder.buildCancel(ctx, branch)
+            endpoint.buildCancel(ctx, branch)
           )
         }
 
       case SendBye(dialog) =>
         newBranch().flatMap { branch =>
           logger.debug("Sending BYE") >> sendSip(
-            builder.buildBye(dialog, branch)
+            endpoint.buildBye(dialog, branch)
           )
         }
 
       case SendByeOk(request) =>
         logger.debug("Acknowledging BYE") >> sendSip(
-          builder.buildByeOk(request)
+          endpoint.buildByeOk(request)
         )
 
       case SendInfoOk(request) =>
         logger.debug("Acknowledging INFO") >> sendSip(
-          builder.buildInfoOk(request)
+          endpoint.buildInfoOk(request)
         )
 
       case StartMedia(sdpBody) =>
         val (remoteIp, remotePort) =
           SdpCodec.parseAudioEndpoint(
             sdpBody,
-            builder.bindAddress,
-            builder.localRtpPort
+            endpoint.bindAddress,
+            endpoint.rtpPort
           )
         media.start(remoteIp, remotePort, supervisor, dtmfChannel.send(_).void)
 
@@ -245,7 +246,7 @@ private[softphone4s] object OutboundCall {
       callId: String,
       callee: SipUri,
       sendSip: SipMessage => F[Unit],
-      builder: SipMessageBuilder,
+      endpoint: LocalEndpoint,
       supervisor: Supervisor[F],
       random: Random[F],
       media: MediaSession[F],
@@ -265,7 +266,7 @@ private[softphone4s] object OutboundCall {
         localTag = localTag,
         cseq = 1,
         callee = callee,
-        localUri = builder.localSipAddress,
+        localUri = endpoint.accountUri,
         offerInInvite = true
       )
       answered     <- Deferred[F, Either[Throwable, Unit]]
@@ -281,7 +282,7 @@ private[softphone4s] object OutboundCall {
         hangupSignal,
         stateRef,
         sendSip,
-        builder,
+        endpoint,
         supervisor,
         inviteBranch,
         nonceCounts,
@@ -294,7 +295,7 @@ private[softphone4s] object OutboundCall {
         Map("callee" -> callee.render, "callId" -> callId)
       )("Sending INVITE")
       _ <- sendSip(
-        builder.buildInvite(
+        endpoint.buildInvite(
           callee,
           callId,
           localTag,

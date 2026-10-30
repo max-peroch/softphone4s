@@ -3,9 +3,10 @@ package softphone4s.fsm
 import com.comcast.ip4s.*
 import munit.FunSuite
 import softphone4s.config.SoftphoneConfig
+import softphone4s.fsm.SipMessages.*
 import softphone4s.model.*
 
-class SipMessageBuilderSuite extends FunSuite {
+class SipMessagesSuite extends FunSuite {
 
   private def ok[A](e: Either[SoftphoneError, A]): A =
     e.fold(err => fail(err.getMessage), identity)
@@ -16,47 +17,47 @@ class SipMessageBuilderSuite extends FunSuite {
   private val config =
     SoftphoneConfig(user = "alice", password = "pw", realm = "sip.example.com")
 
-  private val builder =
-    ok(
-      SipMessageBuilder.create(config, ip"192.168.1.5", port"5060", port"8000")
-    )
+  private val endpoint =
+    ok(LocalEndpoint.from(config, ip"192.168.1.5", port"5060", port"8000"))
 
-  test("calleeUri puts a bare number at the account's realm") {
+  test("toSipUri puts a bare number at the account's realm") {
     assertEquals(
-      ok(SipMessageBuilder.calleeUri(callee("1234"), "sip.example.com")).render,
+      ok(callee("1234").toSipUri("sip.example.com")).render,
       "sip:1234@sip.example.com"
     )
   }
 
-  test("calleeUri keeps an explicit host and port") {
+  test("toSipUri keeps an explicit host and port") {
     val uri = ok(
-      SipMessageBuilder.calleeUri(callee("bob@10.0.0.2:5070"), "ignored.com")
+      callee("bob@10.0.0.2:5070").toSipUri("ignored.com")
     )
     assertEquals(uri.render, "sip:bob@10.0.0.2:5070")
     assertEquals(uri.port, Some(port"5070"))
   }
 
-  test("calleeUri percent-encodes '#' and keeps '*' and '+'") {
+  test("toSipUri percent-encodes '#' and keeps '*' and '+'") {
     assertEquals(
-      ok(SipMessageBuilder.calleeUri(callee("*67#"), "h.com")).render,
+      ok(callee("*67#").toSipUri("h.com")).render,
       "sip:*67%23@h.com"
     )
     assertEquals(
-      ok(SipMessageBuilder.calleeUri(callee("+15551234567"), "h.com")).render,
+      ok(callee("+15551234567").toSipUri("h.com")).render,
       "sip:+15551234567@h.com"
     )
   }
 
-  test("calleeUri fails on an invalid realm") {
+  test("toSipUri fails on an invalid realm") {
     assert(
-      SipMessageBuilder.calleeUri(callee("1234"), "not a host").isLeft
+      callee("1234").toSipUri("not a host").isLeft
     )
   }
 
-  test("create derives the account address and Contact from typed parts") {
-    assertEquals(builder.localSipAddress.render, "sip:alice@sip.example.com")
-    val invite = builder.buildInvite(
-      ok(SipMessageBuilder.calleeUri(callee("1234"), "sip.example.com")),
+  test(
+    "LocalEndpoint derives the account address and Contact from typed parts"
+  ) {
+    assertEquals(endpoint.accountUri.render, "sip:alice@sip.example.com")
+    val invite = endpoint.buildInvite(
+      ok(callee("1234").toSipUri("sip.example.com")),
       "cid",
       "ltag",
       1,
@@ -68,14 +69,14 @@ class SipMessageBuilderSuite extends FunSuite {
     assertEquals(invite.headers.to, "<sip:1234@sip.example.com>")
   }
 
-  test("create fails on an unusable user or realm") {
+  test("LocalEndpoint.from fails on an unusable user or realm") {
     List(
       config.copy(user = "al ice"),
       config.copy(realm = "not a host")
     ).foreach(bad =>
       assert(
-        SipMessageBuilder
-          .create(bad, ip"192.168.1.5", port"5060", port"8000")
+        LocalEndpoint
+          .from(bad, ip"192.168.1.5", port"5060", port"8000")
           .isLeft
       )
     )

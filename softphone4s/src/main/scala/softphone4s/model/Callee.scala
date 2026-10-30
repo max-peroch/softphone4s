@@ -18,7 +18,20 @@ object Callee {
   /** Bypasses validation. Only use for values already known to be valid. */
   def unsafe(s: String): Callee = s
 
-  extension (c: Callee) def value: String = c
+  extension (c: Callee) {
+    def value: String = c
+
+    /** The URI to dial: the callee as given when it names a host
+      * (`alice@sip.example.com`), otherwise at `realm`. A `#` is
+      * percent-encoded, as the user part of a SIP URI requires.
+      */
+    def toSipUri(realm: String): Either[SoftphoneError, SipUri] = {
+      val user  = c.replace("#", "%23")
+      val input =
+        if user.contains('@') then s"sip:$user" else s"sip:$user@$realm"
+      SipUri.parse(input).left.map(SoftphoneError.InvalidSipUri(input, _))
+    }
+  }
 
   given ConfigReader[Callee] = ConfigReader.stringConfigReader.emap(s =>
     Callee(s).left.map(CannotConvert(s, "Callee", _))

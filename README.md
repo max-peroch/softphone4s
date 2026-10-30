@@ -160,7 +160,7 @@ SoftphoneStreaming
 └─ per call
    └─ OutboundCall
       ├─ CallFsm          — pure state machine (cats State)
-      ├─ SipMessageBuilder — constructs INVITE / ACK / BYE / CANCEL
+      ├─ SipMessages — constructs INVITE / ACK / BYE / CANCEL
       └─ MediaSession
          ├─ RtpTransport  — per-call UDP socket
          └─ G711Codec     — μ-law ↔ 16-bit PCM
