@@ -16,7 +16,6 @@ import softphone4s.model.*
 import softphone4s.registration.Registration
 import softphone4s.runtime.{Entropy, Timers}
 import softphone4s.transaction.{
-  Reliability,
   ServerTransaction,
   TransactionConfig,
   TransactionLayer,
@@ -422,7 +421,6 @@ object SoftphoneStreaming {
       )
       layer <- TransactionManager.resource[F](
         transport,
-        Reliability.Unreliable,
         TransactionConfig(),
         logger
       )

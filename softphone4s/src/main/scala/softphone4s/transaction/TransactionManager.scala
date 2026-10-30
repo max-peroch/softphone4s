@@ -56,7 +56,6 @@ private[transaction] final case class Table[F[_]](
   */
 private[transaction] final class TransactionEngine[F[_]: Concurrent](
     transport: Transport[F],
-    reliability: Reliability,
     config: TransactionConfig,
     timers: Timers[F, TimerKey],
     commands: Queue[F, Command[F]],
@@ -86,6 +85,10 @@ private[transaction] final class TransactionEngine[F[_]: Concurrent](
             serverEvent(table, key, ServerEvent.TransportError)
         }
     }
+
+  /** The transport a request travels on is named by its top Via. */
+  private def reliabilityOf(request: SipRequest): Reliability =
+    Reliability.of(request.headers.topVia.transport)
 
   // ---- Inbound messages ------------------------------------------------------
 
@@ -139,7 +142,7 @@ private[transaction] final class TransactionEngine[F[_]: Concurrent](
           reply.complete(Left(TransactionError.Duplicate(key))).as(table)
         case Right(key) =>
           val (machine, actions) =
-            ClientMachine.start(request, reliability, config)
+            ClientMachine.start(request, reliabilityOf(request), config)
           for {
             notices <- Queue.unbounded[F, Option[ClientNotice]]
             entry = ClientEntry[F](machine, to, notices)
@@ -158,7 +161,8 @@ private[transaction] final class TransactionEngine[F[_]: Concurrent](
       from: SocketAddress[IpAddress],
       request: SipRequest
   ): F[Table[F]] = {
-    val (machine, actions) = ServerMachine.start(request, reliability, config)
+    val (machine, actions) =
+      ServerMachine.start(request, reliabilityOf(request), config)
     for {
       notices <- Queue.unbounded[F, Option[ServerNotice]]
       entry = ServerEntry[F](machine, from, notices)
@@ -300,12 +304,12 @@ private[transaction] final class TransactionEngine[F[_]: Concurrent](
 
 object TransactionManager {
 
-  /** Starts the transaction layer over `transport`. `reliability` says whether
-    * it retransmits for us. Everything it runs stops when the resource closes.
+  /** Starts the transaction layer over `transport`. Each transaction
+    * retransmits or not according to the transport its top Via names.
+    * Everything it runs stops when the resource closes.
     */
   def resource[F[_]: Async](
       transport: Transport[F],
-      reliability: Reliability,
       config: TransactionConfig,
       logger: StructuredLogger[F]
   ): Resource[F, TransactionLayer[F]] =
@@ -317,7 +321,6 @@ object TransactionManager {
       unmatchedQ <- Resource.eval(Queue.unbounded[F, Inbound])
       engine = new TransactionEngine[F](
         transport,
-        reliability,
         config,
         timers,
         commands,

@@ -42,7 +42,6 @@ class RegistrationSuite extends CatsEffectSuite {
       pair  <- Resource.eval(InMemoryTransport.pair[IO])
       layer <- TransactionManager.resource(
         pair._1,
-        Reliability.Unreliable,
         TransactionConfig(),
         NoOpLogger.impl[IO]
       )

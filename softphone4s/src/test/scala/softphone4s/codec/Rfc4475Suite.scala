@@ -92,7 +92,7 @@ class Rfc4475Suite extends FunSuite {
     assertEquals(h.vias.size, 3)
     assertEquals(
       h.vias.toList.map(_.transport),
-      List(Transport.Udp, Transport.Tcp, Transport.Udp)
+      List(TransportProtocol.Udp, TransportProtocol.Tcp, TransportProtocol.Udp)
     )
     assertEquals(h.from.tag.map(_.value), Some("98asjd8"))
     assertEquals(h.to.tag.map(_.value), Some("1918181833n"))

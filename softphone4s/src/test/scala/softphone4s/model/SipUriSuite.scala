@@ -51,7 +51,7 @@ class SipUriSuite extends FunSuite {
 
   test("transport and lr become typed fields, case-insensitively") {
     val uri = parsed("sip:proxy.example.com;Transport=TCP;LR")
-    assertEquals(uri.transport, Some(Transport.Tcp))
+    assertEquals(uri.transport, Some(TransportProtocol.Tcp))
     assertEquals(uri.routing, Routing.Loose)
     assert(uri.isLooseRouting)
     assert(uri.params.isEmpty)
@@ -124,7 +124,7 @@ class SipUriSuite extends FunSuite {
   test("withTransport and withLooseRouting set the typed fields") {
     assertEquals(
       parsed("sip:a@b.com")
-        .withTransport(Transport.Tls)
+        .withTransport(TransportProtocol.Tls)
         .withLooseRouting
         .render,
       "sip:a@b.com;transport=tls;lr"

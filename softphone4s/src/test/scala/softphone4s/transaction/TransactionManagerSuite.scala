@@ -43,7 +43,6 @@ class TransactionManagerSuite extends CatsEffectSuite {
       tb   <- cats.effect.Resource.eval(RecordingTransport(pair._2, dropB))
       la   <- TransactionManager.resource(
         ta,
-        Reliability.Unreliable,
         TransactionConfig(),
         NoOpLogger.impl[IO]
       )
@@ -52,7 +51,6 @@ class TransactionManagerSuite extends CatsEffectSuite {
           TransactionManager
             .resource(
               tb,
-              Reliability.Unreliable,
               TransactionConfig(),
               NoOpLogger.impl[IO]
             )

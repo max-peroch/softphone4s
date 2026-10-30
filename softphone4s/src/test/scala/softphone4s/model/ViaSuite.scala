@@ -10,7 +10,7 @@ class ViaSuite extends FunSuite {
 
   test("parses a typical request Via") {
     val via = parsed("SIP/2.0/UDP 192.168.1.1:5060;branch=z9hG4bK776asdhds")
-    assertEquals(via.transport, Transport.Udp)
+    assertEquals(via.transport, TransportProtocol.Udp)
     assertEquals(via.host, ip"192.168.1.1")
     assertEquals(via.port, Some(port"5060"))
     assertEquals(via.branch.map(_.value), Some("z9hG4bK776asdhds"))
@@ -25,7 +25,10 @@ class ViaSuite extends FunSuite {
   }
 
   test("tolerates whitespace around the protocol and a lower-case transport") {
-    assertEquals(parsed("SIP / 2.0 / tcp h.com:5070").transport, Transport.Tcp)
+    assertEquals(
+      parsed("SIP / 2.0 / tcp h.com:5070").transport,
+      TransportProtocol.Tcp
+    )
   }
 
   test("keeps other parameters, including quoted values") {

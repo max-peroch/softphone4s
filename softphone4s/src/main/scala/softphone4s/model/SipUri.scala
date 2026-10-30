@@ -23,7 +23,7 @@ final case class SipUri private (
     userInfo: Option[UserInfo],
     host: Host,
     port: Option[Port],
-    transport: Option[Transport],
+    transport: Option[TransportProtocol],
     routing: Routing,
     params: ListMap[ParamName, Option[ParamValue]],
     headers: List[UriHeader]
@@ -36,7 +36,7 @@ final case class SipUri private (
     */
   def param(name: ParamName): Option[Option[ParamValue]] = params.get(name)
 
-  def withTransport(t: Transport): SipUri = copy(transport = Some(t))
+  def withTransport(t: TransportProtocol): SipUri = copy(transport = Some(t))
 
   def withLooseRouting: SipUri = copy(routing = Routing.Loose)
 
@@ -99,7 +99,7 @@ object SipUri {
       host: Host,
       userInfo: Option[UserInfo] = None,
       port: Option[Port] = None,
-      transport: Option[Transport] = None,
+      transport: Option[TransportProtocol] = None,
       routing: Routing = Routing.Strict,
       params: ListMap[ParamName, Option[ParamValue]] = ListMap.empty,
       headers: List[UriHeader] = Nil
@@ -198,7 +198,7 @@ object SipUri {
       all: List[(ParamName, Option[ParamValue])]
   ): Either[
     String,
-    (Option[Transport], Routing, ListMap[ParamName, Option[ParamValue]])
+    (Option[TransportProtocol], Routing, ListMap[ParamName, Option[ParamValue]])
   ] = {
     val names = all.map(_._1)
     for {
@@ -212,7 +212,7 @@ object SipUri {
         case None          => Right(None)
         case Some(None)    => Left("transport needs a value")
         case Some(Some(v)) =>
-          Transport
+          TransportProtocol
             .fromToken(v.value)
             .map(Some(_))
             .toRight(s"unsupported transport: ${v.value}")

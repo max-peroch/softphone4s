@@ -10,7 +10,7 @@ import scala.collection.immutable.ListMap
   * `branch`, `rport` and `received` are typed; `params` holds the rest.
   */
 final case class Via(
-    transport: Transport,
+    transport: TransportProtocol,
     host: Host,
     port: Option[Port],
     branch: Option[Branch],
@@ -39,7 +39,7 @@ object Via {
 
   /** A Via for a request we send: transport, our address and the branch. */
   def request(
-      transport: Transport,
+      transport: TransportProtocol,
       host: Host,
       port: Port,
       branch: Branch
@@ -64,7 +64,7 @@ object Via {
         case ViaPrefix(proto, sentBy) => Right((proto, sentBy))
         case _                        => Left(s"malformed Via: '$value'")
       }
-      transport <- Transport
+      transport <- TransportProtocol
         .fromToken(parts._1)
         .toRight(s"unsupported Via transport: '${parts._1}'")
       hostPort <- HostPort.parse(parts._2).left.map(e => s"$e in Via: '$value'")

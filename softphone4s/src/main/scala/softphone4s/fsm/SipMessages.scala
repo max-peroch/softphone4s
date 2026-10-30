@@ -12,7 +12,7 @@ import softphone4s.transaction.TransactionMessages
 object SipMessages {
 
   private def vias(e: LocalEndpoint, branch: Branch): NonEmptyList[Via] =
-    NonEmptyList.one(Via.request(Transport.Udp, e.ip, e.sipPort, branch))
+    NonEmptyList.one(Via.request(TransportProtocol.Udp, e.ip, e.sipPort, branch))
 
   private def contacts(e: LocalEndpoint): List[NameAddr] =
     List(NameAddr(e.contact))

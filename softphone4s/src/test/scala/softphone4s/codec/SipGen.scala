@@ -66,7 +66,7 @@ object SipGen extends munit.Assertions {
       userInfo  <- Gen.option(userInfoGen)
       host      <- hostGen
       port      <- Gen.option(portGen)
-      transport <- Gen.option(Gen.oneOf(Transport.values.toList))
+      transport <- Gen.option(Gen.oneOf(TransportProtocol.values.toList))
       routing   <- Gen.oneOf(Routing.values.toList)
       params    <- paramsGen
     } yield get(
@@ -116,7 +116,7 @@ object SipGen extends munit.Assertions {
 
   val viaGen: Gen[Via] =
     for {
-      transport <- Gen.oneOf(Transport.values.toList)
+      transport <- Gen.oneOf(TransportProtocol.values.toList)
       host      <- hostGen
       port      <- Gen.option(portGen)
       branch    <- Gen.option(branchGen)
