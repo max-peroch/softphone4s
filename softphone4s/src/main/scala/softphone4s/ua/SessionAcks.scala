@@ -26,10 +26,10 @@ private[softphone4s] final class SessionAcks[F[_]: Async] private (
 ) {
 
   /** Answers `request` with `respond`, which returns the response and where it
-    * went, then repeats the response until the ACK. `expectsAnswer` is set when
-    * the response carries our offer.
+    * went, then repeats the response until the ACK. `ack` says whether the ACK
+    * is to carry our answer, which it does when the response carries our offer.
     */
-  def track(request: SipRequest, expectsAnswer: Boolean)(
+  def track(request: SipRequest, ack: AckContent)(
       respond: F[(SipResponse, SocketAddress[IpAddress])]
   ): F[Unit] = {
     val cseq = request.headers.cseq.seq
@@ -37,7 +37,7 @@ private[softphone4s] final class SessionAcks[F[_]: Async] private (
       acked <- Deferred[F, Unit]
       // Registered before the response goes out, so an ACK cannot beat it.
       _ <- pending.update(
-        _.updated(cseq, SessionAcks.Pending(acked, expectsAnswer))
+        _.updated(cseq, SessionAcks.Pending(acked, ack))
       )
       (response, address) <- respond
       _                   <- supervisor.supervise(
@@ -77,7 +77,7 @@ private[softphone4s] final class SessionAcks[F[_]: Async] private (
             SdpCodec
               .parseOffer(ack.body)
               .filter(_.isAcceptable)
-              .filter(_ => entry.expectsAnswer)
+              .filter(_ => entry.ack == AckContent.Answer)
               .traverse_(retarget)
         }
       )
@@ -87,7 +87,7 @@ private[softphone4s] object SessionAcks {
 
   final case class Pending[F[_]](
       acked: Deferred[F, Unit],
-      expectsAnswer: Boolean
+      ack: AckContent
   )
 
   def create[F[_]: Async](

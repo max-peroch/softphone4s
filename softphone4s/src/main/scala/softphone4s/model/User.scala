@@ -8,7 +8,7 @@ import cats.{Eq, Show}
 opaque type User = String
 
 object User {
-  private val syntax = UriSyntax.token(UriSyntax.UserChars, nonEmpty = true)
+  private val syntax = UriSyntax.token(UriSyntax.UserChars, Emptiness.Forbidden)
 
   def apply(s: String): Either[String, User] =
     UriSyntax.check("user", syntax, s)

@@ -77,6 +77,17 @@ object DnsJavaRecords {
       }
       .map(session => new Records[F](session))
 
+  /** A lookup that failed because the name or the records are not there, as
+    * dnsjava reports it, whether or not it is wrapped.
+    */
+  private object NotThere {
+    def unapply(error: Throwable): Boolean = error match {
+      case _: NoSuchDomainException | _: NoSuchRRSetException => true
+      case wrapper: CompletionException => unapply(wrapper.getCause)
+      case _                            => false
+    }
+  }
+
   private final class Records[F[_]: Async](session: LookupSession)
       extends DnsRecords[F] {
 
@@ -131,14 +142,7 @@ object DnsJavaRecords {
                 )
               )
               .map((result: LookupResult) => result.getRecords.asScala.toList)
-              .recover {
-                case _: NoSuchDomainException | _: NoSuchRRSetException =>
-                  Nil
-                case error: CompletionException
-                    if error.getCause.isInstanceOf[NoSuchDomainException] ||
-                      error.getCause.isInstanceOf[NoSuchRRSetException] =>
-                  Nil
-              }
+              .recover { case NotThere() => Nil }
               .adaptError { case error =>
                 SoftphoneError.HostResolutionFailed(
                   s"$name: ${error.getMessage}"

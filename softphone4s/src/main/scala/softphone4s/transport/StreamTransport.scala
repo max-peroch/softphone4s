@@ -9,7 +9,7 @@ import fs2.io.net.Socket
 import fs2.{Chunk, Stream}
 import org.typelevel.log4cats.StructuredLogger
 import softphone4s.codec.SipCodec
-import softphone4s.model.{SipMessage, SipRequest}
+import softphone4s.model.{SipMessage, SipRequest, SoftphoneError}
 
 import scala.concurrent.duration.*
 
@@ -168,11 +168,7 @@ object StreamTransport {
           .timeoutTo(
             config.connectTimeout,
             evict(to, name).as(
-              Left(
-                new java.util.concurrent.TimeoutException(
-                  s"connecting to $to"
-                )
-              )
+              Left(SoftphoneError.ConnectTimedOut(to.toString))
             )
           )
           .rethrow

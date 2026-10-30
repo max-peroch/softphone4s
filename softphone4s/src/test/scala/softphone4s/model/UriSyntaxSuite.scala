@@ -20,37 +20,37 @@ class UriSyntaxSuite extends ScalaCheckSuite {
     (
       "token",
       tokenBody,
-      UriSyntax.token(UriSyntax.TokenChars, nonEmpty = true),
+      UriSyntax.token(UriSyntax.TokenChars, Emptiness.Forbidden),
       true
     ),
     (
       "callId",
       tokenBody + "()<>:\\\\/\\[\\]?{}@",
-      UriSyntax.token(UriSyntax.CallIdChars, nonEmpty = true),
+      UriSyntax.token(UriSyntax.CallIdChars, Emptiness.Forbidden),
       true
     ),
     (
       "user",
       unreserved + "&=+$,;/",
-      UriSyntax.token(UriSyntax.UserChars, nonEmpty = true),
+      UriSyntax.token(UriSyntax.UserChars, Emptiness.Forbidden),
       true
     ),
     (
       "password",
       unreserved + "&=+$,",
-      UriSyntax.token(UriSyntax.PasswordChars, nonEmpty = false),
+      UriSyntax.token(UriSyntax.PasswordChars, Emptiness.Allowed),
       false
     ),
     (
       "param",
       unreserved + "\\[\\]/:&+$",
-      UriSyntax.token(UriSyntax.ParamChars, nonEmpty = true),
+      UriSyntax.token(UriSyntax.ParamChars, Emptiness.Forbidden),
       true
     ),
     (
       "header",
       unreserved + "\\[\\]/?:+$@",
-      UriSyntax.token(UriSyntax.HeaderChars, nonEmpty = false),
+      UriSyntax.token(UriSyntax.HeaderChars, Emptiness.Allowed),
       false
     )
   )

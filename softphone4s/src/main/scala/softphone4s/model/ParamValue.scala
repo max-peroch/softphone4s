@@ -5,7 +5,8 @@ import cats.{Eq, Show}
 opaque type ParamValue = String
 
 object ParamValue {
-  private val syntax = UriSyntax.token(UriSyntax.ParamChars, nonEmpty = true)
+  private val syntax =
+    UriSyntax.token(UriSyntax.ParamChars, Emptiness.Forbidden)
 
   def apply(s: String): Either[String, ParamValue] =
     UriSyntax.check("parameter value", syntax, s)

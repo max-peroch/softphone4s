@@ -12,8 +12,8 @@ object HeaderParamValue {
   private val unquoted =
     new UriSyntax.Syntax(
       UriSyntax.ParamValueChars,
-      nonEmpty = true,
-      escapes = false
+      Emptiness.Forbidden,
+      Escapes.Literal
     )
 
   def apply(s: String): Either[String, HeaderParamValue] =

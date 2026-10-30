@@ -24,6 +24,8 @@ object SoftphoneError {
       extends SoftphoneError(
         "The SIP transport failed while signalling the call"
       )
+  final case class ConnectTimedOut(address: String)
+      extends SoftphoneError(s"Timed out connecting to $address")
   final case class TransportUnavailable(transport: String)
       extends SoftphoneError(s"No $transport transport is available")
   final case class TlsConfigurationInvalid(reason: String)

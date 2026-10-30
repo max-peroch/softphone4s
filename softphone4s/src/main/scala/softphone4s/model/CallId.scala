@@ -7,7 +7,8 @@ import com.comcast.ip4s.Host
 opaque type CallId = String
 
 object CallId {
-  private val syntax = UriSyntax.token(UriSyntax.CallIdChars, nonEmpty = true)
+  private val syntax =
+    UriSyntax.token(UriSyntax.CallIdChars, Emptiness.Forbidden)
 
   def apply(s: String): Either[String, CallId] =
     UriSyntax.check("Call-ID", syntax, s)

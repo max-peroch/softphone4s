@@ -5,7 +5,7 @@ import cats.{Eq, Show}
 opaque type HeaderValue = String
 
 object HeaderValue {
-  private val syntax = UriSyntax.token(UriSyntax.HeaderChars, nonEmpty = false)
+  private val syntax = UriSyntax.token(UriSyntax.HeaderChars, Emptiness.Allowed)
 
   def apply(s: String): Either[String, HeaderValue] =
     UriSyntax.check("URI header value", syntax, s)

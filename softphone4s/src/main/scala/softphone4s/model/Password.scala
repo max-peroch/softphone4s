@@ -6,7 +6,7 @@ opaque type Password = String
 
 object Password {
   private val syntax =
-    UriSyntax.token(UriSyntax.PasswordChars, nonEmpty = false)
+    UriSyntax.token(UriSyntax.PasswordChars, Emptiness.Allowed)
 
   def apply(s: String): Either[String, Password] =
     UriSyntax.check("password", syntax, s)

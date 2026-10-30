@@ -6,7 +6,8 @@ import cats.{Eq, Show}
 opaque type Tag = String
 
 object Tag {
-  private val syntax = UriSyntax.token(UriSyntax.TokenChars, nonEmpty = true)
+  private val syntax =
+    UriSyntax.token(UriSyntax.TokenChars, Emptiness.Forbidden)
 
   def apply(s: String): Either[String, Tag] =
     UriSyntax.check("tag", syntax, s)

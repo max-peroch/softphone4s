@@ -22,7 +22,8 @@ final case class MediaType private (
 
 object MediaType {
 
-  private val syntax = UriSyntax.token(UriSyntax.TokenChars, nonEmpty = true)
+  private val syntax =
+    UriSyntax.token(UriSyntax.TokenChars, Emptiness.Forbidden)
 
   val Sdp: MediaType = MediaType("application", "sdp", ListMap.empty)
 

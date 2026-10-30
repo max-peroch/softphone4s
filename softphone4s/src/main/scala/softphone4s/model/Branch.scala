@@ -7,7 +7,8 @@ opaque type Branch = String
 
 object Branch {
   private val MagicCookie = "z9hG4bK"
-  private val syntax = UriSyntax.token(UriSyntax.TokenChars, nonEmpty = true)
+  private val syntax      =
+    UriSyntax.token(UriSyntax.TokenChars, Emptiness.Forbidden)
 
   def apply(s: String): Either[String, Branch] =
     UriSyntax.check("branch", syntax, s)

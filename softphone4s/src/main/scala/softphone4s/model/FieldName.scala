@@ -8,7 +8,8 @@ import cats.{Eq, Show}
 opaque type FieldName = String
 
 object FieldName {
-  private val syntax = UriSyntax.token(UriSyntax.TokenChars, nonEmpty = true)
+  private val syntax =
+    UriSyntax.token(UriSyntax.TokenChars, Emptiness.Forbidden)
 
   def apply(s: String): Either[String, FieldName] =
     UriSyntax.check("header name", syntax, s)

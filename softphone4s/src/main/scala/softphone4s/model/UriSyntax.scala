@@ -24,7 +24,11 @@ private[softphone4s] object UriSyntax {
   val ParamValueChars: CharSet = TokenChars + "[]:"
 
   /** Text made of characters from a set, or `%HH` escapes. */
-  final class Syntax(chars: CharSet, nonEmpty: Boolean, escapes: Boolean) {
+  final class Syntax(
+      chars: CharSet,
+      emptiness: Emptiness,
+      escapes: Escapes
+  ) {
 
     def matches(s: String): Boolean = {
       val n = s.length
@@ -35,20 +39,20 @@ private[softphone4s] object UriSyntax {
         else {
           val c = s.charAt(i)
           if chars.contains(c) then go(i + 1)
-          else if escapes && c == '%' && i + 2 < n && isHex(
+          else if escapes == Escapes.Percent && c == '%' && i + 2 < n && isHex(
               s.charAt(i + 1)
             ) && isHex(s.charAt(i + 2))
           then go(i + 3)
           else false
         }
 
-      if n == 0 then !nonEmpty else go(0)
+      if n == 0 then emptiness == Emptiness.Allowed else go(0)
     }
   }
 
   /** One or more (or zero or more) characters of `chars`, or `%HH` escapes. */
-  def token(chars: CharSet, nonEmpty: Boolean): Syntax =
-    new Syntax(chars, nonEmpty, escapes = true)
+  def token(chars: CharSet, emptiness: Emptiness): Syntax =
+    new Syntax(chars, emptiness, Escapes.Percent)
 
   /** A quoted-string: text between double quotes with `\x` escapes. */
   def isQuotedString(s: String): Boolean = {

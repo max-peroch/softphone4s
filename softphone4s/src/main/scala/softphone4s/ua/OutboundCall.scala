@@ -344,10 +344,10 @@ private[softphone4s] class OutboundCall[F[_]: Async] private (
   private def answerSession(
       request: SipRequest,
       ok: SipResponse,
-      expectsAnswer: Boolean
+      ack: AckContent
   ): F[Unit] =
     if request.method == SipMethod.Invite then
-      acks.track(request, expectsAnswer)(
+      acks.track(request, ack)(
         respondFrom(request, ok).map(ok -> _)
       )
     else respondTo(request, ok)
@@ -499,7 +499,7 @@ private[softphone4s] class OutboundCall[F[_]: Async] private (
           )
         )
         logger.debug("Answering a session change") >>
-          answerSession(request, ok, expectsAnswer = false) >>
+          answerSession(request, ok, AckContent.Empty) >>
           offer.traverse_(o => media.retarget(o.ip, o.port, o.direction))
 
       case SendOfferOk(request) =>
@@ -510,7 +510,7 @@ private[softphone4s] class OutboundCall[F[_]: Async] private (
               request,
               SdpCodec.buildOffer(endpoint.ip, endpoint.rtpPort)
             ),
-            expectsAnswer = true
+            AckContent.Answer
           )
 
       case StartMedia(sdpBody) =>
