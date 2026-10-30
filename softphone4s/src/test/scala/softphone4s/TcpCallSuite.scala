@@ -178,4 +178,46 @@ class TcpCallSuite extends CatsEffectSuite {
         }
       }
   }
+
+  test(
+    "over UDP a call whose INVITE is too big for a datagram goes to the server over TCP"
+  ) {
+    val answer = (r: SipRequest, listening: Port) =>
+      r.method match {
+        case SipMethod.Invite | SipMethod.Bye => Some(okTo(r, listening))
+        case _                                => None
+      }
+    server(answer)
+      .flatMap(srv =>
+        phone(srv.port, port"19114", TransportProtocol.Udp).map(srv -> _)
+      )
+      .use { (srv, phone) =>
+        val big = Map("X-Context" -> List("x" * 1500))
+        for {
+          invite <- phone.call(bob, big).use { call =>
+            call.awaitPickup >> next(srv, SipMethod.Invite)
+          }
+        } yield {
+          // Nothing listens for UDP here: only the TCP server can have answered.
+          assertEquals(invite.headers.topVia.transport, TransportProtocol.Tcp)
+          assertEquals(
+            invite.headers.contacts.flatMap(_.uri.transport),
+            List(TransportProtocol.Tcp)
+          )
+        }
+      }
+  }
+
+  test("over UDP a small INVITE does not touch the TCP server") {
+    server((_, _) => None)
+      .flatMap(srv =>
+        phone(srv.port, port"19115", TransportProtocol.Udp).map(srv -> _)
+      )
+      .use { (srv, phone) =>
+        phone.call(bob).use { _ =>
+          IO.sleep(700.millis) >>
+            srv.requests.tryTake.map(seen => assertEquals(seen, None))
+        }
+      }
+  }
 }

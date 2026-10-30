@@ -54,6 +54,9 @@ class OutboundCallSuite extends CatsEffectSuite {
       inviteTimeout: FiniteDuration = 32.seconds,
       resolveWith: SipUri => IO[SocketAddress[IpAddress]] = _ => IO.pure(them),
       alternatives: List[Uplink] = Nil,
+      oversize: Option[Uplink] = None,
+      udpLimit: Int = 1300,
+      extraHeaders: List[ExtensionHeader] = Nil,
       first: Option[Uplink] = None,
       reach: Transport[IO] => Transport[IO] = identity,
       transactions: TransactionConfig = TransactionConfig()
@@ -78,13 +81,16 @@ class OutboundCallSuite extends CatsEffectSuite {
           layer,
           first.getOrElse(Uplink(endpointOn(rtp), them)),
           alternatives,
+          oversize,
+          udpLimit,
           (_, uri) => resolved.update(_ :+ uri) >> resolveWith(uri),
           supervisor,
           Entropy.fromRandom(random),
           media,
           timers,
           inviteTimeout,
-          NoOpLogger.impl[IO]
+          NoOpLogger.impl[IO],
+          extraHeaders
         )
       )
       _ <- Resource.make(
@@ -956,6 +962,99 @@ class OutboundCallSuite extends CatsEffectSuite {
           "a refusal is an answer; the next server is not asked"
         )
       }
+    }
+  }
+
+  // ---- A request too big for UDP ------------------------------------------------------
+
+  /** A header long enough to push the INVITE past a datagram. */
+  private val bulky =
+    List(
+      ExtensionHeader(
+        FieldName("X-Context").fold(fail(_), identity),
+        "x" * 1500
+      )
+    )
+
+  test(
+    "an INVITE too big for UDP goes over TCP, with the Via and Contact of TCP"
+  ) {
+    val rtp = port"19028"
+    fixture(rtp, oversize = Some(tcpUplink(rtp, them)), extraHeaders = bulky)
+      .use { f =>
+        for {
+          (invite, _) <- answered(f)
+          ack         <- nextOf(f.peer, SipMethod.Ack)
+          _           <- f.call.hangup
+          bye         <- nextOf(f.peer, SipMethod.Bye)
+        } yield {
+          assertEquals(invite.headers.topVia.transport, TransportProtocol.Tcp)
+          assertEquals(
+            invite.headers.contacts.flatMap(_.uri.transport),
+            List(TransportProtocol.Tcp)
+          )
+          // The dialog runs on the transport the INVITE went over.
+          assertEquals(ack.headers.topVia.transport, TransportProtocol.Tcp)
+          assertEquals(bye.headers.topVia.transport, TransportProtocol.Tcp)
+        }
+      }
+  }
+
+  test("an INVITE that fits in a datagram stays on UDP") {
+    val rtp = port"19029"
+    fixture(rtp, oversize = Some(tcpUplink(rtp, them))).use { f =>
+      answered(f).map((invite, _) =>
+        assertEquals(invite.headers.topVia.transport, TransportProtocol.Udp)
+      )
+    }
+  }
+
+  test("the limit is the one given") {
+    val rtp = port"19030"
+    fixture(rtp, oversize = Some(tcpUplink(rtp, them)), udpLimit = 200).use {
+      f =>
+        answered(f).map((invite, _) =>
+          assertEquals(invite.headers.topVia.transport, TransportProtocol.Tcp)
+        )
+    }
+  }
+
+  test("with no TCP way to the server a big INVITE still goes over UDP") {
+    val rtp = port"19031"
+    fixture(rtp, extraHeaders = bulky).use { f =>
+      answered(f).map((invite, _) =>
+        assertEquals(invite.headers.topVia.transport, TransportProtocol.Udp)
+      )
+    }
+  }
+
+  test("when TCP cannot be reached a big INVITE is sent again over UDP") {
+    val rtp    = port"19032"
+    val stream = tcpUplink(rtp, unreachable)
+    fixture(
+      rtp,
+      oversize = Some(stream),
+      extraHeaders = bulky,
+      reach = FlakyTransport(_, failing = Set(unreachable))
+    ).use { f =>
+      answered(f).map((invite, _) =>
+        assertEquals(invite.headers.topVia.transport, TransportProtocol.Udp)
+      )
+    }
+  }
+
+  test("a call to a name that is already over TCP is not switched") {
+    val rtp = port"19033"
+    fixture(
+      rtp,
+      first = Some(tcpUplink(rtp, them)),
+      oversize = Some(udpUplink(rtp, unreachable)),
+      extraHeaders = bulky,
+      reach = FlakyTransport(_, failing = Set(unreachable))
+    ).use { f =>
+      answered(f).map((invite, _) =>
+        assertEquals(invite.headers.topVia.transport, TransportProtocol.Tcp)
+      )
     }
   }
 }

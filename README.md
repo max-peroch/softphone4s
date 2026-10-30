@@ -155,8 +155,11 @@ A callee is `1234`, `alice` or `alice@sip.example.com` (dialled at your realm
 when no host is given), or a whole SIP URI. A URI is how you ask for a
 transport: `sips:alice@example.com` for TLS, or
 `sip:alice@example.com;transport=tcp`; without one the account's `transport`
-and the domain's DNS records decide.
-
+and the domain's DNS records decide. An INVITE too big for a UDP datagram
+(`max-udp-message`, 1300 bytes by default, RFC 3261 §18.1.1) is sent over TCP
+to the same address instead, and over UDP after all if that connection cannot
+be made. This applies to the first INVITE of a call; requests within a dialog
+stay on the dialog's transport.
 
 ```scala
 import cats.effect.*
@@ -292,6 +295,7 @@ account every call is taken. Two accounts cannot have the same user.
 | `tcp.idle-timeout`  | `Duration`  | `5 minutes`  | A TCP connection with nothing sent or received for this long is closed |
 | `tcp.framing.max-header-bytes` / `max-body-bytes` | `Int` | 16 KiB / 1 MiB | Largest message a TCP connection may carry before it is dropped |
 | `tls.trust-store` / `tls.client-certificate` | `{ path, password, store-type }` | JVM trust / none | Key stores for the certificates we trust and the one we present (`store-type` is `PKCS12` or `JKS`) |
+| `max-udp-message`   | `Int`       | `1300`       | An INVITE longer than this many bytes goes over TCP instead of UDP |
 | `listen`            | list of `tcp`/`tls` | empty | Transports we also accept connections on (UDP is always on) |
 | `tls-port`          | `Port`      | `5061`       | Port for the TLS listener                           |
 | `tls.server-certificate` | `{ path, password, store-type }` | none | The key and certificate we show to clients that connect to us |

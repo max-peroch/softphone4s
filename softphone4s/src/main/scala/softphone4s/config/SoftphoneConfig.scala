@@ -35,7 +35,8 @@ final case class SoftphoneConfig(
     tls: TlsConfig = TlsConfig(),
     dns: DnsConfig = DnsConfig(),
     listen: Set[TransportProtocol] = Set.empty,
-    tlsPort: Port = port"5061"
+    tlsPort: Port = port"5061",
+    maxUdpMessage: Int = 1300
 ) {
 
   /** The account `call` and `register` use. */

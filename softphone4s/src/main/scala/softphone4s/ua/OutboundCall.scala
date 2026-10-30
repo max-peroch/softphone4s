@@ -8,7 +8,7 @@ import fs2.concurrent.Channel
 import fs2.{Pipe, Stream}
 import org.typelevel.log4cats.StructuredLogger
 import softphone4s.Call
-import softphone4s.codec.SdpCodec
+import softphone4s.codec.{SdpCodec, SipCodec}
 import softphone4s.fsm.*
 import softphone4s.fsm.SipMessages.*
 import softphone4s.model.*
@@ -39,6 +39,8 @@ private[softphone4s] class OutboundCall[F[_]: Async] private (
     layer: TransactionLayer[F],
     uplink: Ref[F, Uplink],
     alternatives: Ref[F, List[Uplink]],
+    oversize: Ref[F, Option[Uplink]],
+    udpLimit: Int,
     resolve: (TransportProtocol, SipUri) => F[SocketAddress[IpAddress]],
     events: Channel[F, SipEvent],
     serverTransactions: Ref[F, Map[(SipMethod, CSeqNumber), ServerTransaction[
@@ -236,22 +238,55 @@ private[softphone4s] class OutboundCall[F[_]: Async] private (
       extraHeaders: List[ExtensionHeader]
   ): F[Unit] =
     (newBranch(), uplink.get).flatMapN { (branch, current) =>
-      inviteBranch.set(branch) >>
-        startClient(
-          current.endpoint.buildInvite(
-            callee,
-            callId,
-            localTag,
-            CSeqNumber.One,
-            branch,
-            extraHeaders = extraHeaders
-          ),
-          current.peer,
+      def build(over: Uplink): SipRequest =
+        over.endpoint.buildInvite(
+          callee,
+          callId,
+          localTag,
+          CSeqNumber.One,
+          branch,
+          extraHeaders = extraHeaders
+        )
+      val request = build(current)
+      for {
+        sendOver <- streamIfTooBig(current, request)
+        _        <- inviteBranch.set(branch)
+        _        <- startClient(
+          if sendOver == current then request else build(sendOver),
+          sendOver.peer,
           failover = nextUplink(
             sendInitialInvite(callee, callId, localTag, extraHeaders)
           )
         )
+      } yield ()
     }
+
+  /** The uplink to send `request` over: `current`, unless that is UDP and the
+    * request is too big for a datagram, in which case the stream way to the
+    * same server, if there is one (RFC 3261 §18.1.1). The UDP way then becomes
+    * the next to try, so a connection that cannot be made falls back to UDP.
+    * Only once: after that fall-back the request goes over UDP whatever its
+    * size.
+    */
+  private def streamIfTooBig(current: Uplink, request: SipRequest): F[Uplink] =
+    if current.endpoint.transport != TransportProtocol.Udp ||
+      SipCodec.encode(request).size <= udpLimit
+    then Async[F].pure(current)
+    else
+      oversize.getAndSet(None).flatMap {
+        case None         => Async[F].pure(current)
+        case Some(stream) =>
+          alternatives.update(current :: _) >>
+            uplink.set(stream) >>
+            logger
+              .info(
+                Map(
+                  "bytes" -> SipCodec.encode(request).size.toString,
+                  "limit" -> udpLimit.toString
+                )
+              )("INVITE too big for UDP; sending it over TCP")
+              .as(stream)
+      }
 
   /** Moves the call to its next uplink and runs `retry` over it. False, doing
     * nothing, when there is none, or the call is no longer just inviting (it
@@ -561,7 +596,8 @@ private[softphone4s] object OutboundCall {
     * that gets no answer, or the transport fails, the INVITE is sent again over
     * each of `alternatives` in turn (RFC 3263 §4.3). `inviteTimeout` is how
     * long to wait for the whole call to be answered, so it should cover every
-    * target.
+    * target. An INVITE of more than `udpLimit` bytes that would go over UDP
+    * goes over `oversize` instead, when there is one.
     */
   def create[F[_]: Async](
       callId: CallId,
@@ -569,6 +605,8 @@ private[softphone4s] object OutboundCall {
       layer: TransactionLayer[F],
       first: Uplink,
       alternatives: List[Uplink],
+      oversize: Option[Uplink],
+      udpLimit: Int,
       resolve: (TransportProtocol, SipUri) => F[SocketAddress[IpAddress]],
       supervisor: Supervisor[F],
       entropy: Entropy[F],
@@ -584,6 +622,7 @@ private[softphone4s] object OutboundCall {
       inviteBranch <- Ref[F].of(branch)
       uplink       <- Ref[F].of(first)
       remaining    <- Ref[F].of(alternatives)
+      streamWay    <- Ref[F].of(oversize)
       ctx = InviteCtx(
         callId = callId,
         localTag = localTag,
@@ -621,6 +660,8 @@ private[softphone4s] object OutboundCall {
         layer,
         uplink,
         remaining,
+        streamWay,
+        udpLimit,
         resolve,
         events,
         serverTransactions,

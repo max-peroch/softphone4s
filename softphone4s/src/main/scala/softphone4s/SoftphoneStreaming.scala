@@ -110,6 +110,7 @@ class SoftphoneStreaming[F[_]: Async: Network] private (
       )
       endpoint <- Resource.eval(allocateEndpoint(account, localIp, protocol))
       alternatives <- Resource.eval(alternativesTo(endpoint, found.tail))
+      streamWay    <- Resource.eval(streamWayTo(endpoint, localIp, calleeAddr))
       callId       <- Resource.eval(entropy.callId(localIp))
       sipCh        <- Resource.make(
         Channel
@@ -122,6 +123,7 @@ class SoftphoneStreaming[F[_]: Async: Network] private (
         sipCh.stream,
         Uplink(endpoint, calleeAddr),
         alternatives,
+        streamWay,
         extra
       )
     } yield call
@@ -210,6 +212,22 @@ class SoftphoneStreaming[F[_]: Async: Network] private (
           SoftphoneError.HostResolutionFailed(uri.host.toString)
         )
       )
+
+  /** The way over TCP to the server `endpoint` reaches over UDP, at the same
+    * address: where a request too big for a datagram goes (RFC 3261 §18.1.1).
+    * None for a call that is not over UDP.
+    */
+  private def streamWayTo(
+      endpoint: LocalEndpoint,
+      localIp: IpAddress,
+      peer: SocketAddress[IpAddress]
+  ): F[Option[Uplink]] =
+    if endpoint.transport != TransportProtocol.Udp then Async[F].pure(None)
+    else
+      Async[F]
+        .fromEither(endpoint.via(localIp, TransportProtocol.Tcp))
+        .map(stream => Option(Uplink(stream, peer)))
+        .handleError(_ => None)
 
   /** The other ways to reach the server, each as `endpoint` over that target's
     * transport and from the local address that routes to it, keeping the RTP
@@ -321,6 +339,7 @@ class SoftphoneStreaming[F[_]: Async: Network] private (
       dialogInput: Stream[F, DialogInput[F]],
       first: Uplink,
       alternatives: List[Uplink],
+      streamWay: Option[Uplink],
       extraHeaders: List[ExtensionHeader]
   ): Resource[F, OutboundCall[F]] =
     for {
@@ -340,6 +359,8 @@ class SoftphoneStreaming[F[_]: Async: Network] private (
           layer,
           first,
           alternatives,
+          streamWay,
+          config.maxUdpMessage,
           (transport, uri) => nextHopOver(transport)(uri),
           supervisor,
           entropy,
