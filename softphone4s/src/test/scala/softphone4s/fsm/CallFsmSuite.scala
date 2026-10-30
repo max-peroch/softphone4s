@@ -766,4 +766,123 @@ class CallFsmSuite extends FunSuite {
       List(500)
     )
   }
+
+  // ---- Our own session changes -----------------------------------------------
+
+  private def reinviteResponse(code: Int, number: Int, body: String = "") = {
+    val r = resp(code, "X", to = "<sip:callee@host>;tag=rtag", body = body)
+    r.copy(headers = r.headers.copy(cseq = cseq(number, SipMethod.Invite)))
+  }
+
+  private lazy val holding: Reinviting =
+    step(active, SessionChangeRequested(SessionChange.Hold)) match {
+      case (r: Reinviting, _) => r
+      case (other, _)         => fail(s"expected Reinviting, got $other")
+    }
+
+  test("a hold sends a re-INVITE with the next CSeq") {
+    val (state, actions) =
+      step(active, SessionChangeRequested(SessionChange.Hold))
+    val next = active.dialog.copy(localCseq = active.dialog.localCseq.next)
+    assertEquals(state, Reinviting(next, SessionChange.Hold))
+    assertEquals(actions, List(SendReinvite(next, SessionChange.Hold)))
+  }
+
+  test("a 200 to the re-INVITE is ACKed and its answer applied") {
+    val ok               = reinviteResponse(200, 2, sdpBody("recvonly"))
+    val (state, actions) = step(holding, ResponseReceived(ok))
+    assertEquals(state, Active(holding.dialog))
+    assertEquals(actions, List(SendAck(holding.dialog, None), ApplyAnswer(ok)))
+  }
+
+  test("a provisional response changes nothing") {
+    assertEquals(
+      step(holding, ResponseReceived(reinviteResponse(100, 2))),
+      (holding, Nil)
+    )
+  }
+
+  test("a response to another request is not taken for the re-INVITE's") {
+    assertEquals(
+      step(holding, ResponseReceived(reinviteResponse(491, 1)))._1,
+      holding
+    )
+  }
+
+  test(
+    "a 491 waits for the retry timer, then sends the re-INVITE again with a new CSeq"
+  ) {
+    val (waiting, actions) =
+      step(holding, ResponseReceived(reinviteResponse(491, 2)))
+    assertEquals(waiting, Retrying(holding.dialog, SessionChange.Hold))
+    assertEquals(actions, List(ScheduleReinviteRetry(holding.dialog.role)))
+    val (again, resent) = step(waiting, TimerFired(CallTimer.ReinviteRetry))
+    val next = holding.dialog.copy(localCseq = holding.dialog.localCseq.next)
+    assertEquals(again, Reinviting(next, SessionChange.Hold))
+    assertEquals(resent, List(SendReinvite(next, SessionChange.Hold)))
+  }
+
+  test(
+    "a 408 or 481 to the re-INVITE ends the call; any other refusal leaves it as it was"
+  ) {
+    List(408, 481).foreach { code =>
+      val (state, actions) =
+        step(holding, ResponseReceived(reinviteResponse(code, 2)))
+      assertEquals(state, ByeSent(holding.dialog))
+      assertEquals(actions, List(StopMedia, SendBye(holding.dialog)))
+    }
+    assertEquals(
+      step(holding, ResponseReceived(reinviteResponse(488, 2))),
+      (Active(holding.dialog), Nil)
+    )
+  }
+
+  test("a re-INVITE that gets no answer ends the call") {
+    val (state, _) =
+      step(holding, TransactionFailed(TransactionFailure.TimedOut))
+    assertEquals(state, ByeSent(holding.dialog))
+  }
+
+  test(
+    "a re-INVITE from the remote while ours is pending gets 491, and ours stands"
+  ) {
+    val theirs           = req(SipMethod.Invite, sdpBody(), number = 3)
+    val (state, actions) = step(holding, RequestReceived(theirs))
+    assertEquals(state, holding)
+    assertEquals(replyOf(actions), List(491))
+  }
+
+  test("while waiting to retry, the remote's re-INVITE is answered normally") {
+    val waiting          = Retrying(holding.dialog, SessionChange.Hold)
+    val theirs           = req(SipMethod.Invite, sdpBody(), number = 3)
+    val (state, actions) = step(waiting, RequestReceived(theirs))
+    assert(actions.exists {
+      case SendSessionOk(_, Some(_)) => true; case _ => false
+    })
+    assertEquals(
+      state,
+      Retrying(holding.dialog.seen(cseqNumber(3)), SessionChange.Hold)
+    )
+  }
+
+  test(
+    "a BYE from the remote, or our hangup, ends the call while a re-INVITE is pending"
+  ) {
+    assert(
+      step(holding, RequestReceived(req(SipMethod.Bye, number = 3)))._1
+        .isInstanceOf[Closed]
+    )
+    assertEquals(step(holding, HangupRequested)._1, ByeSent(holding.dialog))
+    val waiting          = Retrying(holding.dialog, SessionChange.Hold)
+    val (state, actions) = step(waiting, HangupRequested)
+    assertEquals(state, ByeSent(holding.dialog))
+    assert(actions.contains(Timer(TimerAction.Cancel(CallTimer.ReinviteRetry))))
+  }
+
+  test("a second change request while one is pending is ignored") {
+    assertEquals(
+      step(holding, SessionChangeRequested(SessionChange.Resume)),
+      (holding, Nil)
+    )
+  }
 }

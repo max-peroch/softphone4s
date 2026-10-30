@@ -243,4 +243,30 @@ class SipMessagesSuite extends FunSuite {
     assertEquals(bye.requestUri, uri("sip:bob@192.0.2.5:5070"))
     assertEquals(bye.headers.routes, Nil)
   }
+
+  test(
+    "a re-INVITE carries the dialog's next CSeq, its route, and an SDP offer in the chosen direction"
+  ) {
+    val d = routedDialog("<sip:p1.example.com;lr>")
+      .copy(localCseq = cseqNumber(4))
+    val r =
+      endpoint.buildReinvite(d, branch("z9hG4bKr"), MediaDirection.SendOnly)
+    assertEquals(r.method, SipMethod.Invite)
+    assertEquals(r.headers.cseq, CSeq(cseqNumber(4), SipMethod.Invite))
+    assertEquals(r.requestUri, uri("sip:bob@192.0.2.5:5070"))
+    assertEquals(
+      r.headers.routes.map(_.render),
+      List("<sip:p1.example.com;lr>")
+    )
+    assertEquals(r.headers.to.tag, Some(tag("rt")))
+    assertEquals(r.headers.from.tag, Some(tag("lt")))
+    assertEquals(r.headers.contentType, Some(MediaType.Sdp))
+    assert(r.body.contains("a=sendonly\r\n"), r.body)
+    assert(
+      endpoint
+        .buildReinvite(d, branch("z9hG4bKr"), MediaDirection.SendRecv)
+        .body
+        .contains("a=sendrecv")
+    )
+  }
 }

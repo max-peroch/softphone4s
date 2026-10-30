@@ -18,4 +18,7 @@ enum CallTimer {
 
   /** No ACK for our 200 OK: the dialog is considered over. */
   case AckTimeout
+
+  /** Time to send a re-INVITE again after a 491 (RFC 3261 §14.1). */
+  case ReinviteRetry
 }

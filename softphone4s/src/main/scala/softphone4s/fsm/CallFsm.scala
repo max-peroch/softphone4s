@@ -30,9 +30,19 @@ object CallState {
   case class Inviting(ctx: InviteCtx)                   extends CallState
   case class Ringing(ctx: InviteCtx, dialog: SipDialog) extends CallState
   case class Active(dialog: SipDialog)                  extends CallState
-  case class ByeSent(dialog: SipDialog)                 extends CallState
-  case class Closed(reason: TerminationReason)          extends CallState
-  case class Failed(code: Int, reason: String)          extends CallState
+
+  /** Our re-INVITE for `change` is in flight; `dialog` already carries its
+    * CSeq.
+    */
+  case class Reinviting(dialog: SipDialog, change: SessionChange)
+      extends CallState
+
+  /** Our re-INVITE met a 491; the retry timer runs. */
+  case class Retrying(dialog: SipDialog, change: SessionChange)
+      extends CallState
+  case class ByeSent(dialog: SipDialog)        extends CallState
+  case class Closed(reason: TerminationReason) extends CallState
+  case class Failed(code: Int, reason: String) extends CallState
 }
 
 // ---------------------------------------------------------------------------
@@ -41,10 +51,11 @@ object CallState {
 
 sealed trait SipEvent
 object SipEvent {
-  case class ResponseReceived(response: SipResponse) extends SipEvent
-  case class RequestReceived(request: SipRequest)    extends SipEvent
-  case object HangupRequested                        extends SipEvent
-  case class TimerFired(timer: CallTimer)            extends SipEvent
+  case class ResponseReceived(response: SipResponse)       extends SipEvent
+  case class RequestReceived(request: SipRequest)          extends SipEvent
+  case object HangupRequested                              extends SipEvent
+  case class SessionChangeRequested(change: SessionChange) extends SipEvent
+  case class TimerFired(timer: CallTimer)                  extends SipEvent
 
   /** A client transaction of the call ended without a final response. */
   case class TransactionFailed(failure: TransactionFailure) extends SipEvent
@@ -79,6 +90,16 @@ object SipAction {
   case class SendByeOk(request: SipRequest)     extends SipAction
   case class SendInfoOk(request: SipRequest)    extends SipAction
   case class SendOptionsOk(request: SipRequest) extends SipAction
+
+  /** Send a re-INVITE offering `change`; `dialog` carries its CSeq. */
+  case class SendReinvite(dialog: SipDialog, change: SessionChange)
+      extends SipAction
+
+  /** The remote party's answer to our re-INVITE: media goes where it says. */
+  case class ApplyAnswer(response: SipResponse) extends SipAction
+
+  /** Wait a random time suited to `role`, then send the re-INVITE again. */
+  case class ScheduleReinviteRetry(role: DialogRole) extends SipAction
 
   /** A 200 to a re-INVITE or UPDATE: with our answer to `offer` if there is
     * one, after which media goes where the offer says (or stops, on hold).
@@ -204,19 +225,70 @@ object CallFsm {
         case (Active(dialog), HangupRequested) =>
           go(ByeSent(dialog), List(StopMedia, SendBye(dialog)))
 
+        case (Reinviting(dialog, _), HangupRequested) =>
+          go(ByeSent(dialog), List(StopMedia, SendBye(dialog)))
+
+        case (Retrying(dialog, _), HangupRequested) =>
+          go(
+            ByeSent(dialog),
+            List(
+              Timer(TimerAction.Cancel(CallTimer.ReinviteRetry)),
+              StopMedia,
+              SendBye(dialog)
+            )
+          )
+
+        // ---- Our own session changes (RFC 3261 §14.1) -------------------------
+        case (Active(dialog), SessionChangeRequested(change)) =>
+          sendReinvite(dialog, change)
+
+        case (Retrying(dialog, change), TimerFired(CallTimer.ReinviteRetry)) =>
+          sendReinvite(dialog, change)
+
+        case (Reinviting(dialog, change), ResponseReceived(response))
+            if response.headers.cseq.method == SipMethod.Invite &&
+              response.headers.cseq.seq == dialog.localCseq =>
+          Reinvite.outcome(response) match {
+            case Reinvite.Outcome.Progress => State.pure(Nil)
+            case Reinvite.Outcome.Accepted =>
+              go(
+                Active(dialog),
+                List(SendAck(dialog, None), ApplyAnswer(response))
+              )
+            case Reinvite.Outcome.Glare =>
+              go(
+                Retrying(dialog, change),
+                List(ScheduleReinviteRetry(dialog.role))
+              )
+            case Reinvite.Outcome.DialogGone =>
+              go(ByeSent(dialog), List(StopMedia, SendBye(dialog)))
+            case Reinvite.Outcome.Refused => go(Active(dialog), Nil)
+          }
+
+        // The re-INVITE got no answer: the dialog is gone.
+        case (Reinviting(dialog, _), TransactionFailed(_)) =>
+          go(ByeSent(dialog), List(StopMedia, SendBye(dialog)))
+
         // A request that is not part of this dialog (RFC 3261 §12.2.2), or not
         // newer than the last one, is refused.
-        case (Active(dialog), RequestReceived(request))
+        case (Established(dialog), RequestReceived(request))
             if !dialog.matches(request) =>
           State.pure(List(SendReply(request, FailureStatus.CallDoesNotExist)))
 
-        case (Active(dialog), RequestReceived(request))
+        case (Established(dialog), RequestReceived(request))
             if !dialog.accepts(request.headers.cseq.seq) =>
           State.pure(
             List(SendReply(request, FailureStatus.ServerInternalError))
           )
 
-        case (Active(dialog), RequestReceived(request))
+        // Both sides sent a re-INVITE at once: ours stands, theirs waits
+        // (RFC 3261 §14.2).
+        case (Reinviting(_, _), RequestReceived(request))
+            if request.method == SipMethod.Invite ||
+              request.method == SipMethod.Update =>
+          State.pure(List(SendReply(request, FailureStatus.RequestPending)))
+
+        case (Established(_), RequestReceived(request))
             if request.method == SipMethod.Bye =>
           go(
             Closed(RemoteBye),
@@ -243,18 +315,18 @@ object CallFsm {
             if isInviteOk(response) =>
           State.pure(List(SendAck(dialog, None)))
 
-        case (Active(dialog), RequestReceived(request))
+        case (Established(dialog), RequestReceived(request))
             if request.method == SipMethod.Info =>
           val notify = parseDtmf(request.body).map(NotifyDtmf(_)).toList
           go(
-            Active(dialog.seen(request.headers.cseq.seq)),
+            withDialog(state, dialog.seen(request.headers.cseq.seq)),
             SendInfoOk(request) :: notify
           )
 
         // OPTIONS, re-INVITE, UPDATE, or something we do not handle.
-        case (Active(dialog), RequestReceived(request)) =>
+        case (Established(dialog), RequestReceived(request)) =>
           go(
-            Active(dialog.seen(request.headers.cseq.seq)),
+            withDialog(state, dialog.seen(request.headers.cseq.seq)),
             DialogRequest.of(request) match {
               case DialogRequest.Query   => List(SendOptionsOk(request))
               case DialogRequest.Refresh => List(SendSessionOk(request, None))
@@ -280,6 +352,32 @@ object CallFsm {
     }
 
   // -------------------------------------------------------------------------
+
+  /** The dialog of a call that stands, whether or not a re-INVITE is pending.
+    */
+  private object Established {
+    def unapply(state: CallState): Option[SipDialog] = state match {
+      case Active(dialog)        => Some(dialog)
+      case Reinviting(dialog, _) => Some(dialog)
+      case Retrying(dialog, _)   => Some(dialog)
+      case _                     => None
+    }
+  }
+
+  private def withDialog(state: CallState, dialog: SipDialog): CallState =
+    state match {
+      case Reinviting(_, change) => Reinviting(dialog, change)
+      case Retrying(_, change)   => Retrying(dialog, change)
+      case _                     => Active(dialog)
+    }
+
+  private def sendReinvite(
+      dialog: SipDialog,
+      change: SessionChange
+  ): Transition = {
+    val next = dialog.copy(localCseq = dialog.localCseq.next)
+    go(Reinviting(next, change), List(SendReinvite(next, change)))
+  }
 
   private def go(next: CallState, actions: List[SipAction]): Transition =
     State.set(next).as(actions)

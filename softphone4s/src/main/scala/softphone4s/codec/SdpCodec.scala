@@ -117,7 +117,11 @@ object SdpCodec {
   }
 
   /** Build a minimal SDP offer. */
-  def buildOffer(localIp: IpAddress, localRtpPort: Port): String =
+  def buildOffer(
+      localIp: IpAddress,
+      localRtpPort: Port,
+      direction: MediaDirection = MediaDirection.SendRecv
+  ): String =
     s"""|v=0
         |o=- 0 0 IN IP4 $localIp
         |s=-
@@ -127,7 +131,7 @@ object SdpCodec {
         |a=rtpmap:0 PCMU/8000
         |a=rtpmap:101 telephone-event/8000
         |a=fmtp:101 0-16
-        |a=sendrecv
+        |a=${direction.sdpAttribute}
         |""".stripMargin.replace("\n", "\r\n")
 
   /** Build a minimal SDP answer, offering the same fixed codec set as

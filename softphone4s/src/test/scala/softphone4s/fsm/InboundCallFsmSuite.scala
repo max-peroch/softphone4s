@@ -480,4 +480,104 @@ class InboundCallFsmSuite extends FunSuite {
       )
     }
   }
+
+  // ---- Our own session changes -----------------------------------------------
+
+  private def reinviteResponse(code: Int, number: Int) =
+    SipResponse(code, "X", request(SipMethod.Invite, number).headers)
+
+  private lazy val holding: Reinviting =
+    step(active, SessionChangeRequested(SessionChange.Hold)) match {
+      case (r: Reinviting, _) => r
+      case (other, _)         => fail(s"expected Reinviting, got $other")
+    }
+
+  test("a hold sends a re-INVITE with the next CSeq") {
+    val (state, actions) =
+      step(active, SessionChangeRequested(SessionChange.Hold))
+    val next = ctx.dialog.copy(localCseq = ctx.dialog.localCseq.next)
+    assertEquals(state, Reinviting(next, SessionChange.Hold))
+    assertEquals(actions, List(SendReinvite(next, SessionChange.Hold)))
+  }
+
+  test("a 200 to the re-INVITE is ACKed and its answer applied") {
+    val ok = reinviteResponse(200, holding.dialog.localCseq.value)
+    assertEquals(
+      step(holding, ResponseReceived(ok)),
+      (Active(holding.dialog), List(SendAck(holding.dialog), ApplyAnswer(ok)))
+    )
+  }
+
+  test(
+    "a 491 is retried after the timer, as the party that did not place the call"
+  ) {
+    val (waiting, actions) =
+      step(
+        holding,
+        ResponseReceived(reinviteResponse(491, holding.dialog.localCseq.value))
+      )
+    assertEquals(waiting, Retrying(holding.dialog, SessionChange.Hold))
+    assertEquals(actions, List(ScheduleReinviteRetry(DialogRole.Uas)))
+    val (again, resent) = step(waiting, TimerFired(CallTimer.ReinviteRetry))
+    assertEquals(again.getClass, classOf[Reinviting])
+    assert(resent.exists {
+      case SendReinvite(d, SessionChange.Hold) =>
+        d.localCseq.value == holding.dialog.localCseq.value + 1;
+      case _ => false
+    })
+  }
+
+  test("a 408 or 481 ends the call; another refusal leaves it as it was") {
+    List(408, 481).foreach { code =>
+      val (state, _) =
+        step(
+          holding,
+          ResponseReceived(
+            reinviteResponse(code, holding.dialog.localCseq.value)
+          )
+        )
+      assertEquals(state, ByeSent(holding.dialog))
+    }
+    assertEquals(
+      step(
+        holding,
+        ResponseReceived(reinviteResponse(488, holding.dialog.localCseq.value))
+      )._1,
+      Active(holding.dialog)
+    )
+  }
+
+  test(
+    "the remote's re-INVITE while ours is pending gets 491; while waiting to retry it is answered"
+  ) {
+    val theirs = request(SipMethod.Invite, 11, body = sdpBody())
+    assertEquals(
+      step(holding, RequestReceived(theirs))._2,
+      List(Reply(theirs, 491, "Request Pending"))
+    )
+    val waiting = Retrying(holding.dialog, SessionChange.Hold)
+    assert(
+      step(waiting, RequestReceived(theirs))._2.exists {
+        case SendSessionOk(_, Some(_)) => true
+        case _                         => false
+      }
+    )
+  }
+
+  test("hanging up while a re-INVITE is pending sends the BYE") {
+    assertEquals(step(holding, HangupRequested)._1, ByeSent(holding.dialog))
+  }
+
+  test(
+    "a change request is ignored unless the call stands with nothing pending"
+  ) {
+    assertEquals(
+      step(holding, SessionChangeRequested(SessionChange.Resume)),
+      (holding, Nil)
+    )
+    assertEquals(
+      step(answered, SessionChangeRequested(SessionChange.Hold)),
+      (answered, Nil)
+    )
+  }
 }

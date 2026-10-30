@@ -203,6 +203,35 @@ object SipMessages {
         )
       )
 
+    // -----------------------------------------------------------------------
+    // re-INVITE
+    // -----------------------------------------------------------------------
+
+    /** A re-INVITE within `dialog` offering `direction` (RFC 3261 §14.1). Its
+      * CSeq is the dialog's current local CSeq, which the caller has already
+      * advanced for it.
+      */
+    def buildReinvite(
+        dialog: SipDialog,
+        branch: Branch,
+        direction: MediaDirection
+    ): SipRequest =
+      SipRequest(
+        method = SipMethod.Invite,
+        requestUri = dialog.route.requestUri,
+        headers = SipHeaders(
+          callId = dialog.callId,
+          from = NameAddr.withTag(dialog.localUri, dialog.localTag),
+          to = remoteParty(dialog),
+          vias = vias(e, branch),
+          cseq = CSeq(dialog.localCseq, SipMethod.Invite),
+          contacts = contacts(e),
+          contentType = Some(MediaType.Sdp),
+          routes = dialog.route.routes
+        ),
+        body = SdpCodec.buildOffer(e.ip, e.rtpPort, direction)
+      )
+
     def buildByeOk(req: SipRequest): SipResponse =
       SipResponse(
         statusCode = 200,

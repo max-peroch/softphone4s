@@ -95,6 +95,12 @@ private[softphone4s] final class InboundCall[F[_]: Async] private (
     }
   def awaitHangup: F[Unit] = callEnded.get.void
 
+  def hold: F[Unit] =
+    events.send(InboundEvent.SessionChangeRequested(SessionChange.Hold)).void
+
+  def resume: F[Unit] =
+    events.send(InboundEvent.SessionChangeRequested(SessionChange.Resume)).void
+
   /** True while the call can still be answered or is under way. */
   private[softphone4s] def isOpen: F[Boolean] =
     stateRef.get.map(_ != InboundState.Closed)
@@ -196,6 +202,28 @@ private[softphone4s] final class InboundCall[F[_]: Async] private (
       case SendInfoOk(request) =>
         respondTo(request, endpoint.buildInfoOk(request))
 
+      case SendReinvite(dialog, change) =>
+        (entropy.branch, destinationFor(dialog)).flatMapN { (branch, to) =>
+          logger.debug(Map("change" -> change.toString))("Sending re-INVITE") >>
+            startClient(
+              endpoint.buildReinvite(dialog, branch, change.direction),
+              to
+            )
+        }
+
+      case SendAck(dialog) =>
+        (entropy.branch, destinationFor(dialog)).flatMapN { (branch, to) =>
+          logger.debug("Sending ACK") >>
+            layer.transmit(endpoint.buildAck(dialog, branch, None), to)
+        }
+
+      case ApplyAnswer(response) => applyAnswer(response)
+
+      case ScheduleReinviteRetry(role) =>
+        entropy.fraction.flatMap(f =>
+          timers.start(CallTimer.ReinviteRetry, Reinvite.glareDelay(role, f))
+        )
+
       case SendOptionsOk(request) =>
         logger.debug("Answering OPTIONS") >>
           respondTo(request, endpoint.buildOptionsOk(request))
@@ -282,6 +310,15 @@ private[softphone4s] final class InboundCall[F[_]: Async] private (
         )
         .as(peer)
     }
+
+  /** Points media where the answer to our re-INVITE says, or stops it if the
+    * remote party will not receive.
+    */
+  private def applyAnswer(response: SipResponse): F[Unit] =
+    SdpCodec
+      .parseOffer(response.body)
+      .filter(_.isAcceptable)
+      .traverse_(o => media.retarget(o.ip, o.port, o.direction))
 
   private def startClient(
       request: SipRequest,

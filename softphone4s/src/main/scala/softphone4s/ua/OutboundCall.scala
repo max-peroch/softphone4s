@@ -164,7 +164,9 @@ private[softphone4s] class OutboundCall[F[_]: Async] private (
       )("Received SIP response")
     case SipEvent.TransactionFailed(failure) =>
       logger.debug(Map("failure" -> failure.toString))("Transaction failed")
-    case SipEvent.HangupRequested | SipEvent.TimerFired(_) => Async[F].unit
+    case SipEvent.HangupRequested | SipEvent.TimerFired(_) |
+        SipEvent.SessionChangeRequested(_) =>
+      Async[F].unit
   }
 
   // ---- Transactions ---------------------------------------------------------------
@@ -202,6 +204,21 @@ private[softphone4s] class OutboundCall[F[_]: Async] private (
             )
             .void
     }
+
+  /** Points media where the answer to our re-INVITE says, or stops it if the
+    * remote party will not receive.
+    */
+  private def applyAnswer(response: SipResponse): F[Unit] =
+    SdpCodec
+      .parseOffer(response.body)
+      .filter(_.isAcceptable)
+      .traverse_(o => media.retarget(o.ip, o.port, o.direction))
+
+  def hold: F[Unit] =
+    events.send(SipEvent.SessionChangeRequested(SessionChange.Hold)).void
+
+  def resume: F[Unit] =
+    events.send(SipEvent.SessionChangeRequested(SessionChange.Resume)).void
 
   private def forward(transaction: ClientTransaction[F]): F[Unit] =
     transaction.notices
@@ -333,6 +350,22 @@ private[softphone4s] class OutboundCall[F[_]: Async] private (
       case SendInfoOk(request) =>
         logger.debug("Acknowledging INFO") >>
           respondTo(request, endpoint.buildInfoOk(request))
+
+      case SendReinvite(dialog, change) =>
+        (newBranch(), destinationFor(dialog)).flatMapN { (branch, to) =>
+          logger.debug(Map("change" -> change.toString))("Sending re-INVITE") >>
+            startClient(
+              endpoint.buildReinvite(dialog, branch, change.direction),
+              to
+            )
+        }
+
+      case ApplyAnswer(response) => applyAnswer(response)
+
+      case ScheduleReinviteRetry(role) =>
+        entropy.fraction.flatMap(f =>
+          timers.start(CallTimer.ReinviteRetry, Reinvite.glareDelay(role, f))
+        )
 
       case SendOptionsOk(request) =>
         logger.debug("Answering OPTIONS") >>
