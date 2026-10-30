@@ -15,6 +15,12 @@ object TerminationReason {
   case class Rejected(code: Int, reason: String) extends TerminationReason
   case object TimedOut                           extends TerminationReason
   case object TransportFailure                   extends TerminationReason
+
+  /** The caller cancelled an incoming call before it was answered. */
+  case object CancelledByCaller extends TerminationReason
+
+  /** We turned an incoming call away. */
+  case object RejectedLocally extends TerminationReason
 }
 
 sealed trait CallState
@@ -317,7 +323,7 @@ object CallFsm {
     )
   }
 
-  private def parseDtmf(body: String): Option[DtmfDigit] =
+  private[fsm] def parseDtmf(body: String): Option[DtmfDigit] =
     parseDtmfFromRelay(body)
       .orElse(parseDtmfFromBare(body))
       .flatMap(DtmfDigit.fromCode)

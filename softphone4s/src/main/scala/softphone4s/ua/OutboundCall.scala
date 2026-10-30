@@ -329,8 +329,10 @@ private[softphone4s] class OutboundCall[F[_]: Async] private (
           case Rejected(code, msg) => SoftphoneError.CallRejected(code, msg)
           case TimedOut            => SoftphoneError.CallTimedOut
           case TransportFailure    => SoftphoneError.TransportFailed
-          case LocalHangup         => SoftphoneError.CallCancelled
-          case RemoteBye           => SoftphoneError.RemoteHangup
+          case CancelledByCaller | RejectedLocally =>
+            SoftphoneError.CallCancelled
+          case LocalHangup => SoftphoneError.CallCancelled
+          case RemoteBye   => SoftphoneError.RemoteHangup
         }
         val signalStreams = reason match {
           case LocalHangup => Async[F].unit

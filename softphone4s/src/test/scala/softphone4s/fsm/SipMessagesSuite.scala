@@ -139,4 +139,58 @@ class SipMessagesSuite extends FunSuite {
     assertNotEquals(header(SipMethod.Register), header(SipMethod.Invite))
     assert(header(SipMethod.Register).startsWith("Digest username="))
   }
+
+  private val incomingInvite = SipRequest(
+    SipMethod.Invite,
+    uri("sip:alice@sip.example.com"),
+    SipHeaders(
+      callId = callId("in@host"),
+      from = nameAddr("<sip:bob@example.com>;tag=ft"),
+      to = nameAddr("<sip:alice@sip.example.com>"),
+      vias = cats.data.NonEmptyList
+        .one(via("SIP/2.0/UDP 192.0.2.5;branch=z9hG4bKin")),
+      cseq = cseq(4, SipMethod.Invite),
+      contacts = List(nameAddr("<sip:bob@192.0.2.5>")),
+      recordRoutes = List(nameAddr("<sip:p1.example.com;lr>"))
+    )
+  )
+
+  test(
+    "a 200 to an incoming INVITE carries our tag, Contact, route and answer"
+  ) {
+    val ok = endpoint.buildInviteResponse(
+      incomingInvite,
+      200,
+      "OK",
+      tag("lt"),
+      Some("v=0\r\n")
+    )
+    assertEquals(ok.statusCode, 200)
+    assertEquals(ok.headers.to.tag.map(_.value), Some("lt"))
+    assertEquals(ok.headers.from, incomingInvite.headers.from)
+    assertEquals(ok.headers.cseq, incomingInvite.headers.cseq)
+    assertEquals(ok.headers.vias, incomingInvite.headers.vias)
+    assertEquals(
+      ok.headers.contacts.map(_.render),
+      List("<sip:alice@192.168.1.5:5060>")
+    )
+    assertEquals(ok.headers.recordRoutes, incomingInvite.headers.recordRoutes)
+    assertEquals(ok.headers.contentType, Some(MediaType.Sdp))
+    assertEquals(ok.body, "v=0\r\n")
+  }
+
+  test(
+    "180 forms the dialog too; a failure carries neither Contact nor route"
+  ) {
+    val ringing =
+      endpoint.buildInviteResponse(incomingInvite, 180, "Ringing", tag("lt"))
+    assertEquals(ringing.headers.contacts.size, 1)
+    assertEquals(ringing.headers.recordRoutes.size, 1)
+    val busy =
+      endpoint.buildInviteResponse(incomingInvite, 486, "Busy Here", tag("lt"))
+    assertEquals(busy.headers.contacts, Nil)
+    assertEquals(busy.headers.recordRoutes, Nil)
+    assertEquals(busy.headers.to.tag.map(_.value), Some("lt"))
+    assertEquals(busy.body, "")
+  }
 }

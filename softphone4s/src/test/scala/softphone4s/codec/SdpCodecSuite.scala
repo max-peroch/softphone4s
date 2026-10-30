@@ -46,4 +46,62 @@ class SdpCodecSuite extends FunSuite {
     assert(sdp.contains("\r\n"), "SDP must use CRLF line endings")
     assert(!sdp.contains("\n\n"), "SDP must not have bare LF-only newlines")
   }
+
+  private val offerSdp =
+    "v=0\r\no=- 1 1 IN IP4 192.0.2.5\r\ns=-\r\nc=IN IP4 192.0.2.5\r\nt=0 0\r\n" +
+      "m=audio 40000 RTP/AVP 0 8 101\r\na=rtpmap:0 PCMU/8000\r\n" +
+      "a=rtpmap:101 telephone-event/8000\r\n"
+
+  test("parseOffer reads the endpoint, payload types and telephone-event") {
+    SdpCodec.parseOffer(offerSdp) match {
+      case Some(offer) =>
+        assertEquals(offer.ip, IpAddress.fromString("192.0.2.5").get)
+        assertEquals(offer.port, Port.fromInt(40000).get)
+        assertEquals(offer.payloadTypes, List(0, 8, 101))
+        assert(offer.offersTelephoneEvent)
+        assert(offer.isAcceptable)
+      case None => fail("expected an offer")
+    }
+  }
+
+  test("an offer without PCMU is not acceptable") {
+    val offer =
+      SdpCodec.parseOffer(offerSdp.replace("RTP/AVP 0 8 101", "RTP/AVP 8")).get
+    assert(!offer.isAcceptable)
+  }
+
+  test("telephone-event counts only when 101 is offered and mapped to it") {
+    val noMapping =
+      offerSdp.replace("a=rtpmap:101 telephone-event/8000\r\n", "")
+    assert(!SdpCodec.parseOffer(noMapping).get.offersTelephoneEvent)
+    val other =
+      offerSdp.replace("0 8 101", "0 8 96").replace("rtpmap:101", "rtpmap:96")
+    assert(!SdpCodec.parseOffer(other).get.offersTelephoneEvent)
+  }
+
+  test("parseOffer is None without an audio stream or without an address") {
+    assertEquals(SdpCodec.parseOffer("v=0\r\nc=IN IP4 1.2.3.4\r\n"), None)
+    assertEquals(SdpCodec.parseOffer("v=0\r\nm=audio 4000 RTP/AVP 0\r\n"), None)
+    assertEquals(SdpCodec.parseOffer(""), None)
+  }
+
+  test(
+    "the answer stays within the offer: PCMU, and telephone-event only if offered"
+  ) {
+    val ip   = IpAddress.fromString("10.0.0.1").get
+    val port = Port.fromInt(12000).get
+    val both =
+      SdpCodec.buildAnswerTo(SdpCodec.parseOffer(offerSdp).get, ip, port)
+    assert(both.contains("m=audio 12000 RTP/AVP 0 101"), both)
+    assert(both.contains("a=rtpmap:101 telephone-event/8000"), both)
+    assert(both.contains("c=IN IP4 10.0.0.1"), both)
+    val bare = SdpCodec.buildAnswerTo(
+      SdpCodec.parseOffer(offerSdp.replace("0 8 101", "0 8")).get,
+      ip,
+      port
+    )
+    assert(bare.contains("m=audio 12000 RTP/AVP 0\r\n"), bare)
+    assert(!bare.contains("telephone-event"), bare)
+    assert(!bare.contains("\n\n") && bare.contains("\r\n"))
+  }
 }

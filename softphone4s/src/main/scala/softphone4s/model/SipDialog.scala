@@ -37,12 +37,52 @@ final case class SipDialog(
     remoteTarget: SipUri,
     localCseq: CSeqNumber,
     routeSet: List[NameAddr],
-    isSecure: Boolean = false
+    isSecure: Boolean = false,
+    role: DialogRole = DialogRole.Uac,
+    remoteCseq: Option[CSeqNumber] = None
 ) {
-  def routeHeader: List[NameAddr] = routeSet.reverse
+
+  /** The Route headers of a request within the dialog: the route set reversed
+    * for the party that placed the INVITE, as received for the one that
+    * answered it (RFC 3261 §12.1).
+    */
+  def routeHeader: List[NameAddr] = role match {
+    case DialogRole.Uac => routeSet.reverse
+    case DialogRole.Uas => routeSet
+  }
+
+  /** Whether a request with this CSeq is newer than every one seen so far (RFC
+    * 3261 §12.2.2); a first request always is.
+    */
+  def accepts(cseq: CSeqNumber): Boolean =
+    remoteCseq.forall(_.value < cseq.value)
+
+  def seen(cseq: CSeqNumber): SipDialog = copy(remoteCseq = Some(cseq))
 }
 
 object SipDialog {
+
+  /** The dialog the answerer of `invite` forms (RFC 3261 §12.1.1): our tag
+    * becomes the To-tag, the caller's From-tag is the remote tag, and requests
+    * go to the caller's Contact. Absent if the caller sent no From-tag, which a
+    * dialog cannot be built without.
+    */
+  def forInboundInvite(invite: SipRequest, localTag: Tag): Option[SipDialog] =
+    invite.headers.from.tag.map { remoteTag =>
+      SipDialog(
+        callId = invite.headers.callId,
+        localTag = localTag,
+        remoteTag = Some(remoteTag),
+        localUri = invite.headers.to.uri,
+        remoteUri = invite.headers.from.uri,
+        remoteTarget = invite.headers.contacts.headOption
+          .fold(invite.headers.from.uri)(_.uri),
+        localCseq = CSeqNumber.One,
+        routeSet = invite.headers.recordRoutes,
+        role = DialogRole.Uas,
+        remoteCseq = Some(invite.headers.cseq.seq)
+      )
+    }
 
   def fromProvisional(ctx: InviteCtx, r: SipResponse): SipDialog =
     SipDialog(

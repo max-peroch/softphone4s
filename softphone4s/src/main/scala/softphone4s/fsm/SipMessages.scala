@@ -3,6 +3,7 @@ package softphone4s.fsm
 import cats.data.NonEmptyList
 import softphone4s.codec.{DigestAuth, SdpCodec}
 import softphone4s.model.*
+import softphone4s.transaction.TransactionMessages
 
 /** Pure construction of the SIP messages of a call from a [[LocalEndpoint]]:
   * every function is deterministic in its arguments, with branches and tags
@@ -71,6 +72,35 @@ object SipMessages {
           )
           .render
       )
+
+    // -----------------------------------------------------------------------
+    // Responses to an incoming INVITE
+    // -----------------------------------------------------------------------
+
+    /** A response to `invite` that belongs to the dialog we are forming: our
+      * tag in To, our Contact and the Record-Route set copied (RFC 3261
+      * §12.1.1) on 1xx and 2xx, and `answer` as the SDP body if given.
+      */
+    def buildInviteResponse(
+        invite: SipRequest,
+        code: Int,
+        reason: String,
+        localTag: Tag,
+        answer: Option[String] = None
+    ): SipResponse = {
+      val base =
+        TransactionMessages.responseTo(invite, code, reason, Some(localTag))
+      val dialogForming = code > 100 && code < 300
+      base.copy(
+        headers = base.headers.copy(
+          contacts = if dialogForming then contacts(e) else Nil,
+          recordRoutes =
+            if dialogForming then invite.headers.recordRoutes else Nil,
+          contentType = answer.map(_ => MediaType.Sdp)
+        ),
+        body = answer.getOrElse("")
+      )
+    }
 
     // -----------------------------------------------------------------------
     // REGISTER
