@@ -9,4 +9,10 @@ import scala.concurrent.duration.FiniteDuration
 enum TimerAction[+Id] {
   case Start(id: Id, after: FiniteDuration)
   case Cancel(id: Id)
+
+  /** The same action for a different kind of timer id. */
+  def mapId[B](f: Id => B): TimerAction[B] = this match {
+    case Start(id, after) => Start(f(id), after)
+    case Cancel(id)       => Cancel(f(id))
+  }
 }
