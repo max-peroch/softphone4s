@@ -1,10 +1,10 @@
 package softphone4s.registration
 
+import cats.data.NonEmptyList
 import cats.effect.std.Supervisor
 import cats.effect.syntax.all.*
 import cats.effect.{Async, Deferred, Ref, Resource}
 import cats.syntax.all.*
-import com.comcast.ip4s.{IpAddress, SocketAddress}
 import fs2.concurrent.{Channel, Signal, SignallingRef}
 import org.typelevel.log4cats.StructuredLogger
 import softphone4s.fsm.{TimerAction, TransactionFailure}
@@ -34,11 +34,15 @@ trait Registration[F[_]] {
 
 object Registration {
 
-  /** Registers `endpoint`'s account at `registrar` and keeps the binding fresh:
+  /** Registers the account at the registrar and keeps the binding fresh:
     * refresh before it lapses, retry with backoff after a failure. Releasing
     * the resource removes the binding (waiting up to `stopTimeout` for the
     * answer).
     *
+    * @param uplinks
+    *   the ways to reach the registrar, best first. The first is used; each
+    *   time an attempt fails the next one is, and after the last the first
+    *   again, so a registrar with several servers is found when one is down.
     * @param registrarUri
     *   the Request-URI of the REGISTER, normally the account's domain.
     * @param requested
@@ -46,9 +50,8 @@ object Registration {
     */
   def resource[F[_]: Async](
       layer: TransactionLayer[F],
-      registrar: SocketAddress[IpAddress],
+      uplinks: NonEmptyList[Uplink],
       registrarUri: SipUri,
-      endpoint: LocalEndpoint,
       entropy: Entropy[F],
       requested: Expires,
       stopTimeout: FiniteDuration,
@@ -60,9 +63,8 @@ object Registration {
       agent      <- Resource.eval(
         Agent.create(
           layer,
-          registrar,
+          uplinks,
           registrarUri,
-          endpoint,
           entropy,
           requested,
           supervisor,
@@ -76,9 +78,9 @@ object Registration {
 
   private final class Agent[F[_]: Async] private (
       layer: TransactionLayer[F],
-      registrar: SocketAddress[IpAddress],
+      uplinks: NonEmptyList[Uplink],
+      selected: Ref[F, Int],
       registrarUri: SipUri,
-      endpoint: LocalEndpoint,
       entropy: Entropy[F],
       requested: Expires,
       supervisor: Supervisor[F],
@@ -93,6 +95,14 @@ object Registration {
 
     def state: Signal[F, RegistrationState] = signal
 
+    /** The way to the registrar that is in use now. */
+    private def current: F[Uplink] =
+      selected.get.map(i => uplinks.toList(i % uplinks.size))
+
+    /** After a failure: the next way, for the retry. */
+    private def moveOn: F[Unit] =
+      selected.update(i => (i + 1) % uplinks.size).whenA(uplinks.size > 1)
+
     def awaitRegistered: F[Unit] =
       signal.discrete
         .collectFirst { case RegistrationState.Registered(_) => () }
@@ -103,7 +113,7 @@ object Registration {
       * of the binding.
       */
     def start: F[Unit] =
-      (entropy.callId(endpoint.ip), entropy.tag).flatMapN {
+      (entropy.callId(uplinks.head.endpoint.ip), entropy.tag).flatMapN {
         (callId, localTag) =>
           events
             .send(
@@ -112,7 +122,7 @@ object Registration {
                   callId,
                   localTag,
                   CSeqNumber.One,
-                  endpoint.contact,
+                  uplinks.head.endpoint.contact,
                   requested
                 )
               )
@@ -141,7 +151,8 @@ object Registration {
     private def interpret(action: RegistrationAction): F[Unit] =
       action match {
         case RegistrationAction.Notify(newState) =>
-          signal.set(newState) >>
+          moveOn.whenA(isFailure(newState)) >>
+            signal.set(newState) >>
             stopped
               .complete(())
               .void
@@ -159,6 +170,8 @@ object Registration {
               authorization
             ) =>
           for {
+            uplink <- current
+            endpoint = uplink.endpoint
             branch <- entropy.branch
             auth   <- authorization.traverse { (kind, challenge) =>
               (entropy.cnonce, nextNonceCount(challenge.nonce)).mapN {
@@ -190,7 +203,7 @@ object Registration {
                 "auth"     -> auth.isDefined.toString
               )
             )("Sending REGISTER")
-            _ <- layer.client(request, registrar).flatMap {
+            _ <- layer.client(request, uplink.peer).flatMap {
               case Right(transaction) =>
                 supervisor.supervise(forward(transaction)).void
               case Left(error) =>
@@ -206,6 +219,11 @@ object Registration {
             }
           } yield ()
       }
+
+    private def isFailure(state: RegistrationState): Boolean = state match {
+      case RegistrationState.Failed(_, _) => true
+      case _                              => false
+    }
 
     private def forward(transaction: ClientTransaction[F]): F[Unit] =
       transaction.notices
@@ -237,9 +255,8 @@ object Registration {
 
     def create[F[_]: Async](
         layer: TransactionLayer[F],
-        registrar: SocketAddress[IpAddress],
+        uplinks: NonEmptyList[Uplink],
         registrarUri: SipUri,
-        endpoint: LocalEndpoint,
         entropy: Entropy[F],
         requested: Expires,
         supervisor: Supervisor[F],
@@ -250,15 +267,16 @@ object Registration {
         signal <- SignallingRef.of[F, RegistrationState](
           RegistrationState.Unregistered
         )
-        fsm    <- Ref.of[F, RegistrationFsmState](RegistrationFsmState.Idle)
-        events <- Channel.unbounded[F, RegistrationEvent]
+        selected <- Ref.of[F, Int](0)
+        fsm      <- Ref.of[F, RegistrationFsmState](RegistrationFsmState.Idle)
+        events   <- Channel.unbounded[F, RegistrationEvent]
         nonceCounts <- Ref.of[F, Map[Nonce, NonceCount]](Map.empty)
         stopped     <- Deferred[F, Unit]
       } yield new Agent(
         layer,
-        registrar,
+        uplinks,
+        selected,
         registrarUri,
-        endpoint,
         entropy,
         requested,
         supervisor,

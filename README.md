@@ -51,8 +51,13 @@ softphone4s handles outbound SIP calls end-to-end:
   and split DNS still apply, and the DNS servers can be set with `dns.servers`.
   The next hop of a dialog (the Contact, or the first Route) and Record-Route
   hosts are located the same way, over the dialog's own transport; one that
-  resolves to nothing falls back to the server that was dialled. The first
-  target is used; trying the next one when it fails is not done yet.
+  resolves to nothing falls back to the server that was dialled. When a call's
+  first INVITE gets no answer (the transaction times out) or the transport
+  fails (a refused connection, say), it is sent again to the next target, up to
+  four, with a new branch and the Via and Contact of that target's transport;
+  an answer of any kind, a refusal included, ends the search. The call's
+  `invite-timeout` is allowed for each target. A registration moves to the next
+  target each time an attempt fails, and stays on the one that works.
 - **TLS** (RFC 3261 §26, RFC 5922): the server is identified by the host the
   request is addressed to (its first Route, else its Request-URI), which is sent
   as the SNI name and, by default, checked against the certificate. Trust comes

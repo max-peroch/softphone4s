@@ -99,7 +99,7 @@ class SoftphoneStreaming[F[_]: Async: Network] private (
       target <- Resource.eval(
         Async[F].fromEither(callee.toSipUri(account.config.realm))
       )
-      found    <- Resource.eval(allTargets(account, target))
+      found <- Resource.eval(allTargets(account, target))
       resolved = found.head
       protocol <- Resource.eval(available(resolved.transport))
       calleeAddr = resolved.address
@@ -108,10 +108,10 @@ class SoftphoneStreaming[F[_]: Async: Network] private (
           logger.info(Map("address" -> ip.toString))("Advertising local IP")
         )
       )
-      endpoint     <- Resource.eval(allocateEndpoint(account, localIp, protocol))
+      endpoint <- Resource.eval(allocateEndpoint(account, localIp, protocol))
       alternatives <- Resource.eval(alternativesTo(endpoint, found.tail))
       callId       <- Resource.eval(entropy.callId(localIp))
-      sipCh    <- Resource.make(
+      sipCh        <- Resource.make(
         Channel
           .bounded[F, DialogInput[F]](128)
           .flatTap(ch => routes.update(_ + (callId -> ch)))
@@ -142,7 +142,8 @@ class SoftphoneStreaming[F[_]: Async: Network] private (
             .leftMap(SoftphoneError.InvalidSipUri(account.config.realm, _))
         )
       )
-      resolved <- Resource.eval(firstTarget(account, registrarUri))
+      found <- Resource.eval(allTargets(account, registrarUri))
+      resolved = found.head
       protocol <- Resource.eval(available(resolved.transport))
       registrar = resolved.address
       localIp <- Resource.eval(localIpFor(registrar))
@@ -159,11 +160,11 @@ class SoftphoneStreaming[F[_]: Async: Network] private (
           )
         )
       )
+      alternatives <- Resource.eval(alternativesTo(endpoint, found.tail))
       registration <- Registration.resource(
         layer,
-        registrar,
+        NonEmptyList(Uplink(endpoint, registrar), alternatives),
         registrarUri,
-        endpoint,
         entropy,
         Expires.of(account.config.registerExpires),
         config.hangupTimeout,
@@ -194,9 +195,6 @@ class SoftphoneStreaming[F[_]: Async: Network] private (
     * records decide where and over what, unless the URI or the account's server
     * port says so. Fails if nothing resolves.
     */
-  private def firstTarget(account: Account, uri: SipUri): F[ResolvedTarget] =
-    allTargets(account, uri).map(_.head)
-
   /** Every place to try for `uri`, best first, at most
     * `SoftphoneStreaming.MaxTargets`.
     */

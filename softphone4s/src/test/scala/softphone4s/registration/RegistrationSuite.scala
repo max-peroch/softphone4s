@@ -1,5 +1,6 @@
 package softphone4s.registration
 
+import cats.data.NonEmptyList
 import cats.effect.testkit.TestControl
 import cats.effect.std.Random
 import cats.effect.{IO, Resource}
@@ -12,7 +13,12 @@ import softphone4s.config.SoftphoneConfig
 import softphone4s.model.*
 import softphone4s.runtime.Entropy
 import softphone4s.transaction.*
-import softphone4s.transport.{Inbound, InMemoryTransport, Transport}
+import softphone4s.transport.{
+  FlakyTransport,
+  Inbound,
+  InMemoryTransport,
+  Transport
+}
 
 import scala.concurrent.duration.*
 
@@ -36,12 +42,14 @@ class RegistrationSuite extends CatsEffectSuite {
 
   private def agent(
       requested: Int = 3600,
-      stopTimeout: FiniteDuration = 5.seconds
+      stopTimeout: FiniteDuration = 5.seconds,
+      uplinks: NonEmptyList[Uplink] = NonEmptyList.one(Uplink(endpoint, them)),
+      reach: Transport[IO] => Transport[IO] = identity
   ): Resource[IO, (Registration[IO], Transport[IO])] =
     for {
       pair  <- Resource.eval(InMemoryTransport.pair[IO])
       layer <- TransactionManager.resource(
-        pair._1,
+        reach(pair._1),
         TransactionConfig(),
         NoOpLogger.impl[IO]
       )
@@ -50,9 +58,8 @@ class RegistrationSuite extends CatsEffectSuite {
       )
       reg <- Registration.resource(
         layer,
-        them,
+        uplinks,
         uri("sip:test.local"),
-        endpoint,
         Entropy.fromRandom(random),
         expires(requested),
         stopTimeout,
@@ -479,6 +486,52 @@ class RegistrationSuite extends CatsEffectSuite {
             _     <- release
             t1    <- IO.monotonic
           } yield assertEquals(t1 - t0, 2.seconds)
+      }
+    )
+  }
+
+  // ---- More than one way to the registrar ----------------------------------------------
+
+  private val unreachable = SocketAddress(ip"192.0.2.99", port"5060")
+
+  test(
+    "after a failed attempt the next way to the registrar is tried, and kept once it works"
+  ) {
+    TestControl.executeEmbed(
+      agent(
+        uplinks = NonEmptyList.of(
+          Uplink(endpoint, unreachable),
+          Uplink(endpoint, them)
+        ),
+        reach = FlakyTransport(_, silent = Set(unreachable))
+      ).use { (reg, peer) =>
+        for {
+          // The first REGISTER goes nowhere; Timer F and the backoff pass.
+          first <- nextRegister(peer)
+          _     <- answer(peer, first, 200, granted = Some(3600))
+          _     <- reg.awaitRegistered
+          // The refresh stays on the way that worked.
+          second <- nextRegister(peer)
+        } yield {
+          assert(second.headers.cseq.seq.value > first.headers.cseq.seq.value)
+          assertEquals(second.headers.callId, first.headers.callId)
+        }
+      }
+    )
+  }
+
+  test("with one way to the registrar a failure is retried over it") {
+    TestControl.executeEmbed(
+      agent(reach = FlakyTransport(_, failing = Set.empty)).use { (reg, peer) =>
+        for {
+          first <- nextRegister(peer)
+          _     <- answer(peer, first, 500, "Server Error")
+          again <- nextRegister(peer)
+          _     <- answer(peer, again, 200, granted = Some(3600))
+          _     <- reg.awaitRegistered
+        } yield assert(
+          again.headers.cseq.seq.value > first.headers.cseq.seq.value
+        )
       }
     )
   }
