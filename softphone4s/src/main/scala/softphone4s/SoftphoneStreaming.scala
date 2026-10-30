@@ -1,7 +1,7 @@
 package softphone4s
 
 import cats.effect.*
-import cats.effect.std.{Random, SecureRandom, Supervisor}
+import cats.effect.std.Supervisor
 import cats.effect.syntax.all.*
 import cats.syntax.all.*
 import com.comcast.ip4s.*
@@ -11,7 +11,8 @@ import fs2.io.net.Network
 import org.typelevel.log4cats.StructuredLogger
 import softphone4s.config.SoftphoneConfig
 import softphone4s.model.*
-import softphone4s.transport.{RtpTransport, SipTransport}
+import softphone4s.runtime.Entropy
+import softphone4s.transport.{RtpTransport, SipTransport, Transport}
 import softphone4s.ua.{MediaSession, OutboundCall}
 
 import javax.sound.sampled.AudioFormat
@@ -22,16 +23,13 @@ import javax.sound.sampled.AudioFormat
   */
 class SoftphoneStreaming[F[_]: Async: Network] private (
     config: SoftphoneConfig,
-    sendRaw: (SocketAddress[IpAddress], SipMessage) => F[Unit],
+    transport: Transport[F],
     routes: Ref[F, Map[CallId, Channel[F, SipMessage]]],
     nextCallIndex: Ref[F, Int],
-    random: Random[F],
+    entropy: Entropy[F],
     pcmFrameBytes: Int,
     logger: StructuredLogger[F]
 ) extends Softphone[F] {
-
-  private def newCallId(localIp: IpAddress): F[CallId] =
-    random.nextBytes(10).map(CallId.fromBytes(_, localIp))
 
   private def toExtensionHeaders(
       headers: Map[String, List[String]]
@@ -65,14 +63,14 @@ class SoftphoneStreaming[F[_]: Async: Network] private (
         )
       )
       endpoint <- Resource.eval(allocateEndpoint(localIp))
-      callId   <- Resource.eval(newCallId(localIp))
+      callId   <- Resource.eval(entropy.callId(localIp))
       sipCh    <- Resource.make(
         Channel
           .bounded[F, SipMessage](128)
           .flatTap(ch => routes.update(_ + (callId -> ch)))
       )(_ => routes.update(_ - callId))
       sipIn   = sipCh.stream
-      sendSip = (msg: SipMessage) => sendRaw(calleeAddr, msg)
+      sendSip = (msg: SipMessage) => transport.send(calleeAddr, msg)
       call <- buildCall(
         callId,
         target,
@@ -153,7 +151,7 @@ class SoftphoneStreaming[F[_]: Async: Network] private (
           sendSip,
           endpoint,
           supervisor,
-          random,
+          entropy,
           media,
           config.inviteTimeout,
           logger,
@@ -178,17 +176,16 @@ object SoftphoneStreaming {
       logger: StructuredLogger[F]
   ): Resource[F, SoftphoneStreaming[F]] =
     for {
-      sipTransport <- SipTransport[F](
-        config.localSipPort,
-        config.bindAddress,
+      transport <- SipTransport.udp[F](
+        SocketAddress(config.bindAddress, config.localSipPort),
         logger
       )
-      (sipIn, sendRaw) = sipTransport
       routes <- Resource.eval(
         Ref[F].of(Map.empty[CallId, Channel[F, SipMessage]])
       )
       _ <- Resource.make(
-        sipIn
+        transport.messages
+          .map(_.message)
           .evalMap { msg =>
             routes.get.flatMap {
               _.get(msg.headers.callId) match {
@@ -205,13 +202,13 @@ object SoftphoneStreaming {
           .start
       )(_.cancel)
       callIndex <- Resource.eval(Ref[F].of(0))
-      random    <- Resource.eval(SecureRandom.javaSecuritySecureRandom[F])
+      entropy   <- Resource.eval(Entropy.secure[F])
     } yield new SoftphoneStreaming(
       config,
-      sendRaw,
+      transport,
       routes,
       callIndex,
-      random,
+      entropy,
       pcmFrameBytes = audioFormat.getFrameSize * RtpTransport.PacketSamples,
       logger
     )

@@ -11,46 +11,53 @@ import softphone4s.model.SipMessage
 
 object SipTransport {
 
-  def apply[F[_]: Async: Network](
-      localPort: Port,
-      bindAddress: IpAddress,
+  /** A UDP socket bound to `bindAddress`; released with the resource. */
+  def udp[F[_]: Async: Network](
+      bindAddress: SocketAddress[IpAddress],
       logger: StructuredLogger[F]
-  ): Resource[
-    F,
-    (Stream[F, SipMessage], (SocketAddress[IpAddress], SipMessage) => F[Unit])
-  ] = {
+  ): Resource[F, Transport[F]] =
     Network[F]
-      .bindDatagramSocket(address = SocketAddress(bindAddress, localPort))
+      .bindDatagramSocket(address = bindAddress)
       .evalTap(socket =>
         logger.debug(Map("address" -> socket.address.toString))(
           "SIP transport bound"
         )
       )
       .map { socket =>
-        val receive: Stream[F, SipMessage] =
-          socket.reads
-            .evalMap { datagram =>
+        new Transport[F] {
+          def localAddress: SocketAddress[IpAddress] =
+            socket.address match {
+              case a: SocketAddress[?] =>
+                a.host match {
+                  case ip: IpAddress => SocketAddress(ip, a.port)
+                  case _             => bindAddress
+                }
+              case _ => bindAddress
+            }
+
+          def messages: Stream[F, Inbound] =
+            socket.reads.evalMapFilter { datagram =>
               SipCodec.decode(datagram.bytes) match {
-                case Right(msg) => Async[F].pure(Some(msg))
+                case Right(msg) =>
+                  Async[F].pure(Some(Inbound(datagram.remote, msg)))
                 // A bare CRLF is a keep-alive (RFC 5626), not an error.
                 case Left(ParseError.Empty) => Async[F].pure(None)
                 case Left(err)              =>
                   logger
-                    .warn(Map("error" -> err.message))(
+                    .warn(
+                      Map(
+                        "error" -> err.message,
+                        "from"  -> datagram.remote.toString
+                      )
+                    )(
                       "Failed to decode SIP message"
                     )
                     .as(None)
               }
             }
-            .collect { case Some(msg) => msg }
 
-        val send: (SocketAddress[IpAddress], SipMessage) => F[Unit] = {
-          (addr, msg) =>
-            val bytes = SipCodec.encode(msg)
-            socket.write(Datagram(addr, bytes))
+          def send(to: SocketAddress[IpAddress], message: SipMessage): F[Unit] =
+            socket.write(Datagram(to, SipCodec.encode(message)))
         }
-
-        (receive, send)
       }
-  }
 }

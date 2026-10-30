@@ -26,6 +26,7 @@ lazy val softphone4s = project
       munit,
       munitCatsEffect,
       munitScalaCheck,
+      catsEffectTestkit,
       catsEffect,
       fs2Core,
       fs2Io,

@@ -1,7 +1,7 @@
 package softphone4s.ua
 
 import cats.effect.*
-import cats.effect.std.{Random, Supervisor}
+import cats.effect.std.Supervisor
 import cats.syntax.all.*
 import fs2.concurrent.Channel
 import fs2.{Pipe, Stream}
@@ -11,6 +11,7 @@ import softphone4s.codec.SdpCodec
 import softphone4s.fsm.*
 import softphone4s.fsm.SipMessages.*
 import softphone4s.model.*
+import softphone4s.runtime.Entropy
 import SipAction.*
 import TerminationReason.*
 
@@ -27,13 +28,13 @@ private[softphone4s] class OutboundCall[F[_]: Async] private (
     supervisor: Supervisor[F],
     inviteBranch: Ref[F, Branch],
     nonceCounts: Ref[F, Map[Nonce, NonceCount]],
-    random: Random[F],
+    entropy: Entropy[F],
     media: MediaSession[F],
     inviteTimeout: FiniteDuration,
     logger: StructuredLogger[F]
 ) extends Call[F] {
 
-  private def newBranch(): F[Branch] = random.nextBytes(8).map(Branch.fromBytes)
+  private def newBranch(): F[Branch] = entropy.branch
 
   private def hangupInterrupt: F[Either[Throwable, Unit]] =
     callEnded.get.map(Left(_))
@@ -125,7 +126,7 @@ private[softphone4s] class OutboundCall[F[_]: Async] private (
 
       case RetryInviteWithAuth(ctx, kind, challenge) =>
         for {
-          cnonce     <- random.nextBytes(8).map(Cnonce.fromBytes)
+          cnonce     <- entropy.cnonce
           nonceCount <- nonceCounts.modify { m =>
             val next = m.get(challenge.nonce).fold(NonceCount.One)(_.next)
             (m.updated(challenge.nonce, next), next)
@@ -247,15 +248,15 @@ private[softphone4s] object OutboundCall {
       sendSip: SipMessage => F[Unit],
       endpoint: LocalEndpoint,
       supervisor: Supervisor[F],
-      random: Random[F],
+      entropy: Entropy[F],
       media: MediaSession[F],
       inviteTimeout: FiniteDuration,
       logger: StructuredLogger[F],
       extraHeaders: List[ExtensionHeader] = Nil
   ): F[OutboundCall[F]] =
     for {
-      localTag     <- random.nextBytes(4).map(Tag.fromBytes)
-      branch       <- random.nextBytes(8).map(Branch.fromBytes)
+      localTag     <- entropy.tag
+      branch       <- entropy.branch
       inviteBranch <- Ref[F].of(branch)
       ctx = InviteCtx(
         callId = callId,
@@ -282,7 +283,7 @@ private[softphone4s] object OutboundCall {
         supervisor,
         inviteBranch,
         nonceCounts,
-        random,
+        entropy,
         media,
         inviteTimeout,
         logger

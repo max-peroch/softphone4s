@@ -11,6 +11,7 @@ import softphone4s.SipLiterals.*
 import org.typelevel.log4cats.noop.NoOpLogger
 import softphone4s.config.SoftphoneConfig
 import softphone4s.model.*
+import softphone4s.runtime.Entropy
 import softphone4s.model.SoftphoneError
 
 import scala.concurrent.duration.*
@@ -64,7 +65,7 @@ class OutboundCallSuite extends CatsEffectSuite {
           _ => IO.unit,
           endpoint,
           supervisor,
-          random,
+          Entropy.fromRandom(random),
           media,
           32.seconds,
           NoOpLogger.impl[IO]
