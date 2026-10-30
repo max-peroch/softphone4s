@@ -1,7 +1,7 @@
 package softphone4s.model
 
 import com.comcast.ip4s.{Host, IpAddress, Port}
-import softphone4s.config.SoftphoneConfig
+import softphone4s.config.{AccountConfig, SoftphoneConfig}
 
 /** Where and as whom we speak SIP: the address we advertise (`ip`, `sipPort`,
   * `rtpPort`), the socket address we bind (`bindAddress`), the account's
@@ -29,15 +29,19 @@ object LocalEndpoint {
       sipPort: Port,
       rtpPort: Port
   ): Either[SoftphoneError, LocalEndpoint] =
+    from(config.defaultAccount, config.bindAddress, ip, sipPort, rtpPort)
+
+  /** The endpoint for one of the accounts. */
+  def from(
+      config: AccountConfig,
+      bindAddress: IpAddress,
+      ip: IpAddress,
+      sipPort: Port,
+      rtpPort: Port
+  ): Either[SoftphoneError, LocalEndpoint] =
     for {
-      user  <- User(config.user).left.map(invalid(config.user, _))
-      realm <- Host
-        .fromString(config.realm)
-        .toRight(invalid(config.realm, "not a valid host"))
-      account <- SipUri
-        .from(SipScheme.Sip, realm, Some(UserInfo(user, None)))
-        .left
-        .map(invalid(config.user, _))
+      user    <- User(config.user).left.map(invalid(config.user, _))
+      account <- addressOfRecord(config)
       contact <- SipUri
         .from(
           SipScheme.Sip,
@@ -51,11 +55,26 @@ object LocalEndpoint {
       ip,
       sipPort,
       rtpPort,
-      config.bindAddress,
+      bindAddress,
       account,
       contact,
       Credentials(config.user, config.password)
     )
+
+  /** The account's address-of-record, `sip:user@realm`. */
+  def addressOfRecord(
+      config: AccountConfig
+  ): Either[SoftphoneError, SipUri] =
+    for {
+      user  <- User(config.user).left.map(invalid(config.user, _))
+      realm <- Host
+        .fromString(config.realm)
+        .toRight(invalid(config.realm, "not a valid host"))
+      aor <- SipUri
+        .from(SipScheme.Sip, realm, Some(UserInfo(user, None)))
+        .left
+        .map(invalid(config.user, _))
+    } yield aor
 
   private def invalid(input: String, reason: String): SoftphoneError =
     SoftphoneError.InvalidSipUri(input, reason)

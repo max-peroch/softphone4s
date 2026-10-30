@@ -1,13 +1,17 @@
 package softphone4s.config
 
+import cats.data.NonEmptyList
 import com.comcast.ip4s.*
 import pureconfig.*
 import pureconfig.generic.semiauto.*
 
 import scala.concurrent.duration.*
 
-/** SIP account and network settings for a `SoftphoneStreaming`. Loadable via
-  * pureconfig — see the `given ConfigReader[SoftphoneConfig]` below.
+/** SIP account and network settings for a `SoftphoneStreaming`. `user`,
+  * `password`, `realm`, `serverPort` and `registerExpires` describe the default
+  * account; `additionalAccounts` adds more, all sharing the one SIP socket and
+  * RTP port range. Loadable via pureconfig — see the `given
+  * ConfigReader[SoftphoneConfig]` below.
   */
 case class SoftphoneConfig(
     user: String,
@@ -21,20 +25,21 @@ case class SoftphoneConfig(
     hangupTimeout: FiniteDuration = 5.seconds,
     inviteTimeout: FiniteDuration = 32.seconds,
     registerExpires: FiniteDuration = 1.hour,
-    answerTimeout: FiniteDuration = 60.seconds
-)
+    answerTimeout: FiniteDuration = 60.seconds,
+    additionalAccounts: List[AccountConfig] = Nil
+) {
+
+  /** The account `call` and `register` use. */
+  def defaultAccount: AccountConfig =
+    AccountConfig(user, password, realm, serverPort, registerExpires)
+
+  /** Every account, the default first. */
+  def accounts: NonEmptyList[AccountConfig] =
+    NonEmptyList(defaultAccount, additionalAccounts)
+}
 
 object SoftphoneConfig {
-  given ConfigReader[Port] = ConfigReader[Int].emap(i =>
-    Port
-      .fromInt(i)
-      .toRight(error.CannotConvert(i.toString, "Port", "not in range 0-65535"))
-  )
-  given ConfigReader[IpAddress] = ConfigReader[String].emap(s =>
-    IpAddress
-      .fromString(s)
-      .toRight(error.CannotConvert(s, "IpAddress", "invalid IP address"))
-  )
+  import NetworkReaders.given
 
   given ConfigReader[SoftphoneConfig] = deriveReader
 }

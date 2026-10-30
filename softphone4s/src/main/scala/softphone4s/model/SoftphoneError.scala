@@ -24,6 +24,10 @@ object SoftphoneError {
       extends SoftphoneError(
         "The SIP transport failed while signalling the call"
       )
+  final case class UnknownAccount(account: String)
+      extends SoftphoneError(s"No such account: $account")
+  final case class DuplicateAccount(account: String)
+      extends SoftphoneError(s"Account configured twice: $account")
   final case class RtpPortExhausted(port: Int)
       extends SoftphoneError(
         s"Computed RTP port $port is out of range (0-65535)"
