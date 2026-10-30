@@ -321,4 +321,32 @@ class SipMessagesSuite extends FunSuite {
     assertEquals(udp.headers.topVia.transport, TransportProtocol.Udp)
     assert(!udp.headers.contacts.head.render.contains("transport"))
   }
+
+  test(
+    "an endpoint for a sips: request has a sips: Contact with no transport parameter"
+  ) {
+    val tls = ok(
+      LocalEndpoint.from(
+        AccountConfig("alice", "pw", "sip.example.com"),
+        ip"0.0.0.0",
+        ip"192.168.1.5",
+        port"5061",
+        port"8000",
+        TransportProtocol.Tls
+      )
+    )
+    assertEquals(tls.contact.render, "sip:alice@192.168.1.5:5061;transport=tls")
+    val secure =
+      tls.forScheme(SipScheme.Sips).fold(e => fail(e.getMessage), identity)
+    assertEquals(secure.contact.render, "sips:alice@192.168.1.5:5061")
+    // It stays secure when the call moves to another address.
+    val moved = secure
+      .via(ip"10.0.0.9", TransportProtocol.Tls)
+      .fold(e => fail(e.getMessage), identity)
+    assertEquals(moved.contact.render, "sips:alice@10.0.0.9:5061")
+  }
+
+  test("an endpoint is left as it is for a sip: request") {
+    assertEquals(endpoint.forScheme(SipScheme.Sip), Right(endpoint))
+  }
 }

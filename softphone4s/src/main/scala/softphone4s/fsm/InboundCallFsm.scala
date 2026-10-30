@@ -45,9 +45,15 @@ object InboundCallFsm {
           NotifyHangup(TerminationReason.RejectedLocally)
         )
       )
+    // A sips: request has to arrive over TLS on every hop (RFC 3261 §26.2.2),
+    // and the last one is the one we can see.
+    val insecureSips =
+      invite.requestUri.scheme == SipScheme.Sips &&
+        invite.headers.topVia.transport != TransportProtocol.Tls
     SipDialog.forInboundInvite(invite, localTag) match {
-      case None         => turnAway(FailureStatus.BadRequest)
-      case Some(dialog) =>
+      case _ if insecureSips => turnAway(FailureStatus.Forbidden)
+      case None              => turnAway(FailureStatus.BadRequest)
+      case Some(dialog)      =>
         SdpCodec.parseOffer(invite.body).filter(_.isAcceptable) match {
           case None        => turnAway(FailureStatus.NotAcceptableHere)
           case Some(offer) =>

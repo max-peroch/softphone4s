@@ -606,4 +606,48 @@ class InboundCallFsmSuite extends FunSuite {
       (Active(dialog), List(ApplyAnswer(ok)))
     )
   }
+
+  // ---- sips: requests (RFC 3261 §26.2.2) ---------------------------------------------------
+
+  /** `invite` addressed to `target`, arrived over `transport`. */
+  private def arrivedOver(target: String, transport: String): SipRequest =
+    invite.copy(
+      requestUri = uri(target),
+      headers = invite.headers.copy(vias =
+        NonEmptyList.one(
+          via(s"SIP/2.0/$transport 192.0.2.5:5060;branch=z9hG4bKinv")
+        )
+      )
+    )
+
+  test("a sips: INVITE over UDP or TCP is turned away 403, not answered") {
+    List("UDP", "TCP").foreach { transport =>
+      val request          = arrivedOver("sips:test@192.0.2.10", transport)
+      val (state, actions) = start(request)
+      assertEquals(state, Closed)
+      assertEquals(
+        actions,
+        List(
+          SendInviteFailure(request, tag("lt"), FailureStatus.Forbidden),
+          NotifyHangup(TerminationReason.RejectedLocally)
+        )
+      )
+    }
+  }
+
+  test("a sips: INVITE over TLS is offered like any other") {
+    assert(
+      start(arrivedOver("sips:test@192.0.2.10", "TLS"))._1.isInstanceOf[Offered]
+    )
+  }
+
+  test("a sip: INVITE is taken over any transport") {
+    List("UDP", "TCP", "TLS").foreach { transport =>
+      assert(
+        start(arrivedOver("sip:test@192.0.2.10", transport))._1
+          .isInstanceOf[Offered],
+        transport
+      )
+    }
+  }
 }

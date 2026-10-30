@@ -157,9 +157,13 @@ transport: `sips:alice@example.com` for TLS, or
 `sip:alice@example.com;transport=tcp`; without one the account's `transport`
 and the domain's DNS records decide. An INVITE too big for a UDP datagram
 (`max-udp-message`, 1300 bytes by default, RFC 3261 §18.1.1) is sent over TCP
-to the same address instead, and over UDP after all if that connection cannot
-be made. This applies to the first INVITE of a call; requests within a dialog
-stay on the dialog's transport.
+instead, and over UDP after all if that connection cannot be made. The TCP
+server is looked up as RFC 3263 says (`_sip._tcp` SRV records), so a domain
+that serves TCP on another port is found. This applies to the first INVITE of a
+call; requests within a dialog stay on the dialog's transport. A call to a
+`sips:` URI uses a `sips:` Contact (RFC 5630), and so does an incoming `sips:`
+call; a `sips:` INVITE that arrives over UDP or TCP is refused `403 Forbidden`,
+since every hop of it was to be TLS.
 
 ```scala
 import cats.effect.*

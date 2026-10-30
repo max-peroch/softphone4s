@@ -14,6 +14,7 @@ object FailureStatus {
       s"not a failure status: $code"
     )
 
+  val Forbidden: FailureStatus              = 403
   val NotFound: FailureStatus               = 404
   val TemporarilyUnavailable: FailureStatus = 480
   val RequestTerminated: FailureStatus      = 487
@@ -28,6 +29,7 @@ object FailureStatus {
 
   private val phrases: Map[Int, String] = Map(
     400 -> "Bad Request",
+    403 -> "Forbidden",
     404 -> "Not Found",
     480 -> "Temporarily Unavailable",
     481 -> "Call/Transaction Does Not Exist",

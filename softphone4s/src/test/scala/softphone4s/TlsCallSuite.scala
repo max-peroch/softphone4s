@@ -90,7 +90,8 @@ class TlsCallSuite extends CatsEffectSuite {
       serverPort: Port,
       ours: Port,
       trust: Path,
-      realm: String = "127.0.0.1"
+      realm: String = "127.0.0.1",
+      transport: TransportProtocol = TransportProtocol.Tls
   ) =
     SoftphoneStreaming.resource[IO](
       SoftphoneConfig(
@@ -102,7 +103,7 @@ class TlsCallSuite extends CatsEffectSuite {
         baseRtpPort = port"19600",
         bindAddress = ip"127.0.0.1",
         hangupTimeout = 2.seconds,
-        transport = TransportProtocol.Tls,
+        transport = transport,
         tls = TlsConfig(trustStore = Some(TlsFixtures.trusting(trust)))
       ),
       audio,
@@ -186,6 +187,39 @@ class TlsCallSuite extends CatsEffectSuite {
             )
           }
         }
+      }
+  }
+
+  test(
+    "a sips: callee selects TLS, though UDP is configured, and the Contact is sips:"
+  ) {
+    server(files.server)
+      .flatMap(srv =>
+        phone(
+          srv.port,
+          port"19123",
+          files.trustsServer,
+          transport = TransportProtocol.Udp
+        )
+          .map(srv -> _)
+      )
+      .use { (srv, phone) =>
+        val secure = Callee(s"sips:bob@localhost:${srv.port}")
+          .fold(err => fail(err), identity)
+        phone
+          .call(secure)
+          .use { call =>
+            call.awaitPickup >> next(srv, SipMethod.Invite)
+          }
+          .map { invite =>
+            assertEquals(invite.headers.topVia.transport, TransportProtocol.Tls)
+            assertEquals(invite.requestUri.scheme, SipScheme.Sips)
+            assertEquals(
+              invite.headers.contacts.map(_.uri.scheme),
+              List(SipScheme.Sips)
+            )
+            assertEquals(invite.headers.contacts.flatMap(_.uri.transport), Nil)
+          }
       }
   }
 }

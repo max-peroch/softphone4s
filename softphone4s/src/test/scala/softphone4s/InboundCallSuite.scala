@@ -453,4 +453,21 @@ class InboundCallSuite extends CatsEffectSuite {
       }
     }
   }
+
+  test(
+    "a sips: INVITE over UDP is refused 403 and never offered to the application"
+  ) {
+    scenario().use { (phone, peer) =>
+      val insecure =
+        invite().copy(requestUri = uri("sips:test@127.0.0.1:19080"))
+      for {
+        _       <- send(peer, insecure)
+        refusal <- response(peer, r => r.statusCode >= 200)
+        offered <- phone.incoming.head.compile.last.timeout(400.millis).attempt
+      } yield {
+        assertEquals(refusal.statusCode, 403)
+        assert(offered.isLeft, "the application must not see the call")
+      }
+    }
+  }
 }

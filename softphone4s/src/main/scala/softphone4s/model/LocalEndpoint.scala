@@ -16,7 +16,8 @@ final case class LocalEndpoint private (
     accountUri: SipUri,
     contact: SipUri,
     credentials: Credentials,
-    transport: TransportProtocol
+    transport: TransportProtocol,
+    scheme: SipScheme
 ) {
 
   /** The same account and RTP port reached over `transport` from local address
@@ -28,17 +29,20 @@ final case class LocalEndpoint private (
       ip: IpAddress,
       transport: TransportProtocol
   ): Either[SoftphoneError, LocalEndpoint] =
-    SipUri
-      .from(
-        SipScheme.Sip,
-        ip,
-        accountUri.userInfo,
-        Some(sipPort),
-        Option.when(transport != TransportProtocol.Udp)(transport)
-      )
-      .left
-      .map(SoftphoneError.InvalidSipUri(accountUri.render, _))
+    LocalEndpoint
+      .contactUri(accountUri.userInfo, ip, sipPort, transport, scheme)
       .map(contact => copy(ip = ip, contact = contact, transport = transport))
+
+  /** This endpoint with a `sips:` Contact, for a call whose Request-URI is
+    * `sips:` (RFC 5630): the Contact must then be secure too. Nothing changes
+    * for any other scheme.
+    */
+  def forScheme(requested: SipScheme): Either[SoftphoneError, LocalEndpoint] =
+    if requested == scheme then Right(this)
+    else
+      LocalEndpoint
+        .contactUri(accountUri.userInfo, ip, sipPort, transport, requested)
+        .map(contact => copy(contact = contact, scheme = requested))
 }
 
 object LocalEndpoint {
@@ -73,16 +77,13 @@ object LocalEndpoint {
     for {
       user    <- User(config.user).left.map(invalid(config.user, _))
       account <- addressOfRecord(config)
-      contact <- SipUri
-        .from(
-          SipScheme.Sip,
-          ip,
-          Some(UserInfo(user, None)),
-          Some(sipPort),
-          Option.when(transport != TransportProtocol.Udp)(transport)
-        )
-        .left
-        .map(invalid(config.user, _))
+      contact <- contactUri(
+        Some(UserInfo(user, None)),
+        ip,
+        sipPort,
+        transport,
+        SipScheme.Sip
+      )
     } yield new LocalEndpoint(
       ip,
       sipPort,
@@ -91,8 +92,35 @@ object LocalEndpoint {
       account,
       contact,
       Credentials(config.user, config.password),
-      transport
+      transport,
+      SipScheme.Sip
     )
+
+  /** The Contact URI for reaching us at `ip`:`port`. A `sip:` one names the
+    * transport unless it is UDP; a `sips:` one does not, since `sips:` means
+    * TLS (RFC 5630 deprecates `transport=tls` on it).
+    */
+  private def contactUri(
+      userInfo: Option[UserInfo],
+      ip: IpAddress,
+      port: Port,
+      transport: TransportProtocol,
+      scheme: SipScheme
+  ): Either[SoftphoneError, SipUri] =
+    SipUri
+      .from(
+        scheme,
+        ip,
+        userInfo,
+        Some(port),
+        Option.when(
+          scheme == SipScheme.Sip && transport != TransportProtocol.Udp
+        )(
+          transport
+        )
+      )
+      .left
+      .map(invalid(userInfo.fold("")(_.user.value), _))
 
   /** The account's address-of-record, `sip:user@realm`. */
   def addressOfRecord(

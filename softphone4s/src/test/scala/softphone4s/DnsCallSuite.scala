@@ -305,4 +305,33 @@ class DnsCallSuite extends CatsEffectSuite {
       } yield assertEquals(result, Left(SoftphoneError.TransportFailed))
     }
   }
+
+  test(
+    "a big INVITE finds the server's TCP port through its SRV records, not the UDP one"
+  ) {
+    server().use { (listening, requests) =>
+      for {
+        dns <- FakeDns(
+          srvs =
+            Map(
+              // UDP is served on one port (nothing is there), TCP on another.
+              "_sip._udp.example.org." -> List(
+                SrvRecord(10, 1, port"19999", host("sip1.example.org"))
+              ),
+              "_sip._tcp.example.org." -> List(
+                SrvRecord(10, 1, listening, host("sip1.example.org"))
+              )
+            ),
+          hosts = Map("sip1.example.org" -> List(ip"127.0.0.1"))
+        )
+        invite <- phone(dns, port"19137").use { p =>
+          p.call(bob, Map("X-Context" -> List("x" * 1500)))
+            .use(call => call.awaitPickup >> next(requests, SipMethod.Invite))
+        }
+      } yield assertEquals(
+        invite.headers.topVia.transport,
+        TransportProtocol.Tcp
+      )
+    }
+  }
 }

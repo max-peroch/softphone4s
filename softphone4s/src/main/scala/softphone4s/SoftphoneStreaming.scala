@@ -108,9 +108,15 @@ class SoftphoneStreaming[F[_]: Async: Network] private (
           logger.info(Map("address" -> ip.toString))("Advertising local IP")
         )
       )
-      endpoint <- Resource.eval(allocateEndpoint(account, localIp, protocol))
+      endpoint <- Resource.eval(
+        allocateEndpoint(account, localIp, protocol).flatMap(
+          secureIfNeeded(_, target.scheme)
+        )
+      )
       alternatives <- Resource.eval(alternativesTo(endpoint, found.tail))
-      streamWay    <- Resource.eval(streamWayTo(endpoint, localIp, calleeAddr))
+      streamWay    <- Resource.eval(
+        streamWayTo(account, target, endpoint, calleeAddr)
+      )
       callId       <- Resource.eval(entropy.callId(localIp))
       sipCh        <- Resource.make(
         Channel
@@ -213,21 +219,31 @@ class SoftphoneStreaming[F[_]: Async: Network] private (
         )
       )
 
-  /** The way over TCP to the server `endpoint` reaches over UDP, at the same
-    * address: where a request too big for a datagram goes (RFC 3261 §18.1.1).
-    * None for a call that is not over UDP.
+  /** The way over TCP to the server that `endpoint` reaches over UDP: where a
+    * request too big for a datagram goes (RFC 3261 §18.1.1). The server is
+    * looked up for TCP, as RFC 3263 says, so a domain that serves TCP on
+    * another port, or elsewhere, is found; with no answer it is the UDP address
+    * again. None for a call that is not over UDP.
     */
   private def streamWayTo(
+      account: Account,
+      target: SipUri,
       endpoint: LocalEndpoint,
-      localIp: IpAddress,
       peer: SocketAddress[IpAddress]
   ): F[Option[Uplink]] =
     if endpoint.transport != TransportProtocol.Udp then Async[F].pure(None)
     else
-      Async[F]
-        .fromEither(endpoint.via(localIp, TransportProtocol.Tcp))
-        .map(stream => Option(Uplink(stream, peer)))
-        .handleError(_ => None)
+      (for {
+        found <- targets.resolve(
+          aimed(account, target).withTransport(TransportProtocol.Tcp),
+          TransportProtocol.Tcp
+        )
+        address = found
+          .find(_.transport == TransportProtocol.Tcp)
+          .fold(peer)(_.address)
+        ip     <- localIpFor(address)
+        stream <- Async[F].fromEither(endpoint.via(ip, TransportProtocol.Tcp))
+      } yield Option(Uplink(stream, address))).handleError(_ => None)
 
   /** The other ways to reach the server, each as `endpoint` over that target's
     * transport and from the local address that routes to it, keeping the RTP
@@ -287,6 +303,13 @@ class SoftphoneStreaming[F[_]: Async: Network] private (
           .getOrElse(config.localIpFallback)
       )
       .handleError(_ => config.localIpFallback)
+
+  /** `endpoint`, with a `sips:` Contact if the request it is for is `sips:`. */
+  private def secureIfNeeded(
+      endpoint: LocalEndpoint,
+      scheme: SipScheme
+  ): F[LocalEndpoint] =
+    Async[F].fromEither(endpoint.forScheme(scheme))
 
   /** The port our messages over `transport` say they come from, and our Contact
     * says to reach us at: where we listen for it, if we do.
@@ -498,7 +521,7 @@ class SoftphoneStreaming[F[_]: Async: Network] private (
           account,
           localIp,
           invite.request.headers.topVia.transport
-        )
+        ).flatMap(secureIfNeeded(_, invite.request.requestUri.scheme))
       )
       media <- Resource.eval(
         MediaSession
