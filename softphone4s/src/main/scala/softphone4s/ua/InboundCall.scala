@@ -33,6 +33,7 @@ import scala.concurrent.duration.*
   */
 private[softphone4s] final class InboundCall[F[_]: Async] private (
     invite: ServerTransaction[F],
+    val account: AccountId,
     layer: TransactionLayer[F],
     resolve: SipUri => F[SocketAddress[IpAddress]],
     endpoint: LocalEndpoint,
@@ -363,6 +364,7 @@ private[softphone4s] object InboundCall {
     */
   def create[F[_]: Async](
       invite: ServerTransaction[F],
+      account: AccountId,
       layer: TransactionLayer[F],
       resolve: SipUri => F[SocketAddress[IpAddress]],
       endpoint: LocalEndpoint,
@@ -396,6 +398,7 @@ private[softphone4s] object InboundCall {
       dtmfChannel       <- Channel.bounded[F, DtmfDigit](64)
       call = new InboundCall(
         invite,
+        account,
         layer,
         resolve,
         endpoint,

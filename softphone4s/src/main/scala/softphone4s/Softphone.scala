@@ -1,8 +1,9 @@
 package softphone4s
 
+import cats.data.NonEmptyList
 import cats.effect.Resource
 import fs2.{Pipe, Stream}
-import softphone4s.model.{Callee, DtmfDigit}
+import softphone4s.model.{AccountId, Callee, DtmfDigit}
 import softphone4s.registration.Registration
 
 trait Call[F[_]] {
@@ -37,26 +38,45 @@ trait Call[F[_]] {
 
 trait Softphone[F[_]] {
 
-  /** Dials `callee`. Acquiring the resource sends INVITE and returns
-    * immediately with a handle — use `Call.awaitPickup` to wait for the remote
-    * to answer. Releasing it sends BYE and drains the event loop.
+  /** The accounts this softphone holds, the default first. */
+  def accounts: NonEmptyList[AccountId]
+
+  /** Dials `callee` as `account`. Acquiring the resource sends INVITE and
+    * returns immediately with a handle — use `Call.awaitPickup` to wait for the
+    * remote to answer. Releasing it sends BYE and drains the event loop. Fails
+    * with `UnknownAccount` if `account` is not one of [[accounts]].
     */
-  def call(
+  def callAs(
+      account: AccountId,
       callee: Callee,
       extraHeaders: Map[String, List[String]] = Map.empty
   ): Resource[F, Call[F]]
 
-  /** Registers the configured account at its registrar and keeps it registered
-    * for as long as the resource is held, refreshing the binding and retrying
-    * after failures. Releasing it removes the binding. `Registration.state`
-    * reports how it is going; it does not fail the resource if the registrar is
-    * unreachable.
-    */
-  def register: Resource[F, Registration[F]]
+  /** Dials `callee` as the default account. */
+  def call(
+      callee: Callee,
+      extraHeaders: Map[String, List[String]] = Map.empty
+  ): Resource[F, Call[F]] =
+    callAs(accounts.head, callee, extraHeaders)
 
-  /** Calls placed to this softphone, as they arrive. Each is answered with
+  /** Registers `account` at its registrar and keeps it registered for as long
+    * as the resource is held, refreshing the binding and retrying after
+    * failures. Releasing it removes the binding. `Registration.state` reports
+    * how it is going; it does not fail the resource if the registrar is
+    * unreachable. Fails with `UnknownAccount` if `account` is not one of
+    * [[accounts]].
+    */
+  def registerAs(account: AccountId): Resource[F, Registration[F]]
+
+  /** Registers the default account. */
+  def register: Resource[F, Registration[F]] = registerAs(accounts.head)
+
+  /** Calls placed to any of the accounts, as they arrive;
+    * `IncomingCall.account` says which. Each is answered with
     * `IncomingCall.accept` or turned away with `reject`; one that is neither is
-    * rejected with `480 Temporarily Unavailable` after `answer-timeout`.
+    * rejected with `480 Temporarily Unavailable` after `answer-timeout`. With
+    * several accounts, a call to a user none of them has is refused
+    * `404 Not Found`.
     */
   def incoming: Stream[F, IncomingCall[F]]
 }

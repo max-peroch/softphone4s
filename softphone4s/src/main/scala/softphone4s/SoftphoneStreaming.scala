@@ -1,5 +1,6 @@
 package softphone4s
 
+import cats.data.NonEmptyList
 import cats.effect.*
 import cats.effect.std.{Queue, Supervisor}
 import cats.effect.syntax.all.*
@@ -33,6 +34,7 @@ import javax.sound.sampled.AudioFormat
   */
 class SoftphoneStreaming[F[_]: Async: Network] private (
     config: SoftphoneConfig,
+    accountList: NonEmptyList[Account],
     layer: TransactionLayer[F],
     routes: Ref[F, Map[CallId, Channel[F, DialogInput[F]]]],
     nextCallIndex: Ref[F, Int],
@@ -42,6 +44,25 @@ class SoftphoneStreaming[F[_]: Async: Network] private (
     incomingCalls: Queue[F, IncomingCall[F]],
     logger: StructuredLogger[F]
 ) extends Softphone[F] {
+
+  override val accounts: NonEmptyList[AccountId] = accountList.map(_.id)
+
+  private def accountNamed(id: AccountId): F[Account] =
+    Async[F].fromOption(
+      accountList.find(_.id == id),
+      SoftphoneError.UnknownAccount(id.render)
+    )
+
+  /** The account an incoming request is for: the one whose user is in the
+    * Request-URI. With a single account every call is for it, whatever it
+    * names.
+    */
+  private def accountFor(request: SipRequest): Option[Account] =
+    if accountList.tail.isEmpty then Some(accountList.head)
+    else
+      request.requestUri.user.flatMap(user =>
+        accountList.find(_.config.user == user.value)
+      )
 
   private def toExtensionHeaders(
       headers: Map[String, List[String]]
@@ -57,24 +78,26 @@ class SoftphoneStreaming[F[_]: Async: Network] private (
       SoftphoneError.HostResolutionFailed(host.toString)
     }
 
-  override def call(
+  override def callAs(
+      id: AccountId,
       callee: Callee,
       extraHeaders: Map[String, List[String]] = Map.empty
   ): Resource[F, Call[F]] =
     for {
-      extra <- Resource.eval(
+      account <- Resource.eval(accountNamed(id))
+      extra   <- Resource.eval(
         Async[F].fromEither(toExtensionHeaders(extraHeaders))
       )
       target <- Resource.eval(
-        Async[F].fromEither(callee.toSipUri(config.realm))
+        Async[F].fromEither(callee.toSipUri(account.config.realm))
       )
-      calleeAddr <- Resource.eval(resolveCalleeAddress(target))
+      calleeAddr <- Resource.eval(resolveCalleeAddress(account, target))
       localIp    <- Resource.eval(
         localIpFor(calleeAddr).flatTap(ip =>
           logger.info(Map("address" -> ip.toString))("Advertising local IP")
         )
       )
-      endpoint <- Resource.eval(allocateEndpoint(localIp))
+      endpoint <- Resource.eval(allocateEndpoint(account, localIp))
       callId   <- Resource.eval(entropy.callId(localIp))
       sipCh    <- Resource.make(
         Channel
@@ -91,30 +114,32 @@ class SoftphoneStreaming[F[_]: Async: Network] private (
       )
     } yield call
 
-  override def register: Resource[F, Registration[F]] =
+  override def registerAs(id: AccountId): Resource[F, Registration[F]] =
     for {
-      host <- Resource.eval(
+      account <- Resource.eval(accountNamed(id))
+      host    <- Resource.eval(
         Async[F].fromOption(
-          Host.fromString(config.realm),
-          SoftphoneError.InvalidSipUri(config.realm, "not a valid host")
+          Host.fromString(account.config.realm),
+          SoftphoneError.InvalidSipUri(account.config.realm, "not a valid host")
         )
       )
       registrarUri <- Resource.eval(
         Async[F].fromEither(
           SipUri
             .from(SipScheme.Sip, host)
-            .leftMap(SoftphoneError.InvalidSipUri(config.realm, _))
+            .leftMap(SoftphoneError.InvalidSipUri(account.config.realm, _))
         )
       )
       registrar <- Resource.eval(
-        resolveHost(host).map(SocketAddress(_, config.serverPort))
+        resolveHost(host).map(SocketAddress(_, account.config.serverPort))
       )
       localIp <- Resource.eval(localIpFor(registrar))
       // A REGISTER carries no media, so the RTP port is not used.
       endpoint <- Resource.eval(
         Async[F].fromEither(
           LocalEndpoint.from(
-            config,
+            account.config,
+            config.bindAddress,
             localIp,
             config.localSipPort,
             config.baseRtpPort
@@ -127,7 +152,7 @@ class SoftphoneStreaming[F[_]: Async: Network] private (
         registrarUri,
         endpoint,
         entropy,
-        Expires.of(config.registerExpires),
+        Expires.of(account.config.registerExpires),
         config.hangupTimeout,
         logger
       )
@@ -145,10 +170,11 @@ class SoftphoneStreaming[F[_]: Async: Network] private (
   }
 
   private def resolveCalleeAddress(
+      account: Account,
       target: SipUri
   ): F[SocketAddress[IpAddress]] =
     resolveHost(target.host).map(ip =>
-      SocketAddress(ip, target.port.getOrElse(config.serverPort))
+      SocketAddress(ip, target.port.getOrElse(account.config.serverPort))
     )
 
   /** The address the OS would send from to reach `remote`: what the SDP and
@@ -175,7 +201,10 @@ class SoftphoneStreaming[F[_]: Async: Network] private (
       )
       .handleError(_ => config.localIpFallback)
 
-  private def allocateEndpoint(localIp: IpAddress): F[LocalEndpoint] =
+  private def allocateEndpoint(
+      account: Account,
+      localIp: IpAddress
+  ): F[LocalEndpoint] =
     nextCallIndex.getAndUpdate(_ + 1).flatMap { callIndex =>
       val portsPerCall = 2
       val rtpPortInt   = config.baseRtpPort.value + callIndex * portsPerCall
@@ -185,7 +214,13 @@ class SoftphoneStreaming[F[_]: Async: Network] private (
           SoftphoneError.RtpPortExhausted(rtpPortInt)
         )
         endpoint <- Async[F].fromEither(
-          LocalEndpoint.from(config, localIp, config.localSipPort, rtpPort)
+          LocalEndpoint.from(
+            account.config,
+            config.bindAddress,
+            localIp,
+            config.localSipPort,
+            rtpPort
+          )
         )
       } yield endpoint
     }
@@ -256,8 +291,17 @@ class SoftphoneStreaming[F[_]: Async: Network] private (
           TransactionMessages.responseTo(request, 482, "Loop Detected")
         )
       case Some(channel) => channel.send(DialogInput.Request(transaction)).void
-      case None if isNewInvite(request) => acceptInbound(transaction)
-      case None                         =>
+      case None if isNewInvite(request) =>
+        accountFor(request).fold(
+          transaction.respond(
+            TransactionMessages.responseTo(
+              request,
+              FailureStatus.NotFound.value,
+              FailureStatus.NotFound.reason
+            )
+          )
+        )(acceptInbound(transaction, _))
+      case None =>
         logger.debug(Map("callId" -> request.headers.callId.value))(
           "Request for a call that does not exist"
         ) >>
@@ -293,13 +337,16 @@ class SoftphoneStreaming[F[_]: Async: Network] private (
     * finds its call, then runs the call on its own fiber for as long as it
     * lasts.
     */
-  private def acceptInbound(invite: ServerTransaction[F]): F[Unit] = {
+  private def acceptInbound(
+      invite: ServerTransaction[F],
+      account: Account
+  ): F[Unit] = {
     val callId = invite.request.headers.callId
     Channel.bounded[F, DialogInput[F]](128).flatMap { channel =>
       routes.update(_ + (callId -> channel)) >>
         supervisor
           .supervise(
-            inboundCall(invite, channel)
+            inboundCall(invite, account, channel)
               .handleErrorWith { error =>
                 logger.error(Map("error" -> String.valueOf(error.getMessage)))(
                   "Could not take the incoming call"
@@ -322,13 +369,14 @@ class SoftphoneStreaming[F[_]: Async: Network] private (
     */
   private def inboundCall(
       invite: ServerTransaction[F],
+      account: Account,
       channel: Channel[F, DialogInput[F]]
   ): F[Unit] =
     (for {
       callSupervisor <- Supervisor[F](await = false)
       timers         <- Timers.resource[F, CallTimer]
       localIp        <- Resource.eval(localIpFor(invite.from))
-      endpoint       <- Resource.eval(allocateEndpoint(localIp))
+      endpoint       <- Resource.eval(allocateEndpoint(account, localIp))
       media          <- Resource.eval(
         MediaSession
           .create(pcmFrameBytes, endpoint.bindAddress, endpoint.rtpPort)
@@ -336,6 +384,7 @@ class SoftphoneStreaming[F[_]: Async: Network] private (
       call <- Resource.eval(
         InboundCall.create(
           invite,
+          account.id,
           layer,
           resolveNextHop,
           endpoint,
@@ -380,12 +429,16 @@ object SoftphoneStreaming {
       routes <- Resource.eval(
         Ref[F].of(Map.empty[CallId, Channel[F, DialogInput[F]]])
       )
+      accounts <- Resource.eval(
+        Async[F].fromEither(Account.all(config.accounts))
+      )
       supervisor    <- Supervisor[F](await = false)
       incomingCalls <- Resource.eval(Queue.unbounded[F, IncomingCall[F]])
       callIndex     <- Resource.eval(Ref[F].of(0))
       entropy       <- Resource.eval(Entropy.secure[F])
       softphone = new SoftphoneStreaming(
         config,
+        accounts,
         layer,
         routes,
         callIndex,

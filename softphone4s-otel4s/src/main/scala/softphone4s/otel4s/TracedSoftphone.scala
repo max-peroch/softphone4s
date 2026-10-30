@@ -1,5 +1,6 @@
 package softphone4s.otel4s
 
+import cats.data.NonEmptyList
 import cats.effect.{Async, Resource}
 import cats.syntax.all.*
 import fs2.{Pipe, Stream}
@@ -7,7 +8,7 @@ import io.opentelemetry.context.ContextStorage
 import org.typelevel.otel4s.Attribute
 import org.typelevel.otel4s.trace.{SpanKind, SpanOps, Tracer}
 import softphone4s.{Call, IncomingCall, Softphone}
-import softphone4s.model.{Callee, DtmfDigit}
+import softphone4s.model.{AccountId, Callee, DtmfDigit}
 import softphone4s.registration.Registration
 
 private final class TracedCall[F[_]: Async](
@@ -73,7 +74,10 @@ final class TracedSoftphone[F[_]: Async](
           .void
       }
 
-  def call(
+  def accounts: NonEmptyList[AccountId] = underlying.accounts
+
+  def callAs(
+      account: AccountId,
       callee: Callee,
       extraHeaders: Map[String, List[String]] = Map.empty
   ): Resource[F, Call[F]] =
@@ -81,6 +85,7 @@ final class TracedSoftphone[F[_]: Async](
       .spanBuilder("softphone4s.call")
       .withSpanKind(SpanKind.Client)
       .addAttribute(Attribute("telephony.callee", callee.value))
+      .addAttribute(Attribute("softphone4s.account", account.render))
       .build
       .resource
       .flatMap { res =>
@@ -97,19 +102,24 @@ final class TracedSoftphone[F[_]: Async](
           else Map.empty
         for {
           _    <- activateSpanContext(res)
-          call <- underlying.call(callee, traceHeaders ++ extraHeaders)
+          call <- underlying.callAs(
+            account,
+            callee,
+            traceHeaders ++ extraHeaders
+          )
         } yield new TracedCall(call, tracer)
       }
 
   def incoming: Stream[F, IncomingCall[F]] = underlying.incoming
 
-  def register: Resource[F, Registration[F]] =
+  def registerAs(account: AccountId): Resource[F, Registration[F]] =
     tracer
       .spanBuilder("softphone4s.register")
       .withSpanKind(SpanKind.Client)
+      .addAttribute(Attribute("softphone4s.account", account.render))
       .build
       .resource
-      .flatMap(_ => underlying.register)
+      .flatMap(_ => underlying.registerAs(account))
 }
 
 object TracedSoftphone {

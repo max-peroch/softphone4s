@@ -1,13 +1,16 @@
 package softphone4s
 
 import cats.effect.Resource
-import softphone4s.model.{FailureStatus, NameAddr}
+import softphone4s.model.{AccountId, FailureStatus, NameAddr}
 
 /** A call someone placed to us, not yet answered. The application decides what
   * to do with it: `ringing`, then `accept` or `reject`. One that nobody answers
   * is turned away with `480 Temporarily Unavailable` after `answer-timeout`.
   */
 trait IncomingCall[F[_]] {
+
+  /** The account that was called. */
+  def account: AccountId
 
   /** Who is calling: the From header. */
   def caller: NameAddr

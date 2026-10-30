@@ -192,6 +192,30 @@ avoid the stream hanging on remote hangup.
 The [`softphone4s-demo`](softphone4s-demo) module is a complete runnable
 example wiring in tracing and audio hardware.
 
+### Several accounts
+
+The `user`, `password` and `realm` above are the default account, which `call`
+and `register` use. More accounts go under `additional-accounts`; all of them
+share the one SIP socket and RTP port range, and each has its own credentials,
+Contact and registration:
+
+```hocon
+additional-accounts = [
+  { user = "bob", password = "secret", realm = "other.example.org", server-port = 5070 }
+]
+```
+
+```scala
+phone.accounts                       // the default account first
+phone.callAs(phone.accounts.last, callee)
+phone.registerAs(phone.accounts.last)
+phone.incoming.evalMap(call => IO.println(call.account))  // which one was called
+```
+
+An incoming call is matched to an account by the user in its Request-URI; with
+several accounts, a call to a user none of them has is refused `404`. With one
+account every call is taken. Two accounts cannot have the same user.
+
 ## Configuration reference
 
 | Key                 | Type        | Default      | Description                                        |
@@ -208,6 +232,7 @@ example wiring in tracing and audio hardware.
 | `invite-timeout`    | `Duration`  | `32 seconds` | Max wait for remote to answer (RFC 3261 Timer B)   |
 | `register-expires`  | `Duration`  | `1 hour`     | Binding lifetime asked for when registering        |
 | `answer-timeout`    | `Duration`  | `60 seconds` | How long an incoming call may ring before `480`     |
+| `additional-accounts` | list      | empty        | More accounts: each has `user`, `password`, `realm`, and optionally `server-port` and `register-expires` |
 
 ## Errors
 
@@ -222,6 +247,8 @@ All failures surface as `SoftphoneError` (a sealed `RuntimeException` hierarchy)
 | `CallTimedOut` | No answer within `invite-timeout` |
 | `CallCancelled` | BYE received from remote, or local hangup |
 | `TransportFailed` | The SIP transport could not send a request of the call |
+| `UnknownAccount(account)` | `callAs` or `registerAs` named an account the softphone does not hold |
+| `DuplicateAccount(user)` | Two configured accounts share a user |
 | `RtpPortExhausted(port)` | Computed RTP port exceeds 65535 (too many concurrent calls) |
 
 `awaitPickup` raises the error as an effect if the call is rejected or
