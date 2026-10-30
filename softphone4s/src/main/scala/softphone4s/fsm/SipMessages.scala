@@ -48,11 +48,12 @@ object SipMessages {
       )
 
     /** The Authorization or Proxy-Authorization header answering `challenge` on
-      * a retried INVITE to `callee`.
+      * a retried `method` request to `target`.
       */
     def authorizationFor(
         kind: AuthKind,
-        callee: SipUri,
+        method: SipMethod,
+        target: SipUri,
         challenge: DigestChallenge,
         cnonce: Cnonce,
         nonceCount: NonceCount
@@ -62,13 +63,46 @@ object SipMessages {
         DigestAuth
           .respond(
             challenge,
-            SipMethod.Invite.toString.toUpperCase,
-            callee.render,
+            method.toString.toUpperCase,
+            target.render,
             e.credentials,
             cnonce,
             nonceCount
           )
           .render
+      )
+
+    // -----------------------------------------------------------------------
+    // REGISTER
+    // -----------------------------------------------------------------------
+
+    /** A REGISTER binding our Contact at `registrar` for `lifetime` (RFC 3261
+      * §10.2). The To is the address of record, without a tag; every
+      * registration of the binding keeps one Call-ID and a rising CSeq.
+      * `Expires.Zero` removes the binding.
+      */
+    def buildRegister(
+        registrar: SipUri,
+        callId: CallId,
+        localTag: Tag,
+        cseq: CSeqNumber,
+        branch: Branch,
+        lifetime: Expires,
+        authHeader: Option[ExtensionHeader] = None
+    ): SipRequest =
+      SipRequest(
+        method = SipMethod.Register,
+        requestUri = registrar,
+        headers = SipHeaders(
+          callId = callId,
+          from = NameAddr.withTag(e.accountUri, localTag),
+          to = NameAddr(e.accountUri),
+          vias = vias(e, branch),
+          cseq = CSeq(cseq, SipMethod.Register),
+          contacts = List(NameAddr(e.contact).withExpires(lifetime)),
+          expires = Some(lifetime),
+          others = authHeader.toList
+        )
       )
 
     // -----------------------------------------------------------------------

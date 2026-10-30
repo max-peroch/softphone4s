@@ -92,4 +92,51 @@ class SipMessagesSuite extends FunSuite {
       )
     )
   }
+
+  test("buildRegister binds our Contact at the registrar for the lifetime") {
+    val lifetime = Expires(600).fold(err => fail(err), identity)
+    val register = endpoint.buildRegister(
+      uri("sip:sip.example.com"),
+      callId("reg@host"),
+      tag("ltag"),
+      cseqNumber(3),
+      branch("z9hG4bKreg"),
+      lifetime
+    )
+    assertEquals(register.method, SipMethod.Register)
+    assertEquals(register.requestUri.render, "sip:sip.example.com")
+    assertEquals(
+      register.headers.from.render,
+      "<sip:alice@sip.example.com>;tag=ltag"
+    )
+    assertEquals(register.headers.to.render, "<sip:alice@sip.example.com>")
+    assertEquals(register.headers.cseq, cseq(3, SipMethod.Register))
+    assertEquals(register.headers.expires, Some(lifetime))
+    assertEquals(
+      register.headers.contacts.map(_.render),
+      List("<sip:alice@192.168.1.5:5060>;expires=600")
+    )
+    assertEquals(register.body, "")
+  }
+
+  test("an authorization for a REGISTER is computed over the REGISTER method") {
+    val challenge =
+      AuthChallenge.parse("""Digest realm="r", nonce="n"""") match {
+        case AuthChallenge.Digest(c) => c
+        case other                   => fail(s"unexpected: $other")
+      }
+    val cnonce = softphone4s.model.Cnonce("c").fold(err => fail(err), identity)
+    def header(method: SipMethod) = endpoint
+      .authorizationFor(
+        AuthKind.Origin,
+        method,
+        uri("sip:sip.example.com"),
+        challenge,
+        cnonce,
+        NonceCount.One
+      )
+      .value
+    assertNotEquals(header(SipMethod.Register), header(SipMethod.Invite))
+    assert(header(SipMethod.Register).startsWith("Digest username="))
+  }
 }

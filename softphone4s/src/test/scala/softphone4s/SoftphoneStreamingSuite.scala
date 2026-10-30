@@ -141,4 +141,48 @@ class SoftphoneStreamingSuite extends CatsEffectSuite {
       } yield assertEquals(answer.statusCode, 481)
     }
   }
+
+  test("registering over UDP binds the account and unregistering removes it") {
+    (phone, remote).tupled.use { (softphone, peer) =>
+      def registerOf(peer: Transport[IO]) = requestOf(peer, SipMethod.Register)
+      def answer(request: SipRequest, granted: Int) = {
+        val base =
+          TransactionMessages.responseTo(request, 200, "OK", Some(tag("srv")))
+        peer.send(
+          us,
+          base.copy(headers =
+            base.headers.copy(contacts =
+              request.headers.contacts.map(c =>
+                c.withExpires(Expires(granted).fold(err => fail(err), identity))
+              )
+            )
+          )
+        )
+      }
+      softphone.register.allocated.flatMap { case (registration, release) =>
+        for {
+          first     <- registerOf(peer)
+          _         <- answer(first, 3600)
+          _         <- registration.awaitRegistered.timeout(5.seconds)
+          state     <- registration.state.get
+          releasing <- release.start
+          removal   <- registerOf(peer)
+          _         <- answer(removal, 0)
+          _         <- releasing.join
+        } yield {
+          assertEquals(first.requestUri.render, "sip:127.0.0.1")
+          assertEquals(
+            first.headers.expires,
+            Some(Expires(3600).fold(err => fail(err), identity))
+          )
+          assertEquals(
+            state,
+            softphone4s.registration.RegistrationState.Registered(3600.seconds)
+          )
+          assertEquals(removal.headers.expires, Some(Expires.Zero))
+          assertEquals(removal.headers.callId, first.headers.callId)
+        }
+      }
+    }
+  }
 }

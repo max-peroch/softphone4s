@@ -69,4 +69,22 @@ class NameAddrSuite extends FunSuite {
       "<sip:a@b.com>;x=1;x=2"
     ).foreach(s => assert(NameAddr.parse(s).isLeft, s"expected Left for: '$s'"))
   }
+
+  test("the expires parameter is a typed lifetime") {
+    assertEquals(
+      parsed("<sip:a@b.com>;expires=600").expires.map(_.value),
+      Some(600)
+    )
+    assertEquals(parsed("<sip:a@b.com>").expires, None)
+    assertEquals(parsed("<sip:a@b.com>;expires=soon").expires, None)
+  }
+
+  test("withExpires sets or replaces the parameter and renders it") {
+    val set = parsed("<sip:a@b.com>").withExpires(Expires.Zero)
+    assertEquals(set.render, "<sip:a@b.com>;expires=0")
+    assertEquals(
+      set.withExpires(Expires(30).fold(err => fail(err), identity)).render,
+      "<sip:a@b.com>;expires=30"
+    )
+  }
 }

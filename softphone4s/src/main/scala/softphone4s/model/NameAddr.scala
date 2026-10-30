@@ -17,6 +17,23 @@ final case class NameAddr(
 
   def withTag(t: Tag): NameAddr = copy(tag = Some(t))
 
+  /** The `expires` parameter (a Contact's binding lifetime), if it is a valid
+    * number of seconds.
+    */
+  def expires: Option[Expires] =
+    params
+      .get(ParamName.ExpiresParam)
+      .flatten
+      .flatMap(v => Expires.parse(v.value).toOption)
+
+  def withExpires(e: Expires): NameAddr =
+    copy(params =
+      params.updated(
+        ParamName.ExpiresParam,
+        Some(HeaderParamValue.fromInt(e.value))
+      )
+    )
+
   def render: String = {
     val name    = displayName.fold("")(n => s""""${NameAddr.escape(n)}" """)
     val tagText = tag.fold("")(t => s";tag=${t.value}")

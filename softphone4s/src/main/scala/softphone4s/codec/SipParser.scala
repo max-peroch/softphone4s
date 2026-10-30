@@ -271,7 +271,9 @@ object SipParser {
     "route",
     "record-route",
     "www-authenticate",
-    "proxy-authenticate"
+    "proxy-authenticate",
+    "expires",
+    "min-expires"
   )
 
   private def canonical(name: String): String = {
@@ -348,6 +350,10 @@ object SipParser {
       .toValidatedNel
     val contentType =
       values("content-type").headOption.traverse(MediaType.parse).toValidatedNel
+    val expires =
+      values("expires").headOption.traverse(Expires.parse).toValidatedNel
+    val minExpires =
+      values("min-expires").headOption.traverse(Expires.parse).toValidatedNel
     val contacts =
       listValues("contact").traverse(NameAddr.parse).toValidatedNel
     val routes = listValues("route").traverse(NameAddr.parse).toValidatedNel
@@ -366,6 +372,8 @@ object SipParser {
       cseq,
       maxForwards,
       contentType,
+      expires,
+      minExpires,
       contacts,
       routes,
       recordRoutes,
@@ -380,6 +388,8 @@ object SipParser {
             cseq,
             maxForwards,
             contentType,
+            expires,
+            minExpires,
             contacts,
             routes,
             recordRoutes,
@@ -394,6 +404,8 @@ object SipParser {
             contacts = contacts,
             maxForwards = maxForwards,
             contentType = contentType,
+            expires = expires,
+            minExpires = minExpires,
             routes = routes,
             recordRoutes = recordRoutes,
             wwwAuthenticate =

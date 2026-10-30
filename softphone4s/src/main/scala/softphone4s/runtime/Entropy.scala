@@ -15,6 +15,9 @@ trait Entropy[F[_]] {
   def branch: F[Branch]
   def callId(host: Host): F[CallId]
   def cnonce: F[Cnonce]
+
+  /** A number in [0, 1), for jittering timers. */
+  def fraction: F[Double]
 }
 
 object Entropy {
@@ -25,7 +28,8 @@ object Entropy {
       def branch: F[Branch] = random.nextBytes(8).map(Branch.fromBytes)
       def callId(host: Host): F[CallId] =
         random.nextBytes(10).map(CallId.fromBytes(_, host))
-      def cnonce: F[Cnonce] = random.nextBytes(8).map(Cnonce.fromBytes)
+      def cnonce: F[Cnonce]   = random.nextBytes(8).map(Cnonce.fromBytes)
+      def fraction: F[Double] = random.nextDouble
     }
 
   /** Backed by the JVM's cryptographically strong generator. */

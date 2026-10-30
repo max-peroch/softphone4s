@@ -8,6 +8,7 @@ import org.typelevel.otel4s.Attribute
 import org.typelevel.otel4s.trace.{SpanKind, SpanOps, Tracer}
 import softphone4s.{Call, Softphone}
 import softphone4s.model.{Callee, DtmfDigit}
+import softphone4s.registration.Registration
 
 private final class TracedCall[F[_]: Async](
     underlying: Call[F],
@@ -93,6 +94,14 @@ final class TracedSoftphone[F[_]: Async](
           call <- underlying.call(callee, traceHeaders ++ extraHeaders)
         } yield new TracedCall(call, tracer)
       }
+
+  def register: Resource[F, Registration[F]] =
+    tracer
+      .spanBuilder("softphone4s.register")
+      .withSpanKind(SpanKind.Client)
+      .build
+      .resource
+      .flatMap(_ => underlying.register)
 }
 
 object TracedSoftphone {

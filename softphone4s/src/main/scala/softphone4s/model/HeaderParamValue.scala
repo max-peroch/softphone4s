@@ -23,6 +23,9 @@ object HeaderParamValue {
       s"invalid header parameter value: '$s'"
     )
 
+  /** A number as a parameter value, which is always a valid token. */
+  def fromInt(n: Int): HeaderParamValue = n.toString
+
   extension (v: HeaderParamValue) def value: String = v
 
   given Eq[HeaderParamValue]   = Eq.fromUniversalEquals

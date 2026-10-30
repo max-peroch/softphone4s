@@ -176,6 +176,8 @@ object SipGen extends munit.Assertions {
         .choose(0, 2)
         .flatMap(n => Gen.listOfN(n, nameAddrGen(withTag = false)))
       maxFwd <- Gen.choose(0, 255).map(n => get(MaxForwards(n)))
+      expiry <- Gen.option(Gen.choose(0, 100000).map(n => get(Expires(n))))
+      minExp <- Gen.option(Gen.choose(0, 100000).map(n => get(Expires(n))))
       ctype  <- Gen.option(mediaTypeGen)
       routes <- Gen
         .choose(0, 2)
@@ -195,6 +197,8 @@ object SipGen extends munit.Assertions {
       contacts = contacts,
       maxForwards = maxFwd,
       contentType = ctype,
+      expires = expiry,
+      minExpires = minExp,
       routes = routes,
       recordRoutes = records,
       wwwAuthenticate = www,

@@ -44,4 +44,17 @@ class EntropySuite extends CatsEffectSuite {
   test("the secure instance produces valid identifiers") {
     Entropy.secure[IO].flatMap(_.branch).map(b => assert(b.isRfc3261))
   }
+
+  test("fractions are in [0, 1), differ, and repeat for the same seed") {
+    for {
+      a  <- seeded(3)
+      b  <- seeded(3)
+      xs <- a.fraction.replicateA(20)
+      ys <- b.fraction.replicateA(20)
+    } yield {
+      assert(xs.forall(f => f >= 0.0 && f < 1.0))
+      assert(xs.distinct.size > 10)
+      assertEquals(xs, ys)
+    }
+  }
 }

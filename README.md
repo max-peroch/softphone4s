@@ -42,9 +42,10 @@ softphone4s handles outbound SIP calls end-to-end:
 Call lifecycle is modelled as `Resource[F, Call[F]]` — acquiring the resource
 dials the number, releasing it sends BYE and drains the event loop.
 
-softphone4s only places outbound calls today — there's no registrar, no
-inbound INVITE handling, and no SDP offer/answer beyond what's needed to set
-up a call it initiated. It's not a full Scala port of a SIP stack.
+softphone4s places outbound calls and can register the account at its
+registrar. It does not handle inbound INVITEs yet, and has no SDP offer/answer
+beyond what's needed to set up a call it initiated. It's not a full Scala port
+of a SIP stack.
 
 `softphone4s` takes an explicit
 [`org.typelevel.log4cats.Logger[F]`](https://typelevel.org/log4cats/) — this
@@ -106,6 +107,26 @@ val program: IO[Unit] =
 Releasing the `call` resource sends BYE and waits up to `hangup-timeout`
 for the event loop to drain, then cancels the fiber.
 
+### Registering
+
+Holding `phone.register` keeps the account registered at its registrar: the
+binding is refreshed at about half its granted lifetime, a failed attempt is
+retried with backoff (5 s, doubling, up to 5 minutes), a 401 or 407 is answered
+once, and releasing it removes the binding with `Expires: 0`.
+
+```scala
+phone.register.use { registration =>
+  registration.awaitRegistered >>
+    registration.state.discrete          // Registering, Registered(3600 s), Failed(..), ...
+      .evalMap(state => IO.println(state))
+      .compile
+      .drain
+}
+```
+
+`register` does not fail if the registrar is unreachable: the state reports
+`Failed(reason, retryIn)` and the agent keeps trying.
+
 ### Receiving DTMF
 
 ```scala
@@ -136,6 +157,7 @@ example wiring in tracing and audio hardware.
 | `local-ip-fallback` | `IpAddress` | `127.0.0.1`  | Advertised when no IPv4 route to the SIP server is found |
 | `hangup-timeout`    | `Duration`  | `5 seconds`  | Grace period for event loop drain on release       |
 | `invite-timeout`    | `Duration`  | `32 seconds` | Max wait for remote to answer (RFC 3261 Timer B)   |
+| `register-expires`  | `Duration`  | `1 hour`     | Binding lifetime asked for when registering        |
 
 ## Errors
 

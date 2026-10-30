@@ -12,6 +12,7 @@ import org.typelevel.log4cats.StructuredLogger
 import softphone4s.config.SoftphoneConfig
 import softphone4s.fsm.CallTimer
 import softphone4s.model.*
+import softphone4s.registration.Registration
 import softphone4s.runtime.{Entropy, Timers}
 import softphone4s.transaction.{
   Reliability,
@@ -87,6 +88,48 @@ class SoftphoneStreaming[F[_]: Async: Network] private (
         extra
       )
     } yield call
+
+  override def register: Resource[F, Registration[F]] =
+    for {
+      host <- Resource.eval(
+        Async[F].fromOption(
+          Host.fromString(config.realm),
+          SoftphoneError.InvalidSipUri(config.realm, "not a valid host")
+        )
+      )
+      registrarUri <- Resource.eval(
+        Async[F].fromEither(
+          SipUri
+            .from(SipScheme.Sip, host)
+            .leftMap(SoftphoneError.InvalidSipUri(config.realm, _))
+        )
+      )
+      registrar <- Resource.eval(
+        resolveHost(host).map(SocketAddress(_, config.serverPort))
+      )
+      localIp <- Resource.eval(localIpFor(registrar))
+      // A REGISTER carries no media, so the RTP port is not used.
+      endpoint <- Resource.eval(
+        Async[F].fromEither(
+          LocalEndpoint.from(
+            config,
+            localIp,
+            config.localSipPort,
+            config.baseRtpPort
+          )
+        )
+      )
+      registration <- Registration.resource(
+        layer,
+        registrar,
+        registrarUri,
+        endpoint,
+        entropy,
+        Expires.of(config.registerExpires),
+        config.hangupTimeout,
+        logger
+      )
+    } yield registration
 
   private def resolveCalleeAddress(
       target: SipUri

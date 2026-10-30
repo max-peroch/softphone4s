@@ -3,6 +3,7 @@ package softphone4s
 import cats.effect.Resource
 import fs2.{Pipe, Stream}
 import softphone4s.model.{Callee, DtmfDigit}
+import softphone4s.registration.Registration
 
 trait Call[F[_]] {
 
@@ -34,4 +35,12 @@ trait Softphone[F[_]] {
       callee: Callee,
       extraHeaders: Map[String, List[String]] = Map.empty
   ): Resource[F, Call[F]]
+
+  /** Registers the configured account at its registrar and keeps it registered
+    * for as long as the resource is held, refreshing the binding and retrying
+    * after failures. Releasing it removes the binding. `Registration.state`
+    * reports how it is going; it does not fail the resource if the registrar is
+    * unreachable.
+    */
+  def register: Resource[F, Registration[F]]
 }

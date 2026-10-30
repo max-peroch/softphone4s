@@ -21,6 +21,9 @@ object ParamName {
   private[model] val Received: ParamName = "received"
   private[model] val TagParam: ParamName = "tag"
 
+  /** The Contact parameter carrying a binding's lifetime. */
+  private[model] val ExpiresParam: ParamName = "expires"
+
   extension (n: ParamName) def value: String = n
 
   given Eq[ParamName]   = Eq.fromUniversalEquals

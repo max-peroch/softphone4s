@@ -316,4 +316,16 @@ class SipParserSuite extends FunSuite {
       "\r\nWWW-Authenticate: Digest realm=\"r\", nonce=\"n\"\r\nWWW-Authenticate: Negotiate x\r\n\r\n"
     assertEquals(parsed(msg).headers.wwwAuthenticate.size, 2)
   }
+
+  test("Expires and Min-Expires are read into their type") {
+    val h =
+      parsed(invite + "\r\nExpires: 3600\r\nMin-Expires: 60\r\n\r\n").headers
+    assertEquals(h.expires.map(_.value), Some(3600))
+    assertEquals(h.minExpires.map(_.value), Some(60))
+    assertEquals(parsed(invite + "\r\n\r\n").headers.expires, None)
+  }
+
+  test("a malformed Expires is a header error") {
+    assert(SipParser.parse(bytes(invite + "\r\nExpires: soon\r\n\r\n")).isLeft)
+  }
 }

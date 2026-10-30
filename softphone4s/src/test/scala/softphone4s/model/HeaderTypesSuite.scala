@@ -61,4 +61,22 @@ class HeaderTypesSuite extends FunSuite {
     assertEquals(AuthKind.Proxy.challengeHeader.value, "Proxy-Authenticate")
     assertEquals(AuthKind.Proxy.responseHeader.value, "Proxy-Authorization")
   }
+
+  test("Expires is a number of seconds, read as digits only") {
+    assertEquals(Expires.parse("3600").map(_.value), Right(3600))
+    assertEquals(Expires.parse(" 60 ").map(_.value), Right(60))
+    List("", "-1", "+5", "1.5", "abc", "99999999999", "12 34").foreach(s =>
+      assert(Expires.parse(s).isLeft, s"expected Left for '$s'")
+    )
+    assert(Expires(-1).isLeft)
+  }
+
+  test("Expires converts to and from durations") {
+    import scala.concurrent.duration.*
+    assertEquals(Expires.of(90.seconds).value, 90)
+    assertEquals(Expires.of(1500.millis).value, 1)
+    assertEquals(Expires.of((-5).seconds), Expires.Zero)
+    assertEquals(Expires.parse("120").map(_.duration), Right(120.seconds))
+    assert(Expires.Zero.isZero)
+  }
 }

@@ -19,7 +19,8 @@ case class SoftphoneConfig(
     bindAddress: IpAddress = ip"0.0.0.0",
     localIpFallback: IpAddress = ip"127.0.0.1",
     hangupTimeout: FiniteDuration = 5.seconds,
-    inviteTimeout: FiniteDuration = 32.seconds
+    inviteTimeout: FiniteDuration = 32.seconds,
+    registerExpires: FiniteDuration = 1.hour
 )
 
 object SoftphoneConfig {

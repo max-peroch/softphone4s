@@ -49,6 +49,8 @@ object SipCodec {
     )
     headers.contacts.foreach(c => out.append(s"Contact: ${c.render}$CRLF"))
     out.append(s"Max-Forwards: ${headers.maxForwards.value}$CRLF")
+    headers.expires.foreach(e => out.append(s"Expires: ${e.value}$CRLF"))
+    headers.minExpires.foreach(e => out.append(s"Min-Expires: ${e.value}$CRLF"))
     headers.routes.foreach(r => out.append(s"Route: ${r.render}$CRLF"))
     headers.recordRoutes.foreach(r =>
       out.append(s"Record-Route: ${r.render}$CRLF")

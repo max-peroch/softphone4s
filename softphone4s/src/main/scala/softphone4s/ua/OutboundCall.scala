@@ -245,6 +245,7 @@ private[softphone4s] class OutboundCall[F[_]: Async] private (
           authHeader = Some(
             endpoint.authorizationFor(
               kind,
+              SipMethod.Invite,
               ctx.callee,
               challenge,
               cnonce,

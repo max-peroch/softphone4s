@@ -29,6 +29,8 @@ final case class SipHeaders(
     recordRoutes: List[NameAddr] = Nil,
     wwwAuthenticate: List[AuthChallenge] = Nil,
     proxyAuthenticate: List[AuthChallenge] = Nil,
+    expires: Option[Expires] = None,
+    minExpires: Option[Expires] = None,
     others: List[ExtensionHeader] = Nil
 ) {
   def topVia: Via = vias.head

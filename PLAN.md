@@ -75,6 +75,8 @@ Original list:
 
 ### Phase 2: Registration and the UAS role (the core "softphone" phase)
 
+Progress: item 1 (registration) is done: a pure `RegistrationFsm`, a `Registration` agent with a state signal, `Softphone.register`, `Expires`/`Min-Expires` typed, and `buildRegister`. Authentication already handles `stale`; SHA-256 (item 5), the UAS role (2), dialog work (3), mid-dialog (4), forking (6) and multi-account (7) remain.
+
 1. **Registration:** `Resource[F, Registration[F]]` with a background refresh fiber (refresh at ~½ expiry with jitter), re-register on failure with exponential backoff, 401/407 retry, `Expires`/`expires=` handling, unregister on release. Expose `registrationState: Signal[F, RegState]` (Unregistered / Registering / Registered / Failed).
 2. **Inbound INVITE:** `UasCall` FSM with 100/180/200, `ACK` matching, CANCEL (487), BYE, and 2xx retransmit until ACK (RFC 3261 §13.3.1.4). Public API: `Softphone.incoming: Stream[F, IncomingCall[F]]` with `ringing`, `accept(offer)`, `reject(code, reason)`; an accepted `IncomingCall` yields the same `Call[F]` interface as an outbound call.
 3. **Dialog:** remote CSeq tracking and validation, UAC/UAS roles, in-dialog request routing via Route/Record-Route/remote target (loose routing), `Contact` management.
