@@ -257,4 +257,52 @@ class DnsCallSuite extends CatsEffectSuite {
         )
     }
   }
+
+  test("when the best SRV target refuses the connection the next one is used") {
+    server().use { (listening, requests) =>
+      for {
+        dns <- FakeDns(
+          naptrs = naptrToTcp,
+          srvs = Map(
+            "_sip._tcp.example.org." -> List(
+              // Nothing listens on port 1: the connection is refused at once.
+              SrvRecord(10, 1, port"1", host("down.example.org")),
+              SrvRecord(20, 1, listening, host("up.example.org"))
+            )
+          ),
+          hosts = Map(
+            "down.example.org" -> List(ip"127.0.0.1"),
+            "up.example.org"   -> List(ip"127.0.0.1")
+          )
+        )
+        invite <- phone(dns, port"19135").use { p =>
+          p.call(bob)
+            .use(call => call.awaitPickup >> next(requests, SipMethod.Invite))
+        }
+      } yield assertEquals(
+        invite.headers.topVia.transport,
+        TransportProtocol.Tcp
+      )
+    }
+  }
+
+  test("when every SRV target is down the call fails, rather than hanging") {
+    server().use { (_, _) =>
+      for {
+        dns <- FakeDns(
+          naptrs = naptrToTcp,
+          srvs = Map(
+            "_sip._tcp.example.org." -> List(
+              SrvRecord(10, 1, port"1", host("down.example.org")),
+              SrvRecord(20, 1, port"2", host("down.example.org"))
+            )
+          ),
+          hosts = Map("down.example.org" -> List(ip"127.0.0.1"))
+        )
+        result <- phone(dns, port"19136").use(p =>
+          p.call(bob).use(_.awaitPickup).attempt.timeout(10.seconds)
+        )
+      } yield assertEquals(result, Left(SoftphoneError.TransportFailed))
+    }
+  }
 }

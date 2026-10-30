@@ -99,7 +99,8 @@ class SoftphoneStreaming[F[_]: Async: Network] private (
       target <- Resource.eval(
         Async[F].fromEither(callee.toSipUri(account.config.realm))
       )
-      resolved <- Resource.eval(firstTarget(account, target))
+      found    <- Resource.eval(allTargets(account, target))
+      resolved = found.head
       protocol <- Resource.eval(available(resolved.transport))
       calleeAddr = resolved.address
       localIp <- Resource.eval(
@@ -107,8 +108,9 @@ class SoftphoneStreaming[F[_]: Async: Network] private (
           logger.info(Map("address" -> ip.toString))("Advertising local IP")
         )
       )
-      endpoint <- Resource.eval(allocateEndpoint(account, localIp, protocol))
-      callId   <- Resource.eval(entropy.callId(localIp))
+      endpoint     <- Resource.eval(allocateEndpoint(account, localIp, protocol))
+      alternatives <- Resource.eval(alternativesTo(endpoint, found.tail))
+      callId       <- Resource.eval(entropy.callId(localIp))
       sipCh    <- Resource.make(
         Channel
           .bounded[F, DialogInput[F]](128)
@@ -118,8 +120,8 @@ class SoftphoneStreaming[F[_]: Async: Network] private (
         callId,
         target,
         sipCh.stream,
-        calleeAddr,
-        endpoint,
+        Uplink(endpoint, calleeAddr),
+        alternatives,
         extra
       )
     } yield call
@@ -193,14 +195,49 @@ class SoftphoneStreaming[F[_]: Async: Network] private (
     * port says so. Fails if nothing resolves.
     */
   private def firstTarget(account: Account, uri: SipUri): F[ResolvedTarget] =
+    allTargets(account, uri).map(_.head)
+
+  /** Every place to try for `uri`, best first, at most
+    * `SoftphoneStreaming.MaxTargets`.
+    */
+  private def allTargets(
+      account: Account,
+      uri: SipUri
+  ): F[NonEmptyList[ResolvedTarget]] =
     targets
       .resolve(aimed(account, uri), account.config.transport)
       .flatMap(found =>
         Async[F].fromOption(
-          found.headOption,
+          NonEmptyList.fromList(found.take(SoftphoneStreaming.MaxTargets)),
           SoftphoneError.HostResolutionFailed(uri.host.toString)
         )
       )
+
+  /** The other ways to reach the server, each as `endpoint` over that target's
+    * transport and from the local address that routes to it, keeping the RTP
+    * port. A target we cannot speak to, or cannot build an endpoint for, is
+    * left out.
+    */
+  private def alternativesTo(
+      endpoint: LocalEndpoint,
+      others: List[ResolvedTarget]
+  ): F[List[Uplink]] =
+    others.flatTraverse { other =>
+      (for {
+        transport <- available(other.transport)
+        ip        <- localIpFor(other.address)
+        rebased   <- Async[F].fromEither(endpoint.via(ip, transport))
+      } yield List(Uplink(rebased, other.address))).handleErrorWith(error =>
+        logger
+          .debug(
+            Map(
+              "target" -> other.address.toString,
+              "error"  -> String.valueOf(error.getMessage)
+            )
+          )("Not using this target as a fallback")
+          .as(Nil)
+      )
+    }
 
   /** `uri`, at the account's server port if that is set to something other than
     * the default 5060 and the URI names no port: a port given is taken as it is
@@ -284,8 +321,8 @@ class SoftphoneStreaming[F[_]: Async: Network] private (
       callId: CallId,
       callee: SipUri,
       dialogInput: Stream[F, DialogInput[F]],
-      peer: SocketAddress[IpAddress],
-      endpoint: LocalEndpoint,
+      first: Uplink,
+      alternatives: List[Uplink],
       extraHeaders: List[ExtensionHeader]
   ): Resource[F, OutboundCall[F]] =
     for {
@@ -294,8 +331,8 @@ class SoftphoneStreaming[F[_]: Async: Network] private (
       media      <- Resource.eval(
         MediaSession.create(
           pcmFrameBytes,
-          endpoint.bindAddress,
-          endpoint.rtpPort
+          first.endpoint.bindAddress,
+          first.endpoint.rtpPort
         )
       )
       call <- Resource.eval(
@@ -303,14 +340,15 @@ class SoftphoneStreaming[F[_]: Async: Network] private (
           callId,
           callee,
           layer,
-          peer,
-          nextHopOver(endpoint.transport),
-          endpoint,
+          first,
+          alternatives,
+          (transport, uri) => nextHopOver(transport)(uri),
           supervisor,
           entropy,
           media,
           timers,
-          config.inviteTimeout,
+          // Each target gets the time one would have had.
+          config.inviteTimeout * (1 + alternatives.size).toLong,
           logger,
           extraHeaders
         )
@@ -466,6 +504,9 @@ class SoftphoneStreaming[F[_]: Async: Network] private (
 }
 
 object SoftphoneStreaming {
+
+  /** How many targets of a name are tried at most. */
+  private[softphone4s] val MaxTargets: Int = 4
 
   /** Binds the local SIP UDP socket and returns a ready-to-use `Softphone`. The
     * socket, the transaction layer and the routers that hand messages to calls

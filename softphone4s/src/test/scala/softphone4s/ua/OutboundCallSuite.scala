@@ -14,7 +14,12 @@ import softphone4s.fsm.CallTimer
 import softphone4s.model.*
 import softphone4s.runtime.{Entropy, Timers}
 import softphone4s.transaction.*
-import softphone4s.transport.{InMemoryTransport, Inbound, Transport}
+import softphone4s.transport.{
+  FlakyTransport,
+  InMemoryTransport,
+  Inbound,
+  Transport
+}
 
 import scala.concurrent.duration.*
 
@@ -47,14 +52,18 @@ class OutboundCallSuite extends CatsEffectSuite {
   private def fixture(
       rtp: Port,
       inviteTimeout: FiniteDuration = 32.seconds,
-      resolveWith: SipUri => IO[SocketAddress[IpAddress]] = _ => IO.pure(them)
+      resolveWith: SipUri => IO[SocketAddress[IpAddress]] = _ => IO.pure(them),
+      alternatives: List[Uplink] = Nil,
+      first: Option[Uplink] = None,
+      reach: Transport[IO] => Transport[IO] = identity,
+      transactions: TransactionConfig = TransactionConfig()
   ): Resource[IO, Fixture] =
     for {
       resolved <- Resource.eval(Ref.of[IO, List[SipUri]](Nil))
       pair     <- Resource.eval(InMemoryTransport.pair[IO])
       layer    <- TransactionManager.resource(
-        pair._1,
-        TransactionConfig(),
+        reach(pair._1),
+        transactions,
         NoOpLogger.impl[IO]
       )
       supervisor <- Supervisor[IO]
@@ -67,9 +76,9 @@ class OutboundCallSuite extends CatsEffectSuite {
           callId("test@call"),
           uri("sip:bob@test.local"),
           layer,
-          them,
-          uri => resolved.update(_ :+ uri) >> resolveWith(uri),
-          endpointOn(rtp),
+          first.getOrElse(Uplink(endpointOn(rtp), them)),
+          alternatives,
+          (_, uri) => resolved.update(_ :+ uri) >> resolveWith(uri),
           supervisor,
           Entropy.fromRandom(random),
           media,
@@ -833,6 +842,119 @@ class OutboundCallSuite extends CatsEffectSuite {
         )
         assert(update.body.contains("a=sendonly"), update.body)
         assert(ack.isLeft, "an UPDATE's 200 is not ACKed")
+      }
+    }
+  }
+
+  // ---- Trying the next server --------------------------------------------------------
+
+  private val unreachable = SocketAddress(ip"192.0.2.99", port"5060")
+
+  /** `endpointOn(rtp)` over TCP, reaching `peer`. */
+  private def tcpUplink(rtp: Port, peer: SocketAddress[IpAddress]): Uplink =
+    Uplink(
+      endpointOn(rtp)
+        .via(localIp, TransportProtocol.Tcp)
+        .fold(err => fail(err.getMessage), identity),
+      peer
+    )
+
+  private def udpUplink(rtp: Port, peer: SocketAddress[IpAddress]) =
+    Uplink(endpointOn(rtp), peer)
+
+  test(
+    "when the first server cannot be reached the INVITE goes to the next, over its transport"
+  ) {
+    val rtp = port"19023"
+    fixture(
+      rtp,
+      first = Some(udpUplink(rtp, unreachable)),
+      alternatives = List(tcpUplink(rtp, them)),
+      reach = FlakyTransport(_, failing = Set(unreachable))
+    ).use { f =>
+      for {
+        (invite, _) <- answered(f)
+        ack         <- nextOf(f.peer, SipMethod.Ack)
+        _           <- f.call.hangup
+        bye         <- nextOf(f.peer, SipMethod.Bye)
+        again <- nextOf(f.peer, SipMethod.Invite).timeout(300.millis).attempt
+      } yield {
+        assertEquals(invite.headers.topVia.transport, TransportProtocol.Tcp)
+        assertEquals(
+          invite.headers.contacts.flatMap(_.uri.transport),
+          List(TransportProtocol.Tcp)
+        )
+        // The dialog is on the transport that worked, not the one first tried.
+        assertEquals(ack.headers.topVia.transport, TransportProtocol.Tcp)
+        assertEquals(bye.headers.topVia.transport, TransportProtocol.Tcp)
+        assert(again.isLeft, "the INVITE must reach the peer once")
+      }
+    }
+  }
+
+  test(
+    "a server that does not answer is given up on after the transaction's timeout"
+  ) {
+    val rtp = port"19024"
+    fixture(
+      rtp,
+      inviteTimeout = 30.seconds,
+      first = Some(udpUplink(rtp, unreachable)),
+      alternatives = List(tcpUplink(rtp, them)),
+      reach = FlakyTransport(_, silent = Set(unreachable)),
+      transactions = TransactionConfig(t1 = 20.millis)
+    ).use { f =>
+      for {
+        (invite, _) <- answered(f)
+      } yield assertEquals(
+        invite.headers.topVia.transport,
+        TransportProtocol.Tcp
+      )
+    }
+  }
+
+  test("each alternative is tried in turn") {
+    val rtp  = port"19025"
+    val also = SocketAddress(ip"192.0.2.98", port"5060")
+    fixture(
+      rtp,
+      first = Some(udpUplink(rtp, unreachable)),
+      alternatives = List(udpUplink(rtp, also), tcpUplink(rtp, them)),
+      reach = FlakyTransport(_, failing = Set(unreachable, also))
+    ).use { f =>
+      answered(f).map((invite, _) =>
+        assertEquals(invite.headers.topVia.transport, TransportProtocol.Tcp)
+      )
+    }
+  }
+
+  test("with no server left the call fails as a transport failure") {
+    val rtp = port"19026"
+    fixture(
+      rtp,
+      first = Some(udpUplink(rtp, unreachable)),
+      reach = FlakyTransport(_, failing = Set(unreachable))
+    ).use(f => f.call.awaitPickup.attempt)
+      .map(r => assertEquals(r, Left(SoftphoneError.TransportFailed)))
+  }
+
+  test("a server that answers, even to refuse, is not failed over from") {
+    val rtp = port"19027"
+    fixture(rtp, alternatives = List(tcpUplink(rtp, them))).use { f =>
+      for {
+        invite <- nextOf(f.peer, SipMethod.Invite)
+        _      <- reply(f.peer, answerTo(invite, 486, "Busy Here"))
+        result <- f.call.awaitPickup.attempt
+        again  <- nextOf(f.peer, SipMethod.Invite).timeout(500.millis).attempt
+      } yield {
+        assertEquals(
+          result,
+          Left(SoftphoneError.CallRejected(486, "Busy Here"))
+        )
+        assert(
+          again.isLeft,
+          "a refusal is an answer; the next server is not asked"
+        )
       }
     }
   }

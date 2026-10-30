@@ -17,7 +17,29 @@ final case class LocalEndpoint private (
     contact: SipUri,
     credentials: Credentials,
     transport: TransportProtocol
-)
+) {
+
+  /** The same account and RTP port reached over `transport` from local address
+    * `ip`: what another target of the same call needs, since a different route
+    * can mean a different local address and a different transport changes the
+    * Via and the Contact.
+    */
+  def via(
+      ip: IpAddress,
+      transport: TransportProtocol
+  ): Either[SoftphoneError, LocalEndpoint] =
+    SipUri
+      .from(
+        SipScheme.Sip,
+        ip,
+        accountUri.userInfo,
+        Some(sipPort),
+        Option.when(transport != TransportProtocol.Udp)(transport)
+      )
+      .left
+      .map(SoftphoneError.InvalidSipUri(accountUri.render, _))
+      .map(contact => copy(ip = ip, contact = contact, transport = transport))
+}
 
 object LocalEndpoint {
 

@@ -37,14 +37,14 @@ private[softphone4s] class OutboundCall[F[_]: Async] private (
     hangupSignal: Deferred[F, Unit],
     stateRef: Ref[F, CallState],
     layer: TransactionLayer[F],
-    peer: SocketAddress[IpAddress],
-    resolve: SipUri => F[SocketAddress[IpAddress]],
+    uplink: Ref[F, Uplink],
+    alternatives: Ref[F, List[Uplink]],
+    resolve: (TransportProtocol, SipUri) => F[SocketAddress[IpAddress]],
     events: Channel[F, SipEvent],
     serverTransactions: Ref[F, Map[(SipMethod, CSeqNumber), ServerTransaction[
       F
     ]]],
     cancelled: Ref[F, Boolean],
-    endpoint: LocalEndpoint,
     supervisor: Supervisor[F],
     inviteBranch: Ref[F, Branch],
     nonceCounts: Ref[F, Map[Nonce, NonceCount]],
@@ -183,21 +183,25 @@ private[softphone4s] class OutboundCall[F[_]: Async] private (
     * 3261 §12.2.1.1), or the server we dialled if that cannot be resolved.
     */
   private def destinationFor(dialog: SipDialog): F[SocketAddress[IpAddress]] =
-    resolve(dialog.route.nextHop).handleErrorWith { error =>
-      logger
-        .warn(Map("error" -> String.valueOf(error.getMessage)))(
-          "Cannot resolve the next hop; using the server we dialled"
-        )
-        .as(peer)
+    uplink.get.flatMap { current =>
+      resolve(current.endpoint.transport, dialog.route.nextHop)
+        .handleErrorWith { error =>
+          logger
+            .warn(Map("error" -> String.valueOf(error.getMessage)))(
+              "Cannot resolve the next hop; using the server we dialled"
+            )
+            .as(current.peer)
+        }
     }
 
   private def startClient(
       request: SipRequest,
-      to: SocketAddress[IpAddress] = peer
+      to: SocketAddress[IpAddress],
+      failover: F[Boolean] = Async[F].pure(false)
   ): F[Unit] =
     layer.client(request, to).flatMap {
       case Right(transaction) =>
-        supervisor.supervise(forward(transaction)).void
+        supervisor.supervise(forward(transaction, failover)).void
       case Left(error) =>
         logger.warn(Map("error" -> error.message))(
           "Cannot start a transaction"
@@ -221,16 +225,92 @@ private[softphone4s] class OutboundCall[F[_]: Async] private (
   def changeSession(change: SessionChange): F[Unit] =
     events.send(SipEvent.SessionChangeRequested(change)).void
 
-  private def forward(transaction: ClientTransaction[F]): F[Unit] =
+  /** Sends the call's first INVITE over the uplink the call has now. If it gets
+    * no answer, the same INVITE goes out over the next uplink, with a new
+    * branch and that uplink's Via and Contact.
+    */
+  private[ua] def sendInitialInvite(
+      callee: SipUri,
+      callId: CallId,
+      localTag: Tag,
+      extraHeaders: List[ExtensionHeader]
+  ): F[Unit] =
+    (newBranch(), uplink.get).flatMapN { (branch, current) =>
+      inviteBranch.set(branch) >>
+        startClient(
+          current.endpoint.buildInvite(
+            callee,
+            callId,
+            localTag,
+            CSeqNumber.One,
+            branch,
+            extraHeaders = extraHeaders
+          ),
+          current.peer,
+          failover = nextUplink(
+            sendInitialInvite(callee, callId, localTag, extraHeaders)
+          )
+        )
+    }
+
+  /** Moves the call to its next uplink and runs `retry` over it. False, doing
+    * nothing, when there is none, or the call is no longer just inviting (it
+    * was answered, or is being hung up).
+    */
+  private def nextUplink(retry: F[Unit]): F[Boolean] =
+    (stateRef.get, cancelled.get).flatMapN { (state, hangingUp) =>
+      val inviting = state match {
+        case CallState.Inviting(_) => true
+        case _                     => false
+      }
+      if !inviting || hangingUp then Async[F].pure(false)
+      else
+        alternatives
+          .modify {
+            case next :: rest => (rest, Some(next))
+            case Nil          => (Nil, None)
+          }
+          .flatMap {
+            case None       => Async[F].pure(false)
+            case Some(next) =>
+              uplink.set(next) >>
+                logger.info(
+                  Map(
+                    "to"        -> next.peer.toString,
+                    "transport" -> next.endpoint.transport.token
+                  )
+                )("No answer; trying the next server") >>
+                retry.as(true)
+          }
+    }
+
+  /** Passes on what a client transaction reports. When it ends without an
+    * answer, `failover` may find another way to try; if it does, that is the
+    * end of this transaction and nothing is reported.
+    */
+  private def forward(
+      transaction: ClientTransaction[F],
+      failover: F[Boolean]
+  ): F[Unit] =
     transaction.notices
       .evalMap {
         case ClientNotice.Response(response) =>
-          events.send(SipEvent.ResponseReceived(response))
+          events.send(SipEvent.ResponseReceived(response)).void
         case ClientNotice.TimedOut =>
-          events.send(SipEvent.TransactionFailed(TransactionFailure.TimedOut))
+          failover.ifM(
+            Async[F].unit,
+            events
+              .send(SipEvent.TransactionFailed(TransactionFailure.TimedOut))
+              .void
+          )
         case ClientNotice.TransportFailed =>
-          events.send(
-            SipEvent.TransactionFailed(TransactionFailure.TransportFailed)
+          failover.ifM(
+            Async[F].unit,
+            events
+              .send(
+                SipEvent.TransactionFailed(TransactionFailure.TransportFailed)
+              )
+              .void
           )
       }
       .compile
@@ -252,7 +332,9 @@ private[softphone4s] class OutboundCall[F[_]: Async] private (
       case None =>
         logger.warn(Map("method" -> request.method.toString))(
           "No server transaction to answer; sending the response directly"
-        ) >> layer.transmit(response, peer).as(peer)
+        ) >> uplink.get.flatMap(current =>
+          layer.transmit(response, current.peer).as(current.peer)
+        )
     }
   }
 
@@ -273,6 +355,16 @@ private[softphone4s] class OutboundCall[F[_]: Async] private (
   // ---- Actions -------------------------------------------------------------------
 
   private def interpretAction(action: SipAction): F[Unit] =
+    uplink.get.flatMap(current =>
+      interpret(current.endpoint, current.peer, action)
+    )
+
+  /** Carries out `action` over the uplink the call has at the moment. */
+  private def interpret(
+      endpoint: LocalEndpoint,
+      peer: SocketAddress[IpAddress],
+      action: SipAction
+  ): F[Unit] =
     action match {
       case SendInvite(callee, callId, localTag, cseq, authHeader) =>
         newBranch().flatMap { branch =>
@@ -288,7 +380,8 @@ private[softphone4s] class OutboundCall[F[_]: Async] private (
                 cseq,
                 branch,
                 authHeader
-              )
+              ),
+              peer
             )
         }
 
@@ -327,7 +420,8 @@ private[softphone4s] class OutboundCall[F[_]: Async] private (
               ctx.cseq,
               branch,
               authHeader
-            )
+            ),
+            peer
           )
         } yield ()
 
@@ -348,7 +442,8 @@ private[softphone4s] class OutboundCall[F[_]: Async] private (
       case SendCancel(ctx) =>
         inviteBranch.get.flatMap { branch =>
           logger.debug("Sending CANCEL") >> startClient(
-            endpoint.buildCancel(ctx, branch)
+            endpoint.buildCancel(ctx, branch),
+            peer
           )
         }
 
@@ -462,14 +557,19 @@ private[softphone4s] class OutboundCall[F[_]: Async] private (
 
 private[softphone4s] object OutboundCall {
 
-  /** Starts the call by sending its INVITE to `peer` through `layer`. */
+  /** Starts the call by sending its INVITE over `first` through `layer`. If
+    * that gets no answer, or the transport fails, the INVITE is sent again over
+    * each of `alternatives` in turn (RFC 3263 §4.3). `inviteTimeout` is how
+    * long to wait for the whole call to be answered, so it should cover every
+    * target.
+    */
   def create[F[_]: Async](
       callId: CallId,
       callee: SipUri,
       layer: TransactionLayer[F],
-      peer: SocketAddress[IpAddress],
-      resolve: SipUri => F[SocketAddress[IpAddress]],
-      endpoint: LocalEndpoint,
+      first: Uplink,
+      alternatives: List[Uplink],
+      resolve: (TransportProtocol, SipUri) => F[SocketAddress[IpAddress]],
       supervisor: Supervisor[F],
       entropy: Entropy[F],
       media: MediaSession[F],
@@ -482,12 +582,14 @@ private[softphone4s] object OutboundCall {
       localTag     <- entropy.tag
       branch       <- entropy.branch
       inviteBranch <- Ref[F].of(branch)
+      uplink       <- Ref[F].of(first)
+      remaining    <- Ref[F].of(alternatives)
       ctx = InviteCtx(
         callId = callId,
         localTag = localTag,
         cseq = CSeqNumber.One,
         callee = callee,
-        localUri = endpoint.accountUri,
+        localUri = first.endpoint.accountUri,
         offerInInvite = true,
         inviteTimeout = inviteTimeout
       )
@@ -517,12 +619,12 @@ private[softphone4s] object OutboundCall {
         hangupSignal,
         stateRef,
         layer,
-        peer,
+        uplink,
+        remaining,
         resolve,
         events,
         serverTransactions,
         cancelled,
-        endpoint,
         supervisor,
         inviteBranch,
         nonceCounts,
@@ -536,15 +638,6 @@ private[softphone4s] object OutboundCall {
       _ <- logger.debug(
         Map("callee" -> callee.render, "callId" -> callId.value)
       )("Sending INVITE")
-      _ <- call.startClient(
-        endpoint.buildInvite(
-          callee,
-          callId,
-          localTag,
-          cseq = CSeqNumber.One,
-          branch,
-          extraHeaders = extraHeaders
-        )
-      )
+      _ <- call.sendInitialInvite(callee, callId, localTag, extraHeaders)
     } yield call
 }
