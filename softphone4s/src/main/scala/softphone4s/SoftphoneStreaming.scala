@@ -13,8 +13,16 @@ import softphone4s.config.SoftphoneConfig
 import softphone4s.fsm.CallTimer
 import softphone4s.model.*
 import softphone4s.runtime.{Entropy, Timers}
-import softphone4s.transport.{RtpTransport, SipTransport, Transport}
-import softphone4s.ua.{MediaSession, OutboundCall}
+import softphone4s.transaction.{
+  Reliability,
+  ServerTransaction,
+  TransactionConfig,
+  TransactionLayer,
+  TransactionManager,
+  TransactionMessages
+}
+import softphone4s.transport.{Inbound, RtpTransport, SipTransport}
+import softphone4s.ua.{DialogInput, MediaSession, OutboundCall}
 
 import javax.sound.sampled.AudioFormat
 
@@ -24,8 +32,8 @@ import javax.sound.sampled.AudioFormat
   */
 class SoftphoneStreaming[F[_]: Async: Network] private (
     config: SoftphoneConfig,
-    transport: Transport[F],
-    routes: Ref[F, Map[CallId, Channel[F, SipMessage]]],
+    layer: TransactionLayer[F],
+    routes: Ref[F, Map[CallId, Channel[F, DialogInput[F]]]],
     nextCallIndex: Ref[F, Int],
     entropy: Entropy[F],
     pcmFrameBytes: Int,
@@ -67,16 +75,14 @@ class SoftphoneStreaming[F[_]: Async: Network] private (
       callId   <- Resource.eval(entropy.callId(localIp))
       sipCh    <- Resource.make(
         Channel
-          .bounded[F, SipMessage](128)
+          .bounded[F, DialogInput[F]](128)
           .flatTap(ch => routes.update(_ + (callId -> ch)))
       )(_ => routes.update(_ - callId))
-      sipIn   = sipCh.stream
-      sendSip = (msg: SipMessage) => transport.send(calleeAddr, msg)
       call <- buildCall(
         callId,
         target,
-        sipIn,
-        sendSip,
+        sipCh.stream,
+        calleeAddr,
         endpoint,
         extra
       )
@@ -131,8 +137,8 @@ class SoftphoneStreaming[F[_]: Async: Network] private (
   private def buildCall(
       callId: CallId,
       callee: SipUri,
-      sipIn: Stream[F, SipMessage],
-      sendSip: SipMessage => F[Unit],
+      dialogInput: Stream[F, DialogInput[F]],
+      peer: SocketAddress[IpAddress],
       endpoint: LocalEndpoint,
       extraHeaders: List[ExtensionHeader]
   ): Resource[F, OutboundCall[F]] =
@@ -150,7 +156,8 @@ class SoftphoneStreaming[F[_]: Async: Network] private (
         OutboundCall.create(
           callId,
           callee,
-          sendSip,
+          layer,
+          peer,
           endpoint,
           supervisor,
           entropy,
@@ -161,7 +168,7 @@ class SoftphoneStreaming[F[_]: Async: Network] private (
           extraHeaders
         )
       )
-      _ <- Resource.make(call.runEventLoop(sipIn).start)(fiber =>
+      _ <- Resource.make(call.runEventLoop(dialogInput).start)(fiber =>
         call.hangup >> fiber.join.void
           .timeoutTo(config.hangupTimeout, fiber.cancel)
       )
@@ -183,36 +190,81 @@ object SoftphoneStreaming {
         SocketAddress(config.bindAddress, config.localSipPort),
         logger
       )
-      routes <- Resource.eval(
-        Ref[F].of(Map.empty[CallId, Channel[F, SipMessage]])
+      layer <- TransactionManager.resource[F](
+        transport,
+        Reliability.Unreliable,
+        TransactionConfig(),
+        logger
       )
-      _ <- Resource.make(
-        transport.messages
-          .map(_.message)
-          .evalMap { msg =>
-            routes.get.flatMap {
-              _.get(msg.headers.callId) match {
-                case Some(ch) => ch.send(msg).void
-                case None     =>
-                  logger.warn(Map("callId" -> msg.headers.callId.value))(
-                    "Dropping SIP message: no active call for this Call-ID"
-                  )
-              }
-            }
-          }
-          .compile
-          .drain
-          .start
-      )(_.cancel)
+      routes <- Resource.eval(
+        Ref[F].of(Map.empty[CallId, Channel[F, DialogInput[F]]])
+      )
+      supervisor <- Supervisor[F](await = false)
+      _          <- Resource.eval(
+        supervisor.supervise(routeIncoming(layer, routes, logger))
+      )
+      _ <- Resource.eval(
+        supervisor.supervise(routeUnmatched(layer, routes, logger))
+      )
       callIndex <- Resource.eval(Ref[F].of(0))
       entropy   <- Resource.eval(Entropy.secure[F])
     } yield new SoftphoneStreaming(
       config,
-      transport,
+      layer,
       routes,
       callIndex,
       entropy,
       pcmFrameBytes = audioFormat.getFrameSize * RtpTransport.PacketSamples,
       logger
     )
+
+  /** Hands requests within a dialog to their call; a call that is gone, or
+    * never was, gets `481 Call/Transaction Does Not Exist` (RFC 3261 §12.2.2).
+    */
+  private def routeIncoming[F[_]: Async](
+      layer: TransactionLayer[F],
+      routes: Ref[F, Map[CallId, Channel[F, DialogInput[F]]]],
+      logger: StructuredLogger[F]
+  ): F[Unit] =
+    layer.incoming
+      .evalMap { (transaction: ServerTransaction[F]) =>
+        routes.get.flatMap(_.get(transaction.request.headers.callId) match {
+          case Some(channel) =>
+            channel.send(DialogInput.Request(transaction)).void
+          case None =>
+            logger.debug(
+              Map("callId" -> transaction.request.headers.callId.value)
+            )("Request for a call that does not exist") >>
+              transaction.respond(
+                TransactionMessages.responseTo(
+                  transaction.request,
+                  481,
+                  "Call/Transaction Does Not Exist"
+                )
+              )
+        })
+      }
+      .compile
+      .drain
+
+  /** Hands messages no transaction claimed (a retransmitted 2xx) to their call.
+    */
+  private def routeUnmatched[F[_]: Async](
+      layer: TransactionLayer[F],
+      routes: Ref[F, Map[CallId, Channel[F, DialogInput[F]]]],
+      logger: StructuredLogger[F]
+  ): F[Unit] =
+    layer.unmatched
+      .evalMap { (inbound: Inbound) =>
+        routes.get.flatMap(_.get(inbound.message.headers.callId) match {
+          case Some(channel) =>
+            channel.send(DialogInput.Unmatched(inbound)).void
+          case None =>
+            logger.debug(
+              Map("callId" -> inbound.message.headers.callId.value)
+            )("Dropping a message for a call that does not exist")
+        })
+      }
+      .compile
+      .drain
 }

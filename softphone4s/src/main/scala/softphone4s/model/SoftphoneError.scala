@@ -20,6 +20,10 @@ object SoftphoneError {
   case object CallCancelled
       extends SoftphoneError("Call cancelled before answer")
   case object RemoteHangup extends SoftphoneError("Remote party ended the call")
+  case object TransportFailed
+      extends SoftphoneError(
+        "The SIP transport failed while signalling the call"
+      )
   final case class RtpPortExhausted(port: Int)
       extends SoftphoneError(
         s"Computed RTP port $port is out of range (0-65535)"

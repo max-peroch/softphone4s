@@ -4,8 +4,6 @@ import cats.data.State
 import cats.syntax.all.*
 import softphone4s.model.*
 
-import scala.concurrent.duration.*
-
 // ---------------------------------------------------------------------------
 // Call state
 // ---------------------------------------------------------------------------
@@ -16,6 +14,7 @@ object TerminationReason {
   case object RemoteBye                          extends TerminationReason
   case class Rejected(code: Int, reason: String) extends TerminationReason
   case object TimedOut                           extends TerminationReason
+  case object TransportFailure                   extends TerminationReason
 }
 
 sealed trait CallState
@@ -39,6 +38,9 @@ object SipEvent {
   case class RequestReceived(request: SipRequest)    extends SipEvent
   case object HangupRequested                        extends SipEvent
   case class TimerFired(timer: CallTimer)            extends SipEvent
+
+  /** A client transaction of the call ended without a final response. */
+  case class TransactionFailed(failure: TransactionFailure) extends SipEvent
 }
 
 // ---------------------------------------------------------------------------
@@ -64,9 +66,6 @@ object SipAction {
       dialog: SipDialog,
       remoteSdpForAnswer: Option[String] // Some(body) when offer was in 200 OK
   ) extends SipAction
-  // RFC 3261 §17.1.1.3 — transaction-layer ACK for non-2xx INVITE responses
-  case class SendAckForNon2xx(ctx: InviteCtx, response: SipResponse)
-      extends SipAction
   case class SendCancel(ctx: InviteCtx) extends SipAction
   case class SendBye(dialog: SipDialog) extends SipAction
   // Responses the interpreter builds deterministically
@@ -92,9 +91,6 @@ object CallFsm {
   import SipAction.*
   import SipEvent.*
   import TerminationReason.*
-
-  /** RFC 3261 Timer F: 64 * T1, with T1 = 500 ms. */
-  val ByeTimeoutAfter: FiniteDuration = 32.seconds
 
   /** One answer, plus one more if the server reports a stale nonce. */
   private val MaxAuthAttempts = 2
@@ -156,17 +152,30 @@ object CallFsm {
 
         case (Inviting(ctx), ResponseReceived(response))
             if response.statusCode >= ErrorResponseMin =>
-          reject(ctx, response)
+          reject(response)
 
         case (CallState.Ringing(ctx, _), ResponseReceived(response))
             if response.statusCode >= ErrorResponseMin =>
-          reject(ctx, response)
+          reject(response)
 
         case (
               Inviting(_) | CallState.Ringing(_, _),
-              TimerFired(CallTimer.InviteTimeout)
+              TimerFired(CallTimer.InviteTimeout) |
+              TransactionFailed(TransactionFailure.TimedOut)
             ) =>
-          go(Failed(408, "Request Timeout"), List(NotifyHangup(TimedOut)))
+          go(
+            Failed(408, "Request Timeout"),
+            List(stopInviteTimer, NotifyHangup(TimedOut))
+          )
+
+        case (
+              Inviting(_) | CallState.Ringing(_, _),
+              TransactionFailed(TransactionFailure.TransportFailed)
+            ) =>
+          go(
+            Failed(503, "Transport failure"),
+            List(stopInviteTimer, NotifyHangup(TransportFailure))
+          )
 
         case (Inviting(ctx), HangupRequested) =>
           cancelCall(ctx)
@@ -175,14 +184,7 @@ object CallFsm {
           cancelCall(ctx)
 
         case (Active(dialog), HangupRequested) =>
-          go(
-            ByeSent(dialog),
-            List(
-              StopMedia,
-              SendBye(dialog),
-              Timer(TimerAction.Start(CallTimer.ByeTimeout, ByeTimeoutAfter))
-            )
-          )
+          go(ByeSent(dialog), List(StopMedia, SendBye(dialog)))
 
         case (Active(dialog), RequestReceived(request))
             if request.method == SipMethod.Bye =>
@@ -191,18 +193,25 @@ object CallFsm {
             List(NotifyHangup(RemoteBye), StopMedia, SendByeOk(request))
           )
 
+        // The BYE's own final response, not a retransmitted 200 to the INVITE.
         case (ByeSent(_), ResponseReceived(response))
-            if response.statusCode >= FinalResponseMin =>
-          go(
-            Closed(LocalHangup),
-            List(
-              Timer(TimerAction.Cancel(CallTimer.ByeTimeout)),
-              NotifyHangup(LocalHangup)
-            )
-          )
-
-        case (ByeSent(_), TimerFired(CallTimer.ByeTimeout)) =>
+            if response.statusCode >= FinalResponseMin &&
+              response.headers.cseq.method == SipMethod.Bye =>
           go(Closed(LocalHangup), List(NotifyHangup(LocalHangup)))
+
+        // The BYE got no answer (Timer F) or could not be sent.
+        case (ByeSent(_), TransactionFailed(_)) =>
+          go(Closed(LocalHangup), List(NotifyHangup(LocalHangup)))
+
+        // A retransmitted 200 to the INVITE means our ACK was lost: send it
+        // again (RFC 3261 §13.2.2.4), for as long as the dialog stands.
+        case (Active(dialog), ResponseReceived(response))
+            if isInviteOk(response) =>
+          State.pure(List(SendAck(dialog, None)))
+
+        case (ByeSent(dialog), ResponseReceived(response))
+            if isInviteOk(response) =>
+          State.pure(List(SendAck(dialog, None)))
 
         case (Active(_), RequestReceived(request))
             if request.method == SipMethod.Info =>
@@ -211,7 +220,7 @@ object CallFsm {
 
         // 200 OK after CANCEL (RFC 3261 §9 race) — must ACK then BYE immediately
         case (Closed(LocalHangup), ResponseReceived(response))
-            if response.statusCode == Ok =>
+            if isInviteOk(response) =>
           State.pure(
             SipDialog
               .fromLateOk(response)
@@ -237,12 +246,17 @@ object CallFsm {
       List(stopInviteTimer, SendCancel(ctx), NotifyHangup(LocalHangup))
     )
 
-  private def reject(ctx: InviteCtx, response: SipResponse): Transition =
+  /** A 200 OK answering an INVITE (not the CANCEL or BYE, which also get 200).
+    */
+  private def isInviteOk(response: SipResponse): Boolean =
+    response.statusCode == Ok && response.headers.cseq.method == SipMethod.Invite
+
+  // The transaction layer has already ACKed the failure (RFC 3261 §17.1.1.3).
+  private def reject(response: SipResponse): Transition =
     go(
       Failed(response.statusCode, response.reason),
       List(
         stopInviteTimer,
-        SendAckForNon2xx(ctx, response),
         NotifyHangup(Rejected(response.statusCode, response.reason))
       )
     )
@@ -274,7 +288,7 @@ object CallFsm {
         case AuthChallenge.Digest(c) if c.isAnswerable => c
       }
       .filter(challenge => mayAnswer(ctx, kind, challenge))
-      .fold(reject(ctx, response)) { challenge =>
+      .fold(reject(response)) { challenge =>
         val newCtx = ctx.copy(
           cseq = ctx.cseq.next,
           authAttempts = ctx.authAttempts.updated(kind, attempts(ctx, kind) + 1)
@@ -282,7 +296,6 @@ object CallFsm {
         go(
           Inviting(newCtx),
           List(
-            SendAckForNon2xx(ctx, response),
             RetryInviteWithAuth(newCtx, kind, challenge),
             // The retry is a new INVITE transaction, so Timer B starts over.
             Timer(TimerAction.Start(CallTimer.InviteTimeout, ctx.inviteTimeout))

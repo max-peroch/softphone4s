@@ -149,6 +149,7 @@ All failures surface as `SoftphoneError` (a sealed `RuntimeException` hierarchy)
 | `CallRejected(code, reason)` | Remote returned a 4xx / 5xx / 6xx response |
 | `CallTimedOut` | No answer within `invite-timeout` |
 | `CallCancelled` | BYE received from remote, or local hangup |
+| `TransportFailed` | The SIP transport could not send a request of the call |
 | `RtpPortExhausted(port)` | Computed RTP port exceeds 65535 (too many concurrent calls) |
 
 `awaitPickup` raises the error as an effect if the call is rejected or
@@ -158,11 +159,14 @@ times out before being answered.
 
 ```
 SoftphoneStreaming
-├─ SipTransport           — shared UDP socket; routes by Call-ID
+├─ SipTransport           — shared UDP socket
+├─ TransactionManager     — RFC 3261 §17 client and server transactions
+│                           (retransmission, matching, ACK for failures)
+├─ routes in-dialog requests and strays to calls by Call-ID
 └─ per call
    └─ OutboundCall
       ├─ CallFsm          — pure state machine (cats State)
-      ├─ SipMessages — constructs INVITE / ACK / BYE / CANCEL
+      ├─ SipMessages      — constructs INVITE / ACK / BYE / CANCEL
       └─ MediaSession
          ├─ RtpTransport  — per-call UDP socket
          └─ G711Codec     — μ-law ↔ 16-bit PCM
@@ -170,7 +174,11 @@ SoftphoneStreaming
 
 `CallFsm` is pure: given an event and the current state it returns a new
 state and a list of `SipAction` values. `OutboundCall` interprets those
-actions against `F`, keeping effects out of the FSM.
+actions against `F`, keeping effects out of the FSM. The INVITE, BYE and
+CANCEL go out as client transactions; the ACK of a failure is the
+transaction's, the ACK of a 2xx is the call's. The four transaction state
+machines (`InviteClientTransaction` and its three siblings) are pure too and
+emit timer actions that `Timers` runs.
 
 ## Inspirations
 

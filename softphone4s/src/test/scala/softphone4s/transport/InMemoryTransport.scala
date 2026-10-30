@@ -31,7 +31,8 @@ object InMemoryTransport {
   ): Transport[F] =
     new Transport[F] {
       def localAddress: SocketAddress[IpAddress] = self
-      def messages: Stream[F, Inbound] = Stream.fromQueueUnterminated(inbox)
+      def messages: Stream[F, Inbound]           =
+        Stream.fromQueueUnterminated(inbox, limit = 1)
       def send(to: SocketAddress[IpAddress], message: SipMessage): F[Unit] =
         peer.offer(Inbound(self, message))
     }

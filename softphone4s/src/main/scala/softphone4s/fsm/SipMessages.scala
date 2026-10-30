@@ -96,26 +96,6 @@ object SipMessages {
         body = sdpAnswer.getOrElse("")
       )
 
-    // RFC 3261 §17.1.1.3: transaction-layer ACK for non-2xx INVITE responses.
-    // Uses the same Via branch as the original INVITE (same transaction).
-    def buildAckForNon2xx(
-        ctx: InviteCtx,
-        response: SipResponse,
-        branch: Branch
-    ): SipRequest =
-      SipRequest(
-        method = SipMethod.Ack,
-        requestUri = ctx.callee,
-        headers = SipHeaders(
-          callId = ctx.callId,
-          from = NameAddr.withTag(e.accountUri, ctx.localTag),
-          to = response.headers.to,
-          vias = vias(e, branch),
-          cseq = CSeq(ctx.cseq, SipMethod.Ack),
-          contacts = contacts(e)
-        )
-      )
-
     // -----------------------------------------------------------------------
     // CANCEL
     // -----------------------------------------------------------------------

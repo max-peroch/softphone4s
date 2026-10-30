@@ -31,7 +31,7 @@ class CallFsmSuite extends FunSuite {
 
   private def mkHeaders(
       to: String = "<sip:callee@host>",
-      cseq: CSeq = cseq(1, SipMethod.Invite),
+      cseq: CSeq,
       contact: String = "<sip:callee@host:5060>",
       proxyAuth: List[String] = Nil,
       wwwAuth: List[String] = Nil
@@ -53,11 +53,17 @@ class CallFsmSuite extends FunSuite {
       to: String = "<sip:callee@host>",
       body: String = "",
       proxyAuth: List[String] = Nil,
-      wwwAuth: List[String] = Nil
+      wwwAuth: List[String] = Nil,
+      method: SipMethod = SipMethod.Invite
   ) = SipResponse(
     code,
     reason,
-    mkHeaders(to = to, proxyAuth = proxyAuth, wwwAuth = wwwAuth),
+    mkHeaders(
+      to = to,
+      cseq = cseq(1, method),
+      proxyAuth = proxyAuth,
+      wwwAuth = wwwAuth
+    ),
     body
   )
 
@@ -118,9 +124,6 @@ class CallFsmSuite extends FunSuite {
         )
       )
     )
-    assert(actions.exists {
-      case SendAckForNon2xx(_, _) => true; case _ => false
-    })
     assert(actions.exists {
       case RetryInviteWithAuth(_, AuthKind.Proxy, _) =>
         true;
@@ -305,18 +308,42 @@ class CallFsmSuite extends FunSuite {
 
   // ---- ByeSent ----------------------------------------------------------------
 
-  test("ByeSent + 200 OK → Closed(LocalHangup), notifies hangup") {
-    val (state, actions) =
-      step(ByeSent(active.dialog), ResponseReceived(resp(200, "OK")))
+  test("ByeSent + the BYE's 200 OK → Closed(LocalHangup), notifies hangup") {
+    val (state, actions) = step(
+      ByeSent(active.dialog),
+      ResponseReceived(resp(200, "OK", method = SipMethod.Bye))
+    )
     assertEquals(state, Closed(LocalHangup))
     assert(actions.contains(NotifyHangup(LocalHangup)))
   }
 
-  test("ByeSent + ByeTimeout → Closed(LocalHangup), notifies hangup") {
-    val (state, actions) =
-      step(ByeSent(active.dialog), TimerFired(CallTimer.ByeTimeout))
+  test("ByeSent + a failure response to the BYE also ends the call") {
+    val (state, _) = step(
+      ByeSent(active.dialog),
+      ResponseReceived(resp(481, "Does Not Exist", method = SipMethod.Bye))
+    )
     assertEquals(state, Closed(LocalHangup))
-    assert(actions.contains(NotifyHangup(LocalHangup)))
+  }
+
+  test(
+    "ByeSent + a retransmitted 200 to the INVITE is ACKed, not taken for the BYE's answer"
+  ) {
+    val (state, actions) =
+      step(ByeSent(active.dialog), ResponseReceived(resp(200, "OK")))
+    assertEquals(state, ByeSent(active.dialog))
+    assertEquals(actions, List(SendAck(active.dialog, None)))
+  }
+
+  test(
+    "ByeSent + the BYE timing out or failing to send → Closed(LocalHangup)"
+  ) {
+    List(TransactionFailure.TimedOut, TransactionFailure.TransportFailed)
+      .foreach { f =>
+        val (state, actions) =
+          step(ByeSent(active.dialog), TransactionFailed(f))
+        assertEquals(state, Closed(LocalHangup))
+        assert(actions.contains(NotifyHangup(LocalHangup)))
+      }
   }
 
   // ---- Authentication retries ---------------------------------------------
@@ -442,22 +469,94 @@ class CallFsmSuite extends FunSuite {
     )
   }
 
-  test("hanging up an active call starts the BYE timer") {
+  test("hanging up an active call sends a BYE and stops the media") {
     val (_, actions) = step(active, HangupRequested)
-    assert(
-      actions.contains(
-        Timer(TimerAction.Start(CallTimer.ByeTimeout, CallFsm.ByeTimeoutAfter))
+    assert(actions.contains(StopMedia))
+    assert(actions.exists { case SendBye(_) => true; case _ => false })
+    assert(!actions.exists { case Timer(_) => true; case _ => false })
+  }
+
+  // ---- Retransmitted 2xx and transaction failures --------------------------
+
+  test("Active + a retransmitted 200 to the INVITE → ACK again, nothing else") {
+    val (state, actions) =
+      step(
+        active,
+        ResponseReceived(resp(200, "OK", to = "<sip:callee@host>;tag=rtag"))
       )
+    assertEquals(state, active)
+    assertEquals(actions, List(SendAck(active.dialog, None)))
+  }
+
+  test("Active + a 200 that answers something else is ignored") {
+    val (state, actions) = step(
+      active,
+      ResponseReceived(resp(200, "OK", method = SipMethod.Cancel))
+    )
+    assertEquals(state, active)
+    assertEquals(actions, Nil)
+  }
+
+  test(
+    "Inviting + the INVITE transaction timing out → Failed(408), notifies timeout"
+  ) {
+    val (state, actions) = step(
+      Inviting(baseCtx),
+      TransactionFailed(TransactionFailure.TimedOut)
+    )
+    assertEquals(state, Failed(408, "Request Timeout"))
+    assert(actions.contains(NotifyHangup(TimedOut)))
+    assert(actions.contains(Timer(TimerAction.Cancel(CallTimer.InviteTimeout))))
+  }
+
+  test(
+    "Inviting or Ringing + a transport failure → Failed, notifies the transport failure"
+  ) {
+    val ringing = step(
+      Inviting(baseCtx),
+      ResponseReceived(resp(180, "Ringing", to = "<sip:callee@host>;tag=rtag"))
+    )._1
+    List(Inviting(baseCtx), ringing).foreach { from =>
+      val (state, actions) =
+        step(from, TransactionFailed(TransactionFailure.TransportFailed))
+      assertEquals(state, Failed(503, "Transport failure"))
+      assert(actions.contains(NotifyHangup(TransportFailure)))
+    }
+  }
+
+  test(
+    "a rejection sends no ACK of its own: the transaction layer ACKs failures"
+  ) {
+    val (_, actions) =
+      step(Inviting(baseCtx), ResponseReceived(resp(486, "Busy Here")))
+    assertEquals(
+      actions,
+      List(stopInvite, NotifyHangup(Rejected(486, "Busy Here")))
     )
   }
 
-  test("the BYE response stops the BYE timer") {
-    val (_, actions) =
-      step(ByeSent(active.dialog), ResponseReceived(resp(200, "OK")))
-    assert(actions.contains(Timer(TimerAction.Cancel(CallTimer.ByeTimeout))))
+  // ---- CANCEL race ------------------------------------------------------------
+
+  test("Closed(LocalHangup) + the 200 to our CANCEL is not a late answer") {
+    val (state, actions) = step(
+      Closed(LocalHangup),
+      ResponseReceived(resp(200, "OK", method = SipMethod.Cancel))
+    )
+    assertEquals(state, Closed(LocalHangup))
+    assertEquals(actions, Nil)
   }
 
-  // ---- CANCEL race ------------------------------------------------------------
+  test(
+    "Closed(LocalHangup) + the 487 that ends a cancelled INVITE → nothing to do"
+  ) {
+    assertEquals(
+      step(
+        Closed(LocalHangup),
+        ResponseReceived(resp(487, "Request Terminated"))
+      ),
+      (Closed(LocalHangup), Nil)
+    )
+  }
 
   test("Closed(LocalHangup) + 200 OK → stays Closed, sends ACK and BYE") {
     val (state, actions) = step(

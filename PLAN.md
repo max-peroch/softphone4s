@@ -55,7 +55,17 @@ Original list:
 4. **Algebras:** introduce `Entropy[F]`, `Timers`-as-actions, and a `Transport[F]` trait that the UDP socket implements.
 5. **Bump `CallFsm`** onto the new model without behaviour change (existing tests stay green).
 
-### Phase 1: Transaction layer (RFC 3261 §17)
+### Phase 1: Transaction layer (RFC 3261 §17) — done
+
+Delivered as listed, with these notes:
+
+- The call layer now runs on the transaction layer: INVITE, BYE and CANCEL are client transactions, in-dialog BYE and INFO are server transactions, and `SoftphoneStreaming` routes `incoming` and `unmatched` to calls by Call-ID, answering `481` for unknown dialogs.
+- The ACK for a failure left `CallFsm`; a retransmitted 2xx is now ACKed again; the call-level BYE timer is gone (the transaction's Timer F replaces it).
+- The CANCEL/200 race used to be dead code, since the event loop stopped at the hangup; the loop now waits for the INVITE's final response after a CANCEL, so a 200 that crosses it is ACKed and ended with a BYE.
+- RFC 2543 (no magic-cookie) matching is not supported: such messages go to `unmatched`.
+- The transport's reliability is a parameter of `TransactionManager`; `Transport` has no `reliability` member until TCP and TLS arrive in Phase 3.
+
+Original list:
 
 1. Four pure FSMs: INVITE client, non-INVITE client, INVITE server, non-INVITE server. Timers A–K with T1/T2/T4 as configuration.
 2. Transaction manager: one owner fiber, matches responses by Via branch plus sent-by plus method, and requests per RFC 3261 §17.2.3 (including RFC 2543 compatibility only if cheap).
