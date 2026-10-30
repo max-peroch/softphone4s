@@ -47,6 +47,16 @@ lazy val softphone4sOtel4s = project
     )
   )
 
+// JMH benchmarks: sbt "softphone4sBench/Jmh/run"
+lazy val softphone4sBench = project
+  .in(file("softphone4s-bench"))
+  .enablePlugins(JmhPlugin)
+  .dependsOn(softphone4s)
+  .settings(
+    name           := "softphone4s-bench",
+    publish / skip := true
+  )
+
 lazy val softphone4sDemo = project
   .in(file("softphone4s-demo"))
   .dependsOn(softphone4s, softphone4sOtel4s)

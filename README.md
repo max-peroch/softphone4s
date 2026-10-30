@@ -14,6 +14,7 @@ A purely functional SIP/VoIP client for the Typelevel ecosystem, built on
 | `softphone4s`        | Core SIP/RTP client (this README) |
 | `softphone4s-otel4s` | OpenTelemetry tracing wrapper around `Softphone[F]` |
 | `softphone4s-demo`   | Runnable example app (not published) |
+| `softphone4s-bench`  | JMH benchmarks for the SIP codec (not published) |
 
 ## Installation
 

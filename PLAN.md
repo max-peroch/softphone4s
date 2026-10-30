@@ -38,7 +38,16 @@ No target server is chosen yet. Integration tests use Asterisk and FreeSWITCH in
 
 Each phase ships on its own with tests, and updates README and CHANGELOG.
 
-### Phase 0: Foundation refactor (blocks everything)
+### Phase 0: Foundation refactor (blocks everything) — done
+
+Delivered, with where it differs from the list below:
+
+- Items 1, 3 and 5 as written, plus the headers the stack acts on are typed (`Via`, `NameAddr`, `Tag`, `Branch`, `CallId`, `CSeqNumber`, `MaxForwards`, `MediaType`, Digest challenges and credentials). Unmodelled headers are carried in order as `ExtensionHeader`s. The `Update`, `Prack` and `Refer` methods are still to add, with their phases.
+- Item 2: the parser works on bytes, frames streams by `Content-Length`, and reports typed `ParseError`s. It is covered by property-based round trips and by a suite modelled on RFC 4475 (written for this project, not copied, so it is not the RFC's own message set). The baseline for the JMH benchmarks is in `softphone4s-bench/BASELINE.md`: parsing an INVITE takes about 56 µs and allocates about 38 KB, which is the first thing to optimise.
+- Item 4: `Entropy[F]`, `Transport[F]` and `Timers[F, Id]` with `TimerAction` exist, and `CallFsm` now emits timer actions for its invite and BYE timers.
+- `softphone4s-core` was **not** split out; see the decision under "Open decisions".
+
+Original list:
 
 1. **Message model:** replace `SipHeaders` with an ordered multi-map plus typed accessors (Via list, Contact list, Route, Record-Route, CSeq, and so on). Add methods: Register, Options, Info, Update, Prack (reserved), Refer (reserved). Keep unknown methods and headers lossless.
 2. **Parser/encoder (byte-based):** compact header forms (`v f t i m c l`), folding, multi-value lines, correct `Content-Length` (required for TCP framing), and tolerance for malformed input. Return typed `ParseError`s. Cover with property-based round-trip tests, RFC 4475 torture messages, and JMH benchmarks.
@@ -111,7 +120,7 @@ Each phase ships on its own with tests, and updates README and CHANGELOG.
 | `softphone4s-demo` | Example app |
 | `softphone4s-bench` | JMH benchmarks (not published) |
 
-Splitting the pure core keeps the "pure" boundary enforceable by the compiler (no cats-effect dependency in that module).
+A split of the pure core was tried and reverted. The idea was to make the "no effects" boundary compiler-enforced, but `ip4s-core` (which provides `Host`, `Port` and `IpAddress`) depends on `cats-effect` at compile scope, so a core module would still have it on its classpath and the rule would rest on a source-scan test. Until a second consumer needs the protocol without the runtime, the pure packages (`model`, `codec`, `fsm`) stay in `softphone4s` and are kept free of `cats.effect` and `fs2` imports (the exceptions are the media codecs, which are being rewritten in Phase 4).
 
 ## Order and sizing
 
@@ -126,5 +135,6 @@ PRACK/100rel, REFER transfer, session timers, WebSocket transport, DTLS-SRTP, fu
 ## Open decisions
 
 - Opus implementation (pure Scala/Java port vs. optional native module).
-- Whether to split `softphone4s-core` in Phase 0 or after Phase 1.
+- Whether and when to split `softphone4s-core` (tried and reverted at the end of Phase 0, see "Module layout"); revisit when something besides the runtime wants the pure protocol, or if the parser moves to `scodec.bits.ByteVector`.
+- Parser performance (see `softphone4s-bench/BASELINE.md`): where the allocation comes from, and a target for Phase 6's load test.
 - Which Docker images and versions pin the interop suite.
