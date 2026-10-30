@@ -153,7 +153,8 @@ object SipGen extends munit.Assertions {
       opaque    <- Gen.option(token())
       algorithm <- Gen.oneOf(DigestAlgorithm.values.toList)
       qop       <- Gen.someOf(Qop.values.toList).map(_.toSet)
-    } yield DigestChallenge(realm, nonce, opaque, algorithm, qop)
+      stale     <- Gen.oneOf(Staleness.values.toList)
+    } yield DigestChallenge(realm, nonce, opaque, algorithm, qop, stale)
 
   val authChallengeGen: Gen[AuthChallenge] = Gen.oneOf(
     digestChallengeGen.map(AuthChallenge.Digest(_)),

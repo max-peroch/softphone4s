@@ -61,7 +61,10 @@ object AuthChallenge {
       algorithm,
       fields
         .get("qop")
-        .fold(Set.empty[Qop])(_.split(',').toList.flatMap(Qop.fromToken).toSet)
+        .fold(Set.empty[Qop])(_.split(',').toList.flatMap(Qop.fromToken).toSet),
+      if fields.get("stale").exists(_.equalsIgnoreCase("true")) then
+        Staleness.Stale
+      else Staleness.Fresh
     )
 
   /** The text of a quoted-string or token; `None` if a quote is left open. */

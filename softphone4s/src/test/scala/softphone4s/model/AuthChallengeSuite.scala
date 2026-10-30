@@ -59,4 +59,26 @@ class AuthChallengeSuite extends FunSuite {
     val parsed = AuthChallenge.parse(challenge)
     assertEquals(AuthChallenge.parse(parsed.render), parsed)
   }
+
+  test("stale=true is read case-insensitively and rendered back") {
+    List("stale=true", "stale=TRUE", "stale=\"true\"").foreach { param =>
+      AuthChallenge.parse(s"""Digest realm="r", nonce="n", $param""") match {
+        case AuthChallenge.Digest(c) =>
+          assertEquals(c.staleness, Staleness.Stale, param)
+          assert(c.render.contains("stale=true"), c.render)
+        case other => fail(s"unexpected: $other")
+      }
+    }
+  }
+
+  test("a challenge without stale, or with stale=false, is fresh") {
+    List("", ", stale=false", ", stale=maybe").foreach { param =>
+      AuthChallenge.parse(s"""Digest realm="r", nonce="n"$param""") match {
+        case AuthChallenge.Digest(c) =>
+          assertEquals(c.staleness, Staleness.Fresh, param)
+          assert(!c.render.contains("stale"), c.render)
+        case other => fail(s"unexpected: $other")
+      }
+    }
+  }
 }

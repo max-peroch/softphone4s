@@ -11,7 +11,8 @@ final case class InviteCtx(
     callee: SipUri,
     localUri: SipUri,
     offerInInvite: Boolean, // false → INVITE had no SDP, answer goes in ACK
-    inviteTimeout: FiniteDuration // how long to wait for an answer (Timer B)
+    inviteTimeout: FiniteDuration, // how long to wait for an answer (Timer B)
+    authAttempts: Map[AuthKind, Int] = Map.empty // challenges answered so far
 )
 
 /** Sufficient state to reconstruct correct headers for all mid-dialog requests

@@ -151,4 +151,63 @@ class OutboundCallSuite extends CatsEffectSuite {
       assertEquals(result, Left(SoftphoneError.CallTimedOut))
     }
   }
+
+  test("wrong credentials: one retry, then the call is rejected, not looped") {
+    val unauthorized = SipResponse(
+      401,
+      "Unauthorized",
+      mkHeaders(cseq(1, SipMethod.Invite)).copy(
+        wwwAuthenticate = List(
+          AuthChallenge.parse("""Digest realm="test.local", nonce="n1"""")
+        )
+      )
+    )
+    val scenario = for {
+      supervisor <- Supervisor[IO]
+      random     <- Resource.eval(Random.scalaUtilRandom[IO])
+      timers     <- Timers.resource[IO, CallTimer]
+      media <- Resource.eval(MediaSession.create[IO](160, localIp, port"19003"))
+      sent  <- Resource.eval(cats.effect.Ref.of[IO, List[SipMessage]](Nil))
+      queue <- Resource.eval(Queue.unbounded[IO, SipMessage])
+      call  <- Resource.eval(
+        OutboundCall.create(
+          callId("auth@call"),
+          uri("sip:bob@test.local"),
+          msg => sent.update(msg :: _),
+          endpoint,
+          supervisor,
+          Entropy.fromRandom(random),
+          media,
+          timers,
+          5.seconds,
+          NoOpLogger.impl[IO]
+        )
+      )
+      _ <- Resource.make(
+        call.runEventLoop(Stream.fromQueueUnterminated(queue)).start
+      )(_.cancel)
+    } yield (call, sent, queue)
+
+    scenario.use { (call, sent, queue) =>
+      for {
+        _      <- queue.offer(unauthorized) >> queue.offer(unauthorized)
+        result <- call.awaitPickup.attempt.timeout(5.seconds)
+        out    <- sent.get
+      } yield {
+        assertEquals(
+          result,
+          Left(SoftphoneError.CallRejected(401, "Unauthorized"))
+        )
+        val invites = out.collect {
+          case r: SipRequest if r.method == SipMethod.Invite => r
+        }
+        assertEquals(invites.size, 2) // the first, and one authenticated retry
+        assert(
+          invites.head.headers.others.exists(_.name.matches("Authorization")),
+          "the retry carries credentials"
+        )
+        assert(invites.last.headers.others.isEmpty, "the first INVITE has none")
+      }
+    }
+  }
 }

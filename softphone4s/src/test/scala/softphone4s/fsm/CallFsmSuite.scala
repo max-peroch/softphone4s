@@ -109,7 +109,15 @@ class CallFsmSuite extends FunSuite {
         resp(407, "Proxy Auth Required", proxyAuth = List(challenge))
       )
     )
-    assertEquals(state, Inviting(baseCtx.copy(cseq = cseqNumber(2))))
+    assertEquals(
+      state,
+      Inviting(
+        baseCtx.copy(
+          cseq = cseqNumber(2),
+          authAttempts = Map(AuthKind.Proxy -> 1)
+        )
+      )
+    )
     assert(actions.exists {
       case SendAckForNon2xx(_, _) => true; case _ => false
     })
@@ -126,7 +134,15 @@ class CallFsmSuite extends FunSuite {
       Inviting(baseCtx),
       ResponseReceived(resp(401, "Unauthorized", wwwAuth = List(challenge)))
     )
-    assertEquals(state, Inviting(baseCtx.copy(cseq = cseqNumber(2))))
+    assertEquals(
+      state,
+      Inviting(
+        baseCtx.copy(
+          cseq = cseqNumber(2),
+          authAttempts = Map(AuthKind.Origin -> 1)
+        )
+      )
+    )
     assert(actions.exists {
       case RetryInviteWithAuth(_, AuthKind.Origin, _) => true;
       case _                                          => false
@@ -301,6 +317,85 @@ class CallFsmSuite extends FunSuite {
       step(ByeSent(active.dialog), TimerFired(CallTimer.ByeTimeout))
     assertEquals(state, Closed(LocalHangup))
     assert(actions.contains(NotifyHangup(LocalHangup)))
+  }
+
+  // ---- Authentication retries ---------------------------------------------
+
+  private val digest      = """Digest realm="sip.example.com", nonce="abc""""
+  private val staleDigest =
+    """Digest realm="sip.example.com", nonce="def", stale=true"""
+
+  private def isRetry(a: SipAction): Boolean = a match {
+    case RetryInviteWithAuth(_, _, _) => true
+    case _                            => false
+  }
+
+  private def unauthorized(challenge: String) =
+    ResponseReceived(resp(401, "Unauthorized", wwwAuth = List(challenge)))
+
+  test(
+    "a second 401 after we answered is final: wrong credentials do not loop"
+  ) {
+    val answered = baseCtx.copy(authAttempts = Map(AuthKind.Origin -> 1))
+    val (state, actions) = step(Inviting(answered), unauthorized(digest))
+    assertEquals(state, Failed(401, "Unauthorized"))
+    assert(actions.contains(NotifyHangup(Rejected(401, "Unauthorized"))))
+    assert(!actions.exists(isRetry))
+    assert(actions.contains(Timer(TimerAction.Cancel(CallTimer.InviteTimeout))))
+  }
+
+  test("a stale nonce earns one more answer") {
+    val answered = baseCtx.copy(authAttempts = Map(AuthKind.Origin -> 1))
+    val (state, actions) = step(Inviting(answered), unauthorized(staleDigest))
+    assert(actions.exists(isRetry))
+    state match {
+      case Inviting(ctx) =>
+        assertEquals(ctx.authAttempts, Map(AuthKind.Origin -> 2))
+        assertEquals(ctx.cseq, cseqNumber(2))
+      case other => fail(s"expected Inviting, got $other")
+    }
+  }
+
+  test("a stale nonce twice in a row is final") {
+    val answered = baseCtx.copy(authAttempts = Map(AuthKind.Origin -> 2))
+    val (state, actions) = step(Inviting(answered), unauthorized(staleDigest))
+    assertEquals(state, Failed(401, "Unauthorized"))
+    assert(!actions.exists(isRetry))
+  }
+
+  test("stale=true on the very first challenge is answered once, not twice") {
+    val (state, actions) = step(Inviting(baseCtx), unauthorized(staleDigest))
+    assert(actions.exists(isRetry))
+    state match {
+      case Inviting(ctx) =>
+        assertEquals(ctx.authAttempts, Map(AuthKind.Origin -> 1))
+      case other => fail(s"expected Inviting, got $other")
+    }
+  }
+
+  test("a proxy challenge after we answered the server is a different party") {
+    val answered     = baseCtx.copy(authAttempts = Map(AuthKind.Origin -> 1))
+    val (_, actions) = step(
+      Inviting(answered),
+      ResponseReceived(
+        resp(407, "Proxy Auth Required", proxyAuth = List(digest))
+      )
+    )
+    assert(actions.exists {
+      case RetryInviteWithAuth(_, AuthKind.Proxy, _) => true
+      case _                                         => false
+    })
+  }
+
+  test("a second 407 is final just like a second 401") {
+    val answered   = baseCtx.copy(authAttempts = Map(AuthKind.Proxy -> 1))
+    val (state, _) = step(
+      Inviting(answered),
+      ResponseReceived(
+        resp(407, "Proxy Auth Required", proxyAuth = List(digest))
+      )
+    )
+    assertEquals(state, Failed(407, "Proxy Auth Required"))
   }
 
   // ---- Timers -----------------------------------------------------------------

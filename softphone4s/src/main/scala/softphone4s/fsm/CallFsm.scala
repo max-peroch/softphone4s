@@ -96,6 +96,9 @@ object CallFsm {
   /** RFC 3261 Timer F: 64 * T1, with T1 = 500 ms. */
   val ByeTimeoutAfter: FiniteDuration = 32.seconds
 
+  /** One answer, plus one more if the server reports a stale nonce. */
+  private val MaxAuthAttempts = 2
+
   private val Trying            = 100
   private val Ringing           = 180
   private val SessionProgress   = 183
@@ -244,6 +247,22 @@ object CallFsm {
       )
     )
 
+  private def attempts(ctx: InviteCtx, kind: AuthKind): Int =
+    ctx.authAttempts.getOrElse(kind, 0)
+
+  /** We answer a challenge once. A second one means the credentials were
+    * refused, so it is final, unless the server says the nonce only expired,
+    * which earns one more try (RFC 3261 §22.2, RFC 2617 §3.2.1).
+    */
+  private def mayAnswer(
+      ctx: InviteCtx,
+      kind: AuthKind,
+      challenge: DigestChallenge
+  ): Boolean = {
+    val made = attempts(ctx, kind)
+    made == 0 || (made < MaxAuthAttempts && challenge.staleness == Staleness.Stale)
+  }
+
   private def answerChallenge(
       ctx: InviteCtx,
       response: SipResponse,
@@ -254,8 +273,12 @@ object CallFsm {
       .collectFirst {
         case AuthChallenge.Digest(c) if c.isAnswerable => c
       }
+      .filter(challenge => mayAnswer(ctx, kind, challenge))
       .fold(reject(ctx, response)) { challenge =>
-        val newCtx = ctx.copy(cseq = ctx.cseq.next)
+        val newCtx = ctx.copy(
+          cseq = ctx.cseq.next,
+          authAttempts = ctx.authAttempts.updated(kind, attempts(ctx, kind) + 1)
+        )
         go(
           Inviting(newCtx),
           List(
