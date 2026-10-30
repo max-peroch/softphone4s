@@ -39,6 +39,12 @@ private final class TracedCall[F[_]: Async](
 
   def awaitHangup: F[Unit] =
     tracer.span("softphone4s.call.awaitHangup").surround(underlying.awaitHangup)
+
+  def hold: F[Unit] =
+    tracer.span("softphone4s.call.hold").surround(underlying.hold)
+
+  def resume: F[Unit] =
+    tracer.span("softphone4s.call.resume").surround(underlying.resume)
 }
 
 /** `Softphone` decorator adding OpenTelemetry spans around call setup, media,

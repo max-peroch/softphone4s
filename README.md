@@ -39,6 +39,11 @@ softphone4s handles outbound SIP calls end-to-end:
   follows the new address, and a hold (`sendonly`, `inactive` or `0.0.0.0`)
   stops our outgoing RTP until the call resumes. A re-INVITE without SDP is
   refused `488`.
+- **Hold and resume**: `Call.hold` and `Call.resume` send a re-INVITE offering
+  `sendonly` or `sendrecv`. A clash with the remote party's own re-INVITE is
+  settled as RFC 3261 §14 says: the remote's gets `491`, and if ours gets a
+  `491` it is sent again after a random delay (2.1–4 s for the party that
+  placed the call, 0–2 s for the other). A `408` or `481` ends the call.
 - **Dialogs** (RFC 3261 §12): requests within a call follow the Record-Route
   set, with loose or strict routing, so a BYE goes to the first route hop and
   not straight to the remote's Contact. A request whose tags do not match the

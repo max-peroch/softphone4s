@@ -538,10 +538,15 @@ class OutboundCallSuite extends CatsEffectSuite {
       nextOf(f.peer, SipMethod.Ack).as((invite, ok))
     }
 
-  private def statusOf(peer: Transport[IO], method: SipMethod) =
+  private def statusOf(
+      peer: Transport[IO],
+      method: SipMethod,
+      wanted: Int => Boolean = _ => true
+  ) =
     peer.messages
       .collectFirst {
-        case Inbound(_, r: SipResponse) if r.headers.cseq.method == method =>
+        case Inbound(_, r: SipResponse)
+            if r.headers.cseq.method == method && wanted(r.statusCode) =>
           r.statusCode
       }
       .compile
@@ -593,6 +598,100 @@ class OutboundCallSuite extends CatsEffectSuite {
         assertEquals(first, 200)
         assertEquals(refused, 500)
       }
+    }
+  }
+
+  // ---- Our own hold and resume -----------------------------------------------
+
+  private def sdpAnswering(direction: String) =
+    s"v=0\r\nc=IN IP4 127.0.0.1\r\nt=0 0\r\nm=audio 40000 RTP/AVP 0\r\na=$direction\r\n"
+
+  private def okTo(reinvite: SipRequest, direction: String): SipResponse = {
+    val base = TransactionMessages.responseTo(reinvite, 200, "OK")
+    base.copy(
+      headers = base.headers.copy(
+        contacts = List(nameAddr("<sip:bob@127.0.0.1:5061>")),
+        contentType = Some(MediaType.Sdp)
+      ),
+      body = sdpAnswering(direction)
+    )
+  }
+
+  test(
+    "a hold sends a sendonly re-INVITE in the dialog, and the 200 is ACKed"
+  ) {
+    fixture(port"19016").use { f =>
+      for {
+        established <- established(f)
+        (invite, ok) = established
+        _        <- f.call.hold
+        reinvite <- nextOf(f.peer, SipMethod.Invite)
+        _        <- reply(f.peer, okTo(reinvite, "recvonly"))
+        ack      <- nextOf(f.peer, SipMethod.Ack)
+        _        <- f.call.resume
+        resume   <- nextOf(f.peer, SipMethod.Invite)
+      } yield {
+        assertEquals(reinvite.headers.callId, invite.headers.callId)
+        assertEquals(
+          reinvite.headers.cseq.seq.value,
+          invite.headers.cseq.seq.value + 1
+        )
+        assertEquals(reinvite.headers.to.tag, ok.headers.to.tag)
+        assertEquals(reinvite.requestUri.render, "sip:bob@127.0.0.1:5061")
+        assert(reinvite.body.contains("a=sendonly"), reinvite.body)
+        assertEquals(ack.headers.cseq.seq, reinvite.headers.cseq.seq)
+        assertEquals(
+          resume.headers.cseq.seq.value,
+          reinvite.headers.cseq.seq.value + 1
+        )
+        assert(resume.body.contains("a=sendrecv"), resume.body)
+      }
+    }
+  }
+
+  test("a 491 to the re-INVITE is retried after a delay, with a new CSeq") {
+    fixture(port"19017").use { f =>
+      for {
+        _     <- established(f)
+        _     <- f.call.hold
+        first <- nextOf(f.peer, SipMethod.Invite)
+        _     <- reply(
+          f.peer,
+          TransactionMessages.responseTo(first, 491, "Request Pending")
+        )
+        second <- nextOf(f.peer, SipMethod.Invite).timeout(6.seconds)
+      } yield {
+        assertEquals(
+          second.headers.cseq.seq.value,
+          first.headers.cseq.seq.value + 1
+        )
+        assertEquals(second.headers.callId, first.headers.callId)
+        assert(second.body.contains("a=sendonly"), second.body)
+      }
+    }
+  }
+
+  test("the remote's re-INVITE while ours is pending is answered 491") {
+    fixture(port"19018").use { f =>
+      for {
+        established <- established(f)
+        (invite, ok) = established
+        _ <- f.call.hold
+        _ <- nextOf(f.peer, SipMethod.Invite)
+        base   = byeFromPeer(invite, ok)
+        theirs = base.copy(
+          method = SipMethod.Invite,
+          headers = base.headers.copy(
+            cseq = cseq(7, SipMethod.Invite),
+            vias = NonEmptyList.one(
+              via("SIP/2.0/UDP 127.0.0.1:5061;branch=z9hG4bKglare")
+            )
+          ),
+          body = sdpAnswering("sendrecv")
+        )
+        _       <- f.peer.send(us, theirs)
+        refused <- statusOf(f.peer, SipMethod.Invite, _ >= 200)
+      } yield assertEquals(refused, 491)
     }
   }
 }

@@ -23,6 +23,16 @@ trait Call[F[_]] {
 
   /** Suspends until the remote party ends the call. */
   def awaitHangup: F[Unit]
+
+  /** Asks the remote party to put the call on hold (a re-INVITE offering
+    * `sendonly`). Returns once the request is queued; the call carries on if it
+    * is refused, and a clash with the remote party's own re-INVITE (491) is
+    * retried after a random delay.
+    */
+  def hold: F[Unit]
+
+  /** Takes the call off hold (a re-INVITE offering `sendrecv`). */
+  def resume: F[Unit]
 }
 
 trait Softphone[F[_]] {

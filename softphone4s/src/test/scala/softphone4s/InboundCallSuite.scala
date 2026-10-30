@@ -426,4 +426,31 @@ class InboundCallSuite extends CatsEffectSuite {
       }
     }
   }
+
+  test("holding an incoming call sends a sendonly re-INVITE to the caller") {
+    scenario().use { (phone, peer) =>
+      for {
+        call     <- ring(phone, peer)
+        accepted <- call.accept.allocated
+        ok       <- response(peer, status(200))
+        _        <- send(peer, inDialog(SipMethod.Ack, 1, ok))
+        _        <- accepted._1.awaitPickup.timeout(5.seconds)
+        _        <- accepted._1.hold
+        reinvite <- request(peer, SipMethod.Invite)
+        answer = SipResponse(
+          200,
+          "OK",
+          reinvite.headers.copy(contentType = Some(MediaType.Sdp)),
+          "v=0\r\nc=IN IP4 127.0.0.1\r\nt=0 0\r\nm=audio 19300 RTP/AVP 0\r\na=recvonly\r\n"
+        )
+        _   <- send(peer, answer)
+        ack <- request(peer, SipMethod.Ack)
+        _   <- accepted._2
+      } yield {
+        assert(reinvite.body.contains("a=sendonly"), reinvite.body)
+        assertEquals(reinvite.headers.cseq.seq.value, 2)
+        assertEquals(ack.headers.cseq.seq, reinvite.headers.cseq.seq)
+      }
+    }
+  }
 }
