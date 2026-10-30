@@ -23,7 +23,6 @@ import javax.sound.sampled.AudioFormat
   */
 class SoftphoneStreaming[F[_]: Async: Network] private (
     config: SoftphoneConfig,
-    localIp: IpAddress,
     sendRaw: (SocketAddress[IpAddress], SipMessage) => F[Unit],
     routes: Ref[F, Map[String, Channel[F, SipMessage]]],
     nextCallIndex: Ref[F, Int],
@@ -32,7 +31,7 @@ class SoftphoneStreaming[F[_]: Async: Network] private (
     logger: StructuredLogger[F]
 ) extends Softphone[F] {
 
-  private def newCallId(): F[String] =
+  private def newCallId(localIp: IpAddress): F[String] =
     random
       .nextBytes(10)
       .map(_.map("%02x".format(_)).mkString)
@@ -57,9 +56,14 @@ class SoftphoneStreaming[F[_]: Async: Network] private (
   ): Resource[F, Call[F]] =
     for {
       calleeAddr <- Resource.eval(resolveCalleeAddress(callee.value))
-      builder    <- Resource.eval(allocateBuilder)
-      callId     <- Resource.eval(newCallId())
-      sipCh      <- Resource.make(
+      localIp    <- Resource.eval(
+        localIpFor(calleeAddr).flatTap(ip =>
+          logger.info(Map("address" -> ip.toString))("Advertising local IP")
+        )
+      )
+      builder <- Resource.eval(allocateBuilder(localIp))
+      callId  <- Resource.eval(newCallId(localIp))
+      sipCh   <- Resource.make(
         Channel
           .bounded[F, SipMessage](128)
           .flatTap(ch => routes.update(_ + (callId -> ch)))
@@ -85,7 +89,31 @@ class SoftphoneStreaming[F[_]: Async: Network] private (
     resolveHost(host).map(ip => SocketAddress(ip, config.serverPort))
   }
 
-  private def allocateBuilder: F[SipMessageBuilder] =
+  /** The address the OS would send from to reach `remote`: what the SDP and
+    * Contact must advertise for replies to come back. Connecting a UDP socket
+    * only picks the route; nothing is sent. (The first network interface would
+    * not do: on macOS it can be Docker Desktop's bridge, 192.168.65.1.) The SDP
+    * advertises IN IP4, so anything but IPv4 falls back.
+    */
+  private def localIpFor(remote: SocketAddress[IpAddress]): F[IpAddress] =
+    Resource
+      .fromAutoCloseable(Async[F].blocking(new java.net.DatagramSocket()))
+      .use(socket =>
+        Async[F].blocking {
+          socket.connect(remote.toInetSocketAddress)
+          socket.getLocalAddress
+        }
+      )
+      .map(address =>
+        Option(address)
+          .filterNot(_.isAnyLocalAddress)
+          .map(IpAddress.fromInetAddress)
+          .collect { case v4: Ipv4Address => v4: IpAddress }
+          .getOrElse(config.localIpFallback)
+      )
+      .handleError(_ => config.localIpFallback)
+
+  private def allocateBuilder(localIp: IpAddress): F[SipMessageBuilder] =
     nextCallIndex.getAndUpdate(_ + 1).flatMap { callIndex =>
       val portsPerCall = 2
       val rtpPortInt   = config.baseRtpPort.value + callIndex * portsPerCall
@@ -148,7 +176,6 @@ object SoftphoneStreaming {
       logger: StructuredLogger[F]
   ): Resource[F, SoftphoneStreaming[F]] =
     for {
-      localIp      <- Resource.eval(detectLocalIp(config.localIpFallback))
       sipTransport <- SipTransport[F](
         config.localSipPort,
         config.bindAddress,
@@ -179,7 +206,6 @@ object SoftphoneStreaming {
       random    <- Resource.eval(SecureRandom.javaSecuritySecureRandom[F])
     } yield new SoftphoneStreaming(
       config,
-      localIp,
       sendRaw,
       routes,
       callIndex,
@@ -187,17 +213,4 @@ object SoftphoneStreaming {
       pcmFrameBytes = audioFormat.getFrameSize * RtpTransport.PacketSamples,
       logger
     )
-
-  private def detectLocalIp[F[_]: Async](fallback: IpAddress): F[IpAddress] =
-    Async[F].blocking {
-      import java.net.{Inet4Address, NetworkInterface}
-      import scala.jdk.CollectionConverters.*
-      NetworkInterface.getNetworkInterfaces.asScala
-        .filterNot(i => i.isLoopback || !i.isUp || i.isVirtual)
-        .flatMap(_.getInetAddresses.asScala)
-        .collectFirst { case a: Inet4Address =>
-          IpAddress.fromString(a.getHostAddress).getOrElse(fallback)
-        }
-        .getOrElse(fallback)
-    }
 }

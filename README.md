@@ -132,7 +132,7 @@ example wiring in tracing and audio hardware.
 | `server-port`       | `Port`      | `5060`       | Remote SIP server port                             |
 | `base-rtp-port`     | `Port`      | `8000`       | Base RTP port; each concurrent call uses two ports |
 | `bind-address`      | `IpAddress` | `0.0.0.0`    | Local bind address                                 |
-| `local-ip-fallback` | `IpAddress` | `127.0.0.1`  | Fallback when network interface detection fails    |
+| `local-ip-fallback` | `IpAddress` | `127.0.0.1`  | Advertised when no IPv4 route to the SIP server is found |
 | `hangup-timeout`    | `Duration`  | `5 seconds`  | Grace period for event loop drain on release       |
 | `invite-timeout`    | `Duration`  | `32 seconds` | Max wait for remote to answer (RFC 3261 Timer B)   |
 
