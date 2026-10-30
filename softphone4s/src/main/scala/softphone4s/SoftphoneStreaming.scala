@@ -27,7 +27,8 @@ import softphone4s.transport.{
   RoutedTransport,
   RtpTransport,
   SipTransport,
-  TcpTransport
+  TcpTransport,
+  TlsTransport
 }
 import softphone4s.ua.{DialogInput, InboundCall, MediaSession, OutboundCall}
 
@@ -216,13 +217,21 @@ class SoftphoneStreaming[F[_]: Async: Network] private (
       account: Account,
       target: SipUri
   ): F[TransportProtocol] =
-    available(target.transport.getOrElse(account.config.transport))
+    available(
+      target.transport.getOrElse(
+        // A sips: URI asks for TLS all the way (RFC 3261 §26.2.2).
+        if target.scheme == SipScheme.Sips then TransportProtocol.Tls
+        else account.config.transport
+      )
+    )
 
   /** `transport` itself, if we can speak it. */
   private def available(transport: TransportProtocol): F[TransportProtocol] =
     transport match {
-      case TransportProtocol.Udp | TransportProtocol.Tcp => transport.pure[F]
-      case other                                         =>
+      case TransportProtocol.Udp | TransportProtocol.Tcp |
+          TransportProtocol.Tls =>
+        transport.pure[F]
+      case other =>
         Async[F].raiseError(SoftphoneError.TransportUnavailable(other.token))
     }
 
@@ -455,7 +464,8 @@ object SoftphoneStreaming {
       )
       tcp <- TcpTransport
         .resource[F](config.bindAddress, config.tcp, logger)
-      transport = RoutedTransport(udp, tcp)
+      tls <- TlsTransport.resource[F](config.bindAddress, config.tls, logger)
+      transport = RoutedTransport(udp, tcp, tls)
       layer <- TransactionManager.resource[F](
         transport,
         TransactionConfig(),

@@ -10,6 +10,7 @@ import pureconfig.ConfigSource
 import softphone4s.SipLiterals.*
 import softphone4s.config.{AccountConfig, SoftphoneConfig}
 import softphone4s.model.*
+import softphone4s.transport.{HostnameVerification, TlsVersion}
 import softphone4s.transport.{Inbound, SipTransport, Transport}
 
 import javax.sound.sampled.AudioFormat
@@ -308,5 +309,53 @@ class MultiAccountSuite extends CatsEffectSuite {
       .string("user = a\npassword = b\nrealm = c\ntransport = carrier-pigeon")
       .load[SoftphoneConfig]
     assert(parsed.isLeft)
+  }
+
+  test("the tls block is read from configuration") {
+    val parsed = ConfigSource
+      .string(
+        """user = alice
+          |password = pw
+          |realm = example.com
+          |transport = tls
+          |tls {
+          |  trust-store { path = "/etc/sip/trust.p12", password = "t" }
+          |  client-certificate { path = "/etc/sip/me.jks", password = "c", store-type = "JKS" }
+          |  min-version = "1.3"
+          |  hostname-verification = "skip"
+          |  cipher-suites = ["TLS_AES_128_GCM_SHA256"]
+          |  connection { idle-timeout = 1 minute }
+          |}""".stripMargin
+      )
+      .load[SoftphoneConfig]
+      .fold(failures => fail(failures.prettyPrint()), identity)
+    assertEquals(parsed.transport, TransportProtocol.Tls)
+    assertEquals(
+      parsed.tls.trustStore.map(_.path.toString),
+      Some("/etc/sip/trust.p12")
+    )
+    assertEquals(parsed.tls.trustStore.map(_.storeType), Some("PKCS12"))
+    assertEquals(parsed.tls.clientCertificate.map(_.storeType), Some("JKS"))
+    assertEquals(parsed.tls.minVersion, TlsVersion.Tls13)
+    assertEquals(parsed.tls.hostnameVerification, HostnameVerification.Skip)
+    assertEquals(parsed.tls.cipherSuites, Some(List("TLS_AES_128_GCM_SHA256")))
+    assertEquals(parsed.tls.connection.idleTimeout, 1.minute)
+  }
+
+  test("TLS is verified by default, from 1.2 up") {
+    val defaults = SoftphoneConfig("a", "b", "c").tls
+    assertEquals(defaults.hostnameVerification, HostnameVerification.Verify)
+    assertEquals(defaults.minVersion, TlsVersion.Tls12)
+    assertEquals(defaults.trustStore, None)
+  }
+
+  test("an unknown TLS version or verification mode is an error") {
+    List("min-version = \"1.0\"", "hostname-verification = \"maybe\"").foreach {
+      line =>
+        val parsed = ConfigSource
+          .string(s"user = a\npassword = b\nrealm = c\ntls { $line }")
+          .load[SoftphoneConfig]
+        assert(parsed.isLeft, line)
+    }
   }
 }

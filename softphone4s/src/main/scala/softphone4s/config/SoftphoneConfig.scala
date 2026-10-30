@@ -5,7 +5,7 @@ import com.comcast.ip4s.*
 import pureconfig.*
 import pureconfig.generic.semiauto.*
 import softphone4s.model.TransportProtocol
-import softphone4s.transport.StreamConfig
+import softphone4s.transport.{StreamConfig, TlsConfig}
 
 import scala.concurrent.duration.*
 
@@ -30,7 +30,8 @@ case class SoftphoneConfig(
     answerTimeout: FiniteDuration = 60.seconds,
     additionalAccounts: List[AccountConfig] = Nil,
     transport: TransportProtocol = TransportProtocol.Udp,
-    tcp: StreamConfig = StreamConfig()
+    tcp: StreamConfig = StreamConfig(),
+    tls: TlsConfig = TlsConfig()
 ) {
 
   /** The account `call` and `register` use. */

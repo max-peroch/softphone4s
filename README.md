@@ -33,12 +33,21 @@ Scala, Cats Effect, and fs2 versions this release was built against.
 
 softphone4s handles outbound SIP calls end-to-end:
 
-- **SIP** (RFC 3261) over UDP or TCP — INVITE / ACK / BYE / CANCEL. A call, or
+- **SIP** (RFC 3261) over UDP, TCP or TLS — INVITE / ACK / BYE / CANCEL. A call, or
   an account's registration, uses the transport you configure; a TCP
   connection is made when first needed, shared by everything sent to that
   destination, and closed after it has been idle for `tcp.idle-timeout`.
-  Retransmission is left to TCP, so TCP transactions skip their timers. TLS is
-  not available yet.
+  Retransmission is left to TCP, so TCP and TLS transactions skip their timers.
+- **TLS** (RFC 3261 §26, RFC 5922): the server is identified by the host the
+  request is addressed to (its first Route, else its Request-URI), which is sent
+  as the SNI name and, by default, checked against the certificate. Trust comes
+  from your own trust store or the JVM's; a client certificate can be presented
+  (mutual TLS), the oldest protocol version is yours to set (1.2 by default),
+  and a handshake that fails is a failed connection, not a lost message.
+  Verification fails closed: a destination given as an IP address has no name
+  to check, so use a host name, or switch verification off knowingly. A
+  `sips:` URI selects TLS. Incoming TLS connections are not accepted yet, only
+  the ones we open.
 - **Mid-call requests from the remote party**: OPTIONS is answered with our
   `Allow` list; a re-INVITE or UPDATE with SDP is answered with our SDP, media
   follows the new address, and a hold (`sendonly`, `inactive` or `0.0.0.0`)
@@ -240,10 +249,15 @@ account every call is taken. Two accounts cannot have the same user.
 | `invite-timeout`    | `Duration`  | `32 seconds` | Max wait for remote to answer (RFC 3261 Timer B)   |
 | `register-expires`  | `Duration`  | `1 hour`     | Binding lifetime asked for when registering        |
 | `answer-timeout`    | `Duration`  | `60 seconds` | How long an incoming call may ring before `480`     |
-| `transport`         | `udp`/`tcp` | `udp`        | Transport of the default account (`tls` is refused for now) |
+| `transport`         | `udp`/`tcp`/`tls` | `udp`  | Transport of the default account                  |
 | `tcp.connect-timeout` | `Duration` | `5 seconds` | How long to wait for a TCP connection           |
 | `tcp.idle-timeout`  | `Duration`  | `5 minutes`  | A TCP connection with nothing sent or received for this long is closed |
 | `tcp.framing.max-header-bytes` / `max-body-bytes` | `Int` | 16 KiB / 1 MiB | Largest message a TCP connection may carry before it is dropped |
+| `tls.trust-store` / `tls.client-certificate` | `{ path, password, store-type }` | JVM trust / none | Key stores for the certificates we trust and the one we present (`store-type` is `PKCS12` or `JKS`) |
+| `tls.min-version`   | `1.2`/`1.3` | `1.2`        | Oldest TLS version accepted                         |
+| `tls.cipher-suites` | list        | JVM default  | Cipher suites to allow, by Java name                |
+| `tls.hostname-verification` | `verify`/`skip` | `verify` | Whether the certificate must name the host we meant |
+| `tls.connection`    | as `tcp`    | as `tcp`     | Connect and idle timeouts and size limits for TLS    |
 | `additional-accounts` | list      | empty        | More accounts: each has `user`, `password`, `realm`, and optionally `server-port` and `register-expires` |
 
 ## Errors
@@ -259,7 +273,8 @@ All failures surface as `SoftphoneError` (a sealed `RuntimeException` hierarchy)
 | `CallTimedOut` | No answer within `invite-timeout` |
 | `CallCancelled` | BYE received from remote, or local hangup |
 | `TransportFailed` | The SIP transport could not send a request of the call |
-| `TransportUnavailable(transport)` | The configured transport (`tls`) is not available yet |
+| `TransportUnavailable(transport)` | A transport other than UDP, TCP or TLS was asked for |
+| `TlsConfigurationInvalid(reason)` | A TLS key store cannot be read or has the wrong password |
 | `UnknownAccount(account)` | `callAs` or `registerAs` named an account the softphone does not hold |
 | `DuplicateAccount(user)` | Two configured accounts share a user |
 | `RtpPortExhausted(port)` | Computed RTP port exceeds 65535 (too many concurrent calls) |
