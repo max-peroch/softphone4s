@@ -40,13 +40,13 @@ class OutboundCallSuite extends CatsEffectSuite {
   private val ok200 = SipResponse(
     200,
     "OK",
-    mkHeaders(CSeq(1, SipMethod.Invite), to = "<sip:bob@test.local>;tag=rtag")
+    mkHeaders(cseq(1, SipMethod.Invite), to = "<sip:bob@test.local>;tag=rtag")
   )
 
   private val byeRequest = SipRequest(
     SipMethod.Bye,
     uri("sip:test@test.local"),
-    mkHeaders(CSeq(1, SipMethod.Bye))
+    mkHeaders(cseq(1, SipMethod.Bye))
   )
 
   private val activeCall

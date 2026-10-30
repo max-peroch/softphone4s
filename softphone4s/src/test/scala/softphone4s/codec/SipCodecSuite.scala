@@ -28,7 +28,7 @@ class SipCodecSuite extends FunSuite {
         assertEquals(req.method, SipMethod.Invite)
         assertEquals(req.requestUri.render, "sip:+1234@example.com")
         assertEquals(req.headers.callId.value, "abc@192.168.1.1")
-        assertEquals(req.headers.cseq, CSeq(1, SipMethod.Invite))
+        assertEquals(req.headers.cseq, cseq(1, SipMethod.Invite))
         assertEquals(req.headers.from.render, "<sip:user@realm>;tag=abc")
       case other => fail(s"unexpected: $other")
     }
@@ -70,7 +70,12 @@ class SipCodecSuite extends FunSuite {
     SipCodec.decode(raw) match {
       case Right(res: SipResponse) =>
         assertEquals(res.statusCode, 407)
-        assert(res.headers.proxyAuthenticate.exists(_.contains("testnonce")))
+        res.headers.proxyAuthenticate match {
+          case List(AuthChallenge.Digest(c)) =>
+            assertEquals(c.nonce.value, "testnonce")
+            assertEquals(c.realm, "sip.example.com")
+          case other => fail(s"unexpected challenges: $other")
+        }
       case other => fail(s"unexpected: $other")
     }
   }
@@ -157,7 +162,7 @@ class SipCodecSuite extends FunSuite {
         vias = NonEmptyList.one(
           via("SIP/2.0/UDP 192.168.1.1:5060;branch=z9hG4bKtest")
         ),
-        cseq = CSeq(2, SipMethod.Bye),
+        cseq = cseq(2, SipMethod.Bye),
         contacts = List(nameAddr("<sip:user@192.168.1.1:5060>"))
       )
     )
@@ -165,7 +170,7 @@ class SipCodecSuite extends FunSuite {
       case Right(decoded: SipRequest) =>
         assertEquals(decoded.method, SipMethod.Bye)
         assertEquals(decoded.headers.callId, callId("roundtrip@host"))
-        assertEquals(decoded.headers.cseq, CSeq(2, SipMethod.Bye))
+        assertEquals(decoded.headers.cseq, cseq(2, SipMethod.Bye))
         assertEquals(decoded.requestUri.render, "sip:callee@host")
       case other => fail(s"unexpected: $other")
     }
@@ -242,7 +247,7 @@ class SipCodecSuite extends FunSuite {
           via("SIP/2.0/UDP 10.0.0.1;branch=z9hG4bK1"),
           via("SIP/2.0/UDP 10.0.0.2;branch=z9hG4bK2")
         ),
-        cseq = CSeq(1, SipMethod.Options),
+        cseq = cseq(1, SipMethod.Options),
         contacts =
           List(nameAddr("<sip:a@10.0.0.9>"), nameAddr("<sip:b@10.0.0.9>")),
         others = List(

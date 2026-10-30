@@ -7,7 +7,7 @@ import fs2.concurrent.Channel
 import fs2.{Pipe, Stream}
 import org.typelevel.log4cats.StructuredLogger
 import softphone4s.Call
-import softphone4s.codec.{DigestAuth, SdpCodec}
+import softphone4s.codec.SdpCodec
 import softphone4s.fsm.*
 import softphone4s.fsm.SipMessages.*
 import softphone4s.model.*
@@ -26,15 +26,13 @@ private[softphone4s] class OutboundCall[F[_]: Async] private (
     endpoint: LocalEndpoint,
     supervisor: Supervisor[F],
     inviteBranch: Ref[F, Branch],
-    nonceCounts: Ref[F, Map[String, Int]],
+    nonceCounts: Ref[F, Map[Nonce, NonceCount]],
     random: Random[F],
     media: MediaSession[F],
     inviteTimeout: FiniteDuration,
     logger: StructuredLogger[F]
 ) extends Call[F] {
 
-  private def newHex(byteCount: Int): F[String] =
-    random.nextBytes(byteCount).map(_.map("%02x".format(_)).mkString)
   private def newBranch(): F[Branch] = random.nextBytes(8).map(Branch.fromBytes)
 
   private def hangupInterrupt: F[Either[Throwable, Unit]] =
@@ -125,31 +123,29 @@ private[softphone4s] class OutboundCall[F[_]: Async] private (
             )
         }
 
-      case RetryInviteWithAuth(ctx, headerName, challengeValue) =>
+      case RetryInviteWithAuth(ctx, kind, challenge) =>
         for {
-          cnonce     <- newHex(8)
-          nonceCount <- challengeValue
-            .flatMap(DigestAuth.extractNonce)
-            .fold(Async[F].pure(1)) { nonce =>
-              nonceCounts.modify { m =>
-                val next = m.getOrElse(nonce, 0) + 1
-                (m + (nonce -> next), next)
-              }
-            }
-          authHeader = endpoint.computeAuthHeader(
-            ctx.callee,
-            headerName,
-            challengeValue,
-            cnonce,
-            nonceCount
+          cnonce     <- random.nextBytes(8).map(Cnonce.fromBytes)
+          nonceCount <- nonceCounts.modify { m =>
+            val next = m.get(challenge.nonce).fold(NonceCount.One)(_.next)
+            (m.updated(challenge.nonce, next), next)
+          }
+          authHeader = Some(
+            endpoint.authorizationFor(
+              kind,
+              ctx.callee,
+              challenge,
+              cnonce,
+              nonceCount
+            )
           )
           branch <- newBranch()
           _      <- inviteBranch.set(branch)
           _      <- logger.debug(
             Map(
               "callId"     -> ctx.callId.value,
-              "cseq"       -> ctx.cseq.toString,
-              "nonceCount" -> nonceCount.toString
+              "cseq"       -> ctx.cseq.value.toString,
+              "nonceCount" -> nonceCount.render
             )
           )("Retrying INVITE with authentication")
           _ <- sendSip(
@@ -264,7 +260,7 @@ private[softphone4s] object OutboundCall {
       ctx = InviteCtx(
         callId = callId,
         localTag = localTag,
-        cseq = 1,
+        cseq = CSeqNumber.One,
         callee = callee,
         localUri = endpoint.accountUri,
         offerInInvite = true
@@ -274,7 +270,7 @@ private[softphone4s] object OutboundCall {
       dtmfChannel  <- Channel.bounded[F, DtmfDigit](64)
       hangupSignal <- Deferred[F, Unit]
       stateRef     <- Ref[F].of[CallState](CallState.Inviting(ctx))
-      nonceCounts  <- Ref[F].of(Map.empty[String, Int])
+      nonceCounts  <- Ref[F].of(Map.empty[Nonce, NonceCount])
       call = new OutboundCall(
         answered,
         callEnded,
@@ -299,7 +295,7 @@ private[softphone4s] object OutboundCall {
           callee,
           callId,
           localTag,
-          cseq = 1,
+          cseq = CSeqNumber.One,
           branch,
           extraHeaders = extraHeaders
         )

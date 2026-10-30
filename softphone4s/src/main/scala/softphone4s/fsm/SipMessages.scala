@@ -26,7 +26,7 @@ object SipMessages {
         callee: SipUri,
         callId: CallId,
         localTag: Tag,
-        cseq: Int,
+        cseq: CSeqNumber,
         branch: Branch,
         authHeader: Option[ExtensionHeader] = None,
         extraHeaders: List[ExtensionHeader] = Nil
@@ -41,33 +41,35 @@ object SipMessages {
           vias = vias(e, branch),
           cseq = CSeq(cseq, SipMethod.Invite),
           contacts = contacts(e),
-          contentType = Some("application/sdp"),
+          contentType = Some(MediaType.Sdp),
           others = authHeader.toList ++ extraHeaders
         ),
         body = SdpCodec.buildOffer(e.ip, e.rtpPort)
       )
 
-    def computeAuthHeader(
+    /** The Authorization or Proxy-Authorization header answering `challenge` on
+      * a retried INVITE to `callee`.
+      */
+    def authorizationFor(
+        kind: AuthKind,
         callee: SipUri,
-        headerName: FieldName,
-        challengeValue: Option[String],
-        cnonce: String,
-        nonceCount: Int = 1
-    ): Option[ExtensionHeader] =
-      challengeValue.map { challengeHeaderValue =>
-        ExtensionHeader(
-          headerName,
-          DigestAuth.compute(
-            "INVITE",
+        challenge: DigestChallenge,
+        cnonce: Cnonce,
+        nonceCount: NonceCount
+    ): ExtensionHeader =
+      ExtensionHeader(
+        kind.responseHeader,
+        DigestAuth
+          .respond(
+            challenge,
+            SipMethod.Invite.toString.toUpperCase,
             callee.render,
-            e.credentials.username,
-            e.credentials.password,
-            challengeHeaderValue,
+            e.credentials,
             cnonce,
             nonceCount
           )
-        )
-      }
+          .render
+      )
 
     // -----------------------------------------------------------------------
     // ACK
@@ -89,7 +91,7 @@ object SipMessages {
           cseq = CSeq(dialog.localCseq, SipMethod.Ack),
           contacts = contacts(e),
           routes = dialog.routeHeader,
-          contentType = sdpAnswer.map(_ => "application/sdp")
+          contentType = sdpAnswer.map(_ => MediaType.Sdp)
         ),
         body = sdpAnswer.getOrElse("")
       )
@@ -145,7 +147,7 @@ object SipMessages {
           from = NameAddr.withTag(dialog.localUri, dialog.localTag),
           to = remoteParty(dialog),
           vias = vias(e, branch),
-          cseq = CSeq(dialog.localCseq + 1, SipMethod.Bye),
+          cseq = CSeq(dialog.localCseq.next, SipMethod.Bye),
           contacts = contacts(e),
           routes = dialog.routeHeader
         )

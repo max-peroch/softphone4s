@@ -45,22 +45,22 @@ object SipCodec {
     out.append(s"To: ${headers.to.render}$CRLF")
     out.append(s"Call-ID: ${headers.callId.value}$CRLF")
     out.append(
-      s"CSeq: ${headers.cseq.seq} ${headers.cseq.method.toString.toUpperCase}$CRLF"
+      s"CSeq: ${headers.cseq.seq.value} ${headers.cseq.method.toString.toUpperCase}$CRLF"
     )
     headers.contacts.foreach(c => out.append(s"Contact: ${c.render}$CRLF"))
-    out.append(s"Max-Forwards: ${headers.maxForwards}$CRLF")
+    out.append(s"Max-Forwards: ${headers.maxForwards.value}$CRLF")
     headers.routes.foreach(r => out.append(s"Route: ${r.render}$CRLF"))
     headers.recordRoutes.foreach(r =>
       out.append(s"Record-Route: ${r.render}$CRLF")
     )
-    headers.wwwAuthenticate.foreach(v =>
-      out.append(s"WWW-Authenticate: $v$CRLF")
+    headers.wwwAuthenticate.foreach(c =>
+      out.append(s"WWW-Authenticate: ${c.render}$CRLF")
     )
-    headers.proxyAuthenticate.foreach(v =>
-      out.append(s"Proxy-Authenticate: $v$CRLF")
+    headers.proxyAuthenticate.foreach(c =>
+      out.append(s"Proxy-Authenticate: ${c.render}$CRLF")
     )
     headers.contentType.foreach(contentType =>
-      out.append(s"Content-Type: $contentType$CRLF")
+      out.append(s"Content-Type: ${contentType.render}$CRLF")
     )
     out.append(s"Content-Length: $bodyLength$CRLF")
     headers.others.foreach(h => out.append(s"${h.name.value}: ${h.value}$CRLF"))

@@ -20,7 +20,7 @@ class CallFsmSuite extends FunSuite {
   private val baseCtx = InviteCtx(
     callId = callId("call@test"),
     localTag = tag("ltag"),
-    cseq = 1,
+    cseq = cseqNumber(1),
     callee = uri("sip:callee@host"),
     localUri = uri("sip:user@realm"),
     offerInInvite = true
@@ -28,10 +28,10 @@ class CallFsmSuite extends FunSuite {
 
   private def mkHeaders(
       to: String = "<sip:callee@host>",
-      cseq: CSeq = CSeq(1, SipMethod.Invite),
+      cseq: CSeq = cseq(1, SipMethod.Invite),
       contact: String = "<sip:callee@host:5060>",
-      proxyAuth: Option[String] = None,
-      wwwAuth: Option[String] = None
+      proxyAuth: List[String] = Nil,
+      wwwAuth: List[String] = Nil
   ) = SipHeaders(
     callId = callId("call@test"),
     from = nameAddr("<sip:user@realm>;tag=ltag"),
@@ -40,8 +40,8 @@ class CallFsmSuite extends FunSuite {
       NonEmptyList.one(via("SIP/2.0/UDP 192.168.1.1:5060;branch=z9hG4bK1")),
     cseq = cseq,
     contacts = List(nameAddr(contact)),
-    proxyAuthenticate = proxyAuth,
-    wwwAuthenticate = wwwAuth
+    proxyAuthenticate = proxyAuth.map(challenge),
+    wwwAuthenticate = wwwAuth.map(challenge)
   )
 
   private def resp(
@@ -49,8 +49,8 @@ class CallFsmSuite extends FunSuite {
       reason: String,
       to: String = "<sip:callee@host>",
       body: String = "",
-      proxyAuth: Option[String] = None,
-      wwwAuth: Option[String] = None
+      proxyAuth: List[String] = Nil,
+      wwwAuth: List[String] = Nil
   ) = SipResponse(
     code,
     reason,
@@ -62,7 +62,7 @@ class CallFsmSuite extends FunSuite {
     SipRequest(
       method,
       uri("sip:user@realm"),
-      mkHeaders(cseq = CSeq(1, method)),
+      mkHeaders(cseq = cseq(1, method)),
       body
     )
 
@@ -103,15 +103,15 @@ class CallFsmSuite extends FunSuite {
     val (state, actions) = step(
       Inviting(baseCtx),
       ResponseReceived(
-        resp(407, "Proxy Auth Required", proxyAuth = Some(challenge))
+        resp(407, "Proxy Auth Required", proxyAuth = List(challenge))
       )
     )
-    assertEquals(state, Inviting(baseCtx.copy(cseq = 2)))
+    assertEquals(state, Inviting(baseCtx.copy(cseq = cseqNumber(2))))
     assert(actions.exists {
       case SendAckForNon2xx(_, _) => true; case _ => false
     })
     assert(actions.exists {
-      case RetryInviteWithAuth(_, FieldName.ProxyAuthorization, Some(_)) =>
+      case RetryInviteWithAuth(_, AuthKind.Proxy, _) =>
         true;
       case _ => false
     })
@@ -121,13 +121,67 @@ class CallFsmSuite extends FunSuite {
     val challenge        = """Digest realm="sip.example.com", nonce="abc""""
     val (state, actions) = step(
       Inviting(baseCtx),
-      ResponseReceived(resp(401, "Unauthorized", wwwAuth = Some(challenge)))
+      ResponseReceived(resp(401, "Unauthorized", wwwAuth = List(challenge)))
     )
-    assertEquals(state, Inviting(baseCtx.copy(cseq = 2)))
+    assertEquals(state, Inviting(baseCtx.copy(cseq = cseqNumber(2))))
     assert(actions.exists {
-      case RetryInviteWithAuth(_, FieldName.Authorization, Some(_)) => true;
-      case _                                                        => false
+      case RetryInviteWithAuth(_, AuthKind.Origin, _) => true;
+      case _                                          => false
     })
+  }
+
+  test("a 401 whose only challenge is not Digest is a final rejection") {
+    val (state, actions) = step(
+      Inviting(baseCtx),
+      ResponseReceived(
+        resp(401, "Unauthorized", wwwAuth = List("Negotiate abc"))
+      )
+    )
+    assertEquals(state, Failed(401, "Unauthorized"))
+    assert(actions.contains(NotifyHangup(Rejected(401, "Unauthorized"))))
+    assert(!actions.exists {
+      case RetryInviteWithAuth(_, _, _) => true; case _ => false
+    })
+  }
+
+  test("a 401 with no challenge at all is a final rejection") {
+    val (state, _) =
+      step(Inviting(baseCtx), ResponseReceived(resp(401, "Unauthorized")))
+    assertEquals(state, Failed(401, "Unauthorized"))
+  }
+
+  test("a 401 offering SHA-256 then MD5 is answered with the MD5 challenge") {
+    val (_, actions) = step(
+      Inviting(baseCtx),
+      ResponseReceived(
+        resp(
+          401,
+          "Unauthorized",
+          wwwAuth = List(
+            """Digest realm="r", nonce="n1", algorithm=SHA-256""",
+            """Digest realm="r", nonce="n2", algorithm=MD5"""
+          )
+        )
+      )
+    )
+    val nonces = actions.collect { case RetryInviteWithAuth(_, _, c) =>
+      c.nonce.value
+    }
+    assertEquals(nonces, List("n2"))
+  }
+
+  test("a challenge offering only auth-int cannot be answered") {
+    val (state, _) = step(
+      Inviting(baseCtx),
+      ResponseReceived(
+        resp(
+          401,
+          "Unauthorized",
+          wwwAuth = List("""Digest realm="r", nonce="n", qop="auth-int"""")
+        )
+      )
+    )
+    assertEquals(state, Failed(401, "Unauthorized"))
   }
 
   test(

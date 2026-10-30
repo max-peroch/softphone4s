@@ -5,7 +5,7 @@ package softphone4s.model
 final case class InviteCtx(
     callId: CallId,
     localTag: Tag,
-    cseq: Int,
+    cseq: CSeqNumber,
     callee: SipUri,
     localUri: SipUri,
     offerInInvite: Boolean // false → INVITE had no SDP, answer goes in ACK
@@ -31,7 +31,7 @@ final case class SipDialog(
     localUri: SipUri,
     remoteUri: SipUri,
     remoteTarget: SipUri,
-    localCseq: Int,
+    localCseq: CSeqNumber,
     routeSet: List[NameAddr],
     isSecure: Boolean = false
 ) {

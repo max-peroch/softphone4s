@@ -61,7 +61,7 @@ class SipMessagesSuite extends FunSuite {
       ok(callee("1234").toSipUri("sip.example.com")),
       callId("cid"),
       tag("ltag"),
-      1,
+      cseqNumber(1),
       branch("z9hG4bKx")
     )
     assertEquals(invite.requestUri.render, "sip:1234@sip.example.com")

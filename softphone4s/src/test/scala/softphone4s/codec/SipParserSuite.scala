@@ -74,7 +74,10 @@ class SipParserSuite extends FunSuite {
   // ---- Tolerance ---------------------------------------------------------
 
   test("blank lines before the start line are ignored") {
-    assertEquals(parsed("\r\n\r\n" + invite + "\r\n\r\n").headers.cseq.seq, 1)
+    assertEquals(
+      parsed("\r\n\r\n" + invite + "\r\n\r\n").headers.cseq.seq.value,
+      1
+    )
   }
 
   test("bare LF line endings are accepted") {
@@ -272,5 +275,45 @@ class SipParserSuite extends FunSuite {
         )
       case other => fail(s"expected a Frame, got $other")
     }
+  }
+
+  // ---- Typed scalar headers ---------------------------------------------
+
+  test("Max-Forwards and Content-Type are parsed into their types") {
+    val msg =
+      invite + "\r\nMax-Forwards: 12\r\nContent-Type: application/sdp\r\n\r\n"
+    val h = parsed(msg).headers
+    assertEquals(h.maxForwards.value, 12)
+    assertEquals(h.contentType, Some(MediaType.Sdp))
+  }
+
+  test("a missing Max-Forwards defaults to 70") {
+    assertEquals(
+      parsed(invite + "\r\n\r\n").headers.maxForwards,
+      MaxForwards.Default
+    )
+  }
+
+  test("invalid scalar headers are reported together as header errors") {
+    val msg = invite + "\r\nMax-Forwards: 999\r\nContent-Type: nonsense\r\n\r\n"
+    failure(msg) match {
+      case ParseError.BadHeaders(errors) =>
+        assertEquals(errors.size, 2)
+      case other => fail(s"unexpected: $other")
+    }
+  }
+
+  test("a CSeq beyond 2^31-1 is rejected") {
+    val msg = invite.replace("CSeq: 1 INVITE", "CSeq: 4294967295 INVITE")
+    assert(SipParser.parse(bytes(msg)).isLeft)
+  }
+
+  test("repeated challenge headers are all kept, unknown schemes included") {
+    val msg = invite.replace(
+      "INVITE sip:bob@example.com SIP/2.0",
+      "SIP/2.0 401 Unauthorized"
+    ) +
+      "\r\nWWW-Authenticate: Digest realm=\"r\", nonce=\"n\"\r\nWWW-Authenticate: Negotiate x\r\n\r\n"
+    assertEquals(parsed(msg).headers.wwwAuthenticate.size, 2)
   }
 }

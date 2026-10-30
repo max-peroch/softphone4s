@@ -50,13 +50,13 @@ object SipAction {
       callee: SipUri,
       callId: CallId,
       localTag: Tag,
-      cseq: Int,
+      cseq: CSeqNumber,
       authHeader: Option[ExtensionHeader] = None
   ) extends SipAction
   case class RetryInviteWithAuth(
       ctx: InviteCtx,
-      headerName: FieldName,
-      challengeValue: Option[String]
+      kind: AuthKind,
+      challenge: DigestChallenge
   ) extends SipAction
   case class SendAck(
       dialog: SipDialog,
@@ -117,34 +117,23 @@ object CallFsm {
             Nil
           )
 
+        // Without a Digest challenge we can answer, the 401 or 407 is final.
         case (Inviting(ctx), ResponseReceived(response))
             if response.statusCode == Unauthorized =>
-          val newCtx = ctx.copy(cseq = ctx.cseq + 1)
-          go(
-            Inviting(newCtx),
-            List(
-              SendAckForNon2xx(ctx, response),
-              RetryInviteWithAuth(
-                newCtx,
-                FieldName.Authorization,
-                response.headers.wwwAuthenticate
-              )
-            )
+          answerChallenge(
+            ctx,
+            response,
+            AuthKind.Origin,
+            response.headers.wwwAuthenticate
           )
 
         case (Inviting(ctx), ResponseReceived(response))
             if response.statusCode == ProxyAuthRequired =>
-          val newCtx = ctx.copy(cseq = ctx.cseq + 1)
-          go(
-            Inviting(newCtx),
-            List(
-              SendAckForNon2xx(ctx, response),
-              RetryInviteWithAuth(
-                newCtx,
-                FieldName.ProxyAuthorization,
-                response.headers.proxyAuthenticate
-              )
-            )
+          answerChallenge(
+            ctx,
+            response,
+            AuthKind.Proxy,
+            response.headers.proxyAuthenticate
           )
 
         case (Inviting(ctx), ResponseReceived(response))
@@ -157,23 +146,11 @@ object CallFsm {
 
         case (Inviting(ctx), ResponseReceived(response))
             if response.statusCode >= ErrorResponseMin =>
-          go(
-            Failed(response.statusCode, response.reason),
-            List(
-              SendAckForNon2xx(ctx, response),
-              NotifyHangup(Rejected(response.statusCode, response.reason))
-            )
-          )
+          reject(ctx, response)
 
         case (CallState.Ringing(ctx, _), ResponseReceived(response))
             if response.statusCode >= ErrorResponseMin =>
-          go(
-            Failed(response.statusCode, response.reason),
-            List(
-              SendAckForNon2xx(ctx, response),
-              NotifyHangup(Rejected(response.statusCode, response.reason))
-            )
-          )
+          reject(ctx, response)
 
         case (Inviting(_) | CallState.Ringing(_, _), Timeout) =>
           go(Failed(408, "Request Timeout"), List(NotifyHangup(TimedOut)))
@@ -230,6 +207,36 @@ object CallFsm {
 
   private def go(next: CallState, actions: List[SipAction]): Transition =
     State.set(next).as(actions)
+
+  private def reject(ctx: InviteCtx, response: SipResponse): Transition =
+    go(
+      Failed(response.statusCode, response.reason),
+      List(
+        SendAckForNon2xx(ctx, response),
+        NotifyHangup(Rejected(response.statusCode, response.reason))
+      )
+    )
+
+  private def answerChallenge(
+      ctx: InviteCtx,
+      response: SipResponse,
+      kind: AuthKind,
+      challenges: List[AuthChallenge]
+  ): Transition =
+    challenges
+      .collectFirst {
+        case AuthChallenge.Digest(c) if c.isAnswerable => c
+      }
+      .fold(reject(ctx, response)) { challenge =>
+        val newCtx = ctx.copy(cseq = ctx.cseq.next)
+        go(
+          Inviting(newCtx),
+          List(
+            SendAckForNon2xx(ctx, response),
+            RetryInviteWithAuth(newCtx, kind, challenge)
+          )
+        )
+      }
 
   private def handle200(ctx: InviteCtx, response: SipResponse): Transition = {
     val dialog             = SipDialog.fromOk(ctx, response)

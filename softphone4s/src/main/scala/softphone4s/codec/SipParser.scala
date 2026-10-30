@@ -16,8 +16,6 @@ object SipParser {
   /** The largest datagram UDP can carry. */
   val DefaultMaxSize: Int = 65535
 
-  private val DefaultMaxForwards = 70
-
   /** Reads one message from a datagram (or a frame cut by [[frame]]). Blank
     * lines before the start line are ignored. Without `Content-Length` the body
     * is the rest of the datagram.
@@ -224,6 +222,16 @@ object SipParser {
     val cseq = required("cseq", "CSeq")
       .flatMap(v => parseCseq(v).toRight(s"bad CSeq: '$v'"))
       .toValidatedNel
+    val maxForwards = values("max-forwards").headOption
+      .traverse(v =>
+        v.trim.toIntOption
+          .toRight(s"bad Max-Forwards: '$v'")
+          .flatMap(MaxForwards(_))
+      )
+      .map(_.getOrElse(MaxForwards.Default))
+      .toValidatedNel
+    val contentType =
+      values("content-type").headOption.traverse(MediaType.parse).toValidatedNel
     val contacts =
       listValues("contact").traverse(NameAddr.parse).toValidatedNel
     val routes = listValues("route").traverse(NameAddr.parse).toValidatedNel
@@ -234,7 +242,19 @@ object SipParser {
       .traverse((name, value) => FieldName(name).map(ExtensionHeader(_, value)))
       .toValidatedNel
 
-    (callId, from, to, vias, cseq, contacts, routes, recordRoutes, others)
+    (
+      callId,
+      from,
+      to,
+      vias,
+      cseq,
+      maxForwards,
+      contentType,
+      contacts,
+      routes,
+      recordRoutes,
+      others
+    )
       .mapN {
         (
             callId,
@@ -242,6 +262,8 @@ object SipParser {
             to,
             vias,
             cseq,
+            maxForwards,
+            contentType,
             contacts,
             routes,
             recordRoutes,
@@ -254,14 +276,14 @@ object SipParser {
             vias = vias,
             cseq = cseq,
             contacts = contacts,
-            maxForwards = values("max-forwards").headOption
-              .flatMap(_.trim.toIntOption)
-              .getOrElse(DefaultMaxForwards),
-            contentType = values("content-type").headOption,
+            maxForwards = maxForwards,
+            contentType = contentType,
             routes = routes,
             recordRoutes = recordRoutes,
-            wwwAuthenticate = values("www-authenticate").headOption,
-            proxyAuthenticate = values("proxy-authenticate").headOption,
+            wwwAuthenticate =
+              values("www-authenticate").map(AuthChallenge.parse),
+            proxyAuthenticate =
+              values("proxy-authenticate").map(AuthChallenge.parse),
             others = others
           )
       }
@@ -274,7 +296,7 @@ object SipParser {
     value.trim.split("\\s+", 2) match {
       case Array(seqStr, methodStr) =>
         for {
-          seq    <- seqStr.toIntOption
+          seq    <- seqStr.toIntOption.flatMap(CSeqNumber(_).toOption)
           method <- parseMethod(methodStr).toOption
         } yield CSeq(seq, method)
       case _ => None

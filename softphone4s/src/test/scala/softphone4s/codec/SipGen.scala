@@ -139,6 +139,27 @@ object SipGen extends munit.Assertions {
       last  <- Gen.alphaNumChar
     } yield ExtensionHeader(name, (first :: rest ::: List(last)).mkString)
 
+  val mediaTypeGen: Gen[MediaType] =
+    for {
+      main   <- Gen.oneOf("application", "text", "audio")
+      sub    <- token(6)
+      params <- headerParamsGen
+    } yield get(MediaType.from(main, sub.toLowerCase, params))
+
+  val digestChallengeGen: Gen[DigestChallenge] =
+    for {
+      realm     <- Gen.oneOf("sip.example.com", "a \"quoted\" realm", "r\\x")
+      nonce     <- token(16).map(s => get(Nonce(s)))
+      opaque    <- Gen.option(token())
+      algorithm <- Gen.oneOf(DigestAlgorithm.values.toList)
+      qop       <- Gen.someOf(Qop.values.toList).map(_.toSet)
+    } yield DigestChallenge(realm, nonce, opaque, algorithm, qop)
+
+  val authChallengeGen: Gen[AuthChallenge] = Gen.oneOf(
+    digestChallengeGen.map(AuthChallenge.Digest(_)),
+    Gen.const(AuthChallenge.Unsupported("Negotiate", "abc123"))
+  )
+
   val headersGen: Gen[SipHeaders] =
     for {
       callId <- callIdGen
@@ -149,18 +170,20 @@ object SipGen extends munit.Assertions {
         Gen.listOfN(2, viaGen).flatMap(l => Gen.choose(0, 2).map(l.take))
       )
       method   <- Gen.oneOf(SipMethod.values.toList)
-      seq      <- Gen.choose(0, Int.MaxValue)
+      seq      <- Gen.choose(0, Int.MaxValue).map(n => get(CSeqNumber(n)))
       contacts <- Gen
         .choose(0, 2)
         .flatMap(n => Gen.listOfN(n, nameAddrGen(withTag = false)))
-      maxFwd <- Gen.choose(0, 70)
-      ctype  <- Gen.option(Gen.oneOf("application/sdp", "text/plain"))
+      maxFwd <- Gen.choose(0, 255).map(n => get(MaxForwards(n)))
+      ctype  <- Gen.option(mediaTypeGen)
       routes <- Gen
         .choose(0, 2)
         .flatMap(n => Gen.listOfN(n, nameAddrGen(withTag = false)))
       records <- Gen
         .choose(0, 2)
         .flatMap(n => Gen.listOfN(n, nameAddrGen(withTag = false)))
+      www    <- Gen.choose(0, 2).flatMap(n => Gen.listOfN(n, authChallengeGen))
+      proxy  <- Gen.choose(0, 2).flatMap(n => Gen.listOfN(n, authChallengeGen))
       others <- Gen.choose(0, 3).flatMap(n => Gen.listOfN(n, extensionGen))
     } yield SipHeaders(
       callId = callId,
@@ -173,6 +196,8 @@ object SipGen extends munit.Assertions {
       contentType = ctype,
       routes = routes,
       recordRoutes = records,
+      wwwAuthenticate = www,
+      proxyAuthenticate = proxy,
       others = others
     )
 

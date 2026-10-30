@@ -6,7 +6,7 @@ enum SipMethod {
   case Invite, Ack, Bye, Cancel, Options, Info, Register
 }
 
-final case class CSeq(seq: Int, method: SipMethod)
+final case class CSeq(seq: CSeqNumber, method: SipMethod)
 
 /** The headers of a SIP message. The ones the stack acts on are typed;
   * everything else is carried unchanged, in order, in `others`.
@@ -23,12 +23,12 @@ final case class SipHeaders(
     vias: NonEmptyList[Via],
     cseq: CSeq,
     contacts: List[NameAddr] = Nil,
-    maxForwards: Int = 70,
-    contentType: Option[String] = None,
+    maxForwards: MaxForwards = MaxForwards.Default,
+    contentType: Option[MediaType] = None,
     routes: List[NameAddr] = Nil,
     recordRoutes: List[NameAddr] = Nil,
-    wwwAuthenticate: Option[String] = None,
-    proxyAuthenticate: Option[String] = None,
+    wwwAuthenticate: List[AuthChallenge] = Nil,
+    proxyAuthenticate: List[AuthChallenge] = Nil,
     others: List[ExtensionHeader] = Nil
 ) {
   def topVia: Via = vias.head
