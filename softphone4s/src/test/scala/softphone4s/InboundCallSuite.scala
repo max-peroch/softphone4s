@@ -324,4 +324,68 @@ class InboundCallSuite extends CatsEffectSuite {
       } yield assertEquals(r.headers.cseq.method, SipMethod.Bye)
     }
   }
+
+  test(
+    "our BYE goes to the first Record-Route hop with the route set as received, not to the Contact"
+  ) {
+    scenario().use { (phone, peer) =>
+      // The Contact points nowhere; only the route leads to the peer.
+      val routed = invite().copy(headers =
+        invite().headers.copy(
+          contacts = List(nameAddr("<sip:bob@127.0.0.1:19999>")),
+          recordRoutes = List(
+            nameAddr("<sip:127.0.0.1:19081;lr>"),
+            nameAddr("<sip:p2.example.com;lr>")
+          )
+        )
+      )
+      for {
+        call     <- ring(phone, peer, routed)
+        accepted <- call.accept.allocated
+        ok       <- response(peer, status(200))
+        _        <- send(peer, inDialog(SipMethod.Ack, 1, ok))
+        _        <- accepted._1.awaitPickup.timeout(5.seconds)
+        release  <- accepted._2.start
+        bye      <- request(peer, SipMethod.Bye)
+        _        <- send(peer, SipResponse(200, "OK", bye.headers))
+        _        <- release.join
+      } yield {
+        assertEquals(bye.requestUri.render, "sip:bob@127.0.0.1:19999")
+        assertEquals(
+          bye.headers.routes.map(_.render),
+          List("<sip:127.0.0.1:19081;lr>", "<sip:p2.example.com;lr>")
+        )
+        assertEquals(
+          ok.headers.recordRoutes.map(_.render),
+          routed.headers.recordRoutes.map(_.render)
+        )
+      }
+    }
+  }
+
+  test(
+    "a BYE with our Call-ID but the wrong To tag is answered 481 and the call goes on"
+  ) {
+    scenario().use { (phone, peer) =>
+      for {
+        call     <- ring(phone, peer)
+        accepted <- call.accept.allocated
+        ok       <- response(peer, status(200))
+        _        <- send(peer, inDialog(SipMethod.Ack, 1, ok))
+        _        <- accepted._1.awaitPickup.timeout(5.seconds)
+        wrongTag = inDialog(SipMethod.Bye, 2, ok)
+        _ <- send(
+          peer,
+          wrongTag.copy(headers =
+            wrongTag.headers.copy(to = nameAddr("<sip:test@127.0.0.1>;tag=zz"))
+          )
+        )
+        refused <- response(peer, r => r.headers.cseq.method == SipMethod.Bye)
+        ended   <- accepted._1.awaitHangup.timeout(300.millis).attempt
+      } yield {
+        assertEquals(refused.statusCode, 481)
+        assert(ended.isLeft, "the call must not have ended")
+      }
+    }
+  }
 }

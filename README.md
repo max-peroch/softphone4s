@@ -34,6 +34,12 @@ Scala, Cats Effect, and fs2 versions this release was built against.
 softphone4s handles outbound SIP calls end-to-end:
 
 - **SIP** (RFC 3261) over UDP — INVITE / ACK / BYE / CANCEL
+- **Dialogs** (RFC 3261 §12): requests within a call follow the Record-Route
+  set, with loose or strict routing, so a BYE goes to the first route hop and
+  not straight to the remote's Contact. A request whose tags do not match the
+  dialog is answered `481`, and one that is not newer than the last is
+  answered `500`. If a next hop cannot be resolved the request goes to the
+  server the call was placed to, or came from.
 - **Digest authentication** (RFC 2617, RFC 7616, RFC 8760): MD5, MD5-sess,
   SHA-256 and SHA-256-sess, with `qop=auth` or `auth-int`. When a server offers
   several challenges the strongest supported algorithm is used. A registration

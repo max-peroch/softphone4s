@@ -133,6 +133,17 @@ class SoftphoneStreaming[F[_]: Async: Network] private (
       )
     } yield registration
 
+  /** The address of a dialog's next hop: its host (resolved) and port, or the
+    * default for its scheme.
+    */
+  private def resolveNextHop(uri: SipUri): F[SocketAddress[IpAddress]] = {
+    val defaultPort = uri.scheme match {
+      case SipScheme.Sip  => port"5060"
+      case SipScheme.Sips => port"5061"
+    }
+    resolveHost(uri.host).map(SocketAddress(_, uri.port.getOrElse(defaultPort)))
+  }
+
   private def resolveCalleeAddress(
       target: SipUri
   ): F[SocketAddress[IpAddress]] =
@@ -203,6 +214,7 @@ class SoftphoneStreaming[F[_]: Async: Network] private (
           callee,
           layer,
           peer,
+          resolveNextHop,
           endpoint,
           supervisor,
           entropy,
@@ -325,6 +337,7 @@ class SoftphoneStreaming[F[_]: Async: Network] private (
         InboundCall.create(
           invite,
           layer,
+          resolveNextHop,
           endpoint,
           callSupervisor,
           entropy,

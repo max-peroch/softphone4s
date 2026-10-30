@@ -37,6 +37,7 @@ private[softphone4s] class OutboundCall[F[_]: Async] private (
     stateRef: Ref[F, CallState],
     layer: TransactionLayer[F],
     peer: SocketAddress[IpAddress],
+    resolve: SipUri => F[SocketAddress[IpAddress]],
     events: Channel[F, SipEvent],
     serverTransactions: Ref[F, Map[(SipMethod, CSeqNumber), ServerTransaction[
       F
@@ -172,8 +173,23 @@ private[softphone4s] class OutboundCall[F[_]: Async] private (
     * reports into events. A request that cannot even start counts as a
     * transport failure.
     */
-  private def startClient(request: SipRequest): F[Unit] =
-    layer.client(request, peer).flatMap {
+  /** Where a request within the dialog goes: the next hop of its route (RFC
+    * 3261 §12.2.1.1), or the server we dialled if that cannot be resolved.
+    */
+  private def destinationFor(dialog: SipDialog): F[SocketAddress[IpAddress]] =
+    resolve(dialog.route.nextHop).handleErrorWith { error =>
+      logger
+        .warn(Map("error" -> String.valueOf(error.getMessage)))(
+          "Cannot resolve the next hop; using the server we dialled"
+        )
+        .as(peer)
+    }
+
+  private def startClient(
+      request: SipRequest,
+      to: SocketAddress[IpAddress] = peer
+  ): F[Unit] =
+    layer.client(request, to).flatMap {
       case Right(transaction) =>
         supervisor.supervise(forward(transaction)).void
       case Left(error) =>
@@ -277,7 +293,7 @@ private[softphone4s] class OutboundCall[F[_]: Async] private (
 
       // The ACK of a 2xx is not part of a transaction (RFC 3261 §13.2.2.4).
       case SendAck(dialog, remoteSdpForAnswer) =>
-        newBranch().flatMap { branch =>
+        (newBranch(), destinationFor(dialog)).flatMapN { (branch, to) =>
           logger.debug("Sending ACK") >>
             layer.transmit(
               endpoint.buildAck(
@@ -285,7 +301,7 @@ private[softphone4s] class OutboundCall[F[_]: Async] private (
                 branch,
                 remoteSdpForAnswer.map(_ => endpoint.buildSdpAnswer)
               ),
-              peer
+              to
             )
         }
 
@@ -297,9 +313,10 @@ private[softphone4s] class OutboundCall[F[_]: Async] private (
         }
 
       case SendBye(dialog) =>
-        newBranch().flatMap { branch =>
+        (newBranch(), destinationFor(dialog)).flatMapN { (branch, to) =>
           logger.debug("Sending BYE") >> startClient(
-            endpoint.buildBye(dialog, branch)
+            endpoint.buildBye(dialog, branch),
+            to
           )
         }
 
@@ -367,6 +384,7 @@ private[softphone4s] object OutboundCall {
       callee: SipUri,
       layer: TransactionLayer[F],
       peer: SocketAddress[IpAddress],
+      resolve: SipUri => F[SocketAddress[IpAddress]],
       endpoint: LocalEndpoint,
       supervisor: Supervisor[F],
       entropy: Entropy[F],
@@ -408,6 +426,7 @@ private[softphone4s] object OutboundCall {
         stateRef,
         layer,
         peer,
+        resolve,
         events,
         serverTransactions,
         cancelled,

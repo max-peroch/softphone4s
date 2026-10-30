@@ -34,6 +34,7 @@ import scala.concurrent.duration.*
 private[softphone4s] final class InboundCall[F[_]: Async] private (
     invite: ServerTransaction[F],
     layer: TransactionLayer[F],
+    resolve: SipUri => F[SocketAddress[IpAddress]],
     endpoint: LocalEndpoint,
     supervisor: Supervisor[F],
     entropy: Entropy[F],
@@ -196,11 +197,12 @@ private[softphone4s] final class InboundCall[F[_]: Async] private (
         respondTo(request, endpoint.buildInfoOk(request))
 
       case SendBye(dialog) =>
-        entropy.branch.flatMap(branch =>
+        (entropy.branch, destinationFor(dialog)).flatMapN { (branch, to) =>
           logger.debug("Sending BYE") >> startClient(
-            endpoint.buildBye(dialog, branch)
+            endpoint.buildBye(dialog, branch),
+            to
           )
-        )
+        }
 
       case StartMedia(offer) =>
         media.start(offer.ip, offer.port, supervisor, dtmfChannel.send(_).void)
@@ -251,8 +253,24 @@ private[softphone4s] final class InboundCall[F[_]: Async] private (
     }
   }
 
-  private def startClient(request: SipRequest): F[Unit] =
-    layer.client(request, peer).flatMap {
+  /** Where a request within the dialog goes: the next hop of its route (RFC
+    * 3261 §12.2.1.1), or the address the INVITE came from if that cannot be
+    * resolved.
+    */
+  private def destinationFor(dialog: SipDialog): F[SocketAddress[IpAddress]] =
+    resolve(dialog.route.nextHop).handleErrorWith { error =>
+      logger
+        .warn(Map("error" -> String.valueOf(error.getMessage)))(
+          "Cannot resolve the next hop; using the INVITE's source"
+        )
+        .as(peer)
+    }
+
+  private def startClient(
+      request: SipRequest,
+      to: SocketAddress[IpAddress]
+  ): F[Unit] =
+    layer.client(request, to).flatMap {
       case Right(transaction) => supervisor.supervise(forward(transaction)).void
       case Left(error)        =>
         logger.warn(Map("error" -> error.message))(
@@ -292,6 +310,7 @@ private[softphone4s] object InboundCall {
   def create[F[_]: Async](
       invite: ServerTransaction[F],
       layer: TransactionLayer[F],
+      resolve: SipUri => F[SocketAddress[IpAddress]],
       endpoint: LocalEndpoint,
       supervisor: Supervisor[F],
       entropy: Entropy[F],
@@ -324,6 +343,7 @@ private[softphone4s] object InboundCall {
       call = new InboundCall(
         invite,
         layer,
+        resolve,
         endpoint,
         supervisor,
         entropy,

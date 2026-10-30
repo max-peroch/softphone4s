@@ -36,7 +36,8 @@ class OutboundCallSuite extends CatsEffectSuite {
 
   private final case class Fixture(
       call: OutboundCall[IO],
-      peer: Transport[IO]
+      peer: Transport[IO],
+      resolved: Ref[IO, List[SipUri]]
   )
 
   /** A call, its transaction layer, and the peer's end of the wire. Requests
@@ -45,11 +46,13 @@ class OutboundCallSuite extends CatsEffectSuite {
     */
   private def fixture(
       rtp: Port,
-      inviteTimeout: FiniteDuration = 32.seconds
+      inviteTimeout: FiniteDuration = 32.seconds,
+      resolveWith: SipUri => IO[SocketAddress[IpAddress]] = _ => IO.pure(them)
   ): Resource[IO, Fixture] =
     for {
-      pair  <- Resource.eval(InMemoryTransport.pair[IO])
-      layer <- TransactionManager.resource(
+      resolved <- Resource.eval(Ref.of[IO, List[SipUri]](Nil))
+      pair     <- Resource.eval(InMemoryTransport.pair[IO])
+      layer    <- TransactionManager.resource(
         pair._1,
         Reliability.Unreliable,
         TransactionConfig(),
@@ -66,6 +69,7 @@ class OutboundCallSuite extends CatsEffectSuite {
           uri("sip:bob@test.local"),
           layer,
           them,
+          uri => resolved.update(_ :+ uri) >> resolveWith(uri),
           endpointOn(rtp),
           supervisor,
           Entropy.fromRandom(random),
@@ -92,7 +96,7 @@ class OutboundCallSuite extends CatsEffectSuite {
           .drain
           .start
       )(_.cancel)
-    } yield Fixture(call, pair._2)
+    } yield Fixture(call, pair._2, resolved)
 
   // ---- The peer's side ---------------------------------------------------------
 
@@ -112,7 +116,8 @@ class OutboundCallSuite extends CatsEffectSuite {
       request: SipRequest,
       code: Int,
       reason: String,
-      withContact: Boolean = false
+      withContact: Boolean = false,
+      recordRoute: List[String] = Nil
   ): SipResponse = {
     val base =
       TransactionMessages.responseTo(request, code, reason, Some(tag("rtag")))
@@ -120,6 +125,7 @@ class OutboundCallSuite extends CatsEffectSuite {
       base.copy(
         headers = base.headers.copy(
           contacts = List(nameAddr("<sip:bob@127.0.0.1:5061>")),
+          recordRoutes = recordRoute.map(nameAddr),
           contentType = Some(MediaType.Sdp)
         ),
         body = sdp
@@ -425,6 +431,167 @@ class OutboundCallSuite extends CatsEffectSuite {
           DigestVerifier.verify(retry, "test").map(_.valid),
           Some(true)
         )
+      }
+    }
+  }
+
+  // ---- Routing within the dialog ---------------------------------------------
+
+  /** The call answered with a 200 that carries `recordRoute`. */
+  private def answeredVia(f: Fixture, recordRoute: List[String]) =
+    for {
+      invite <- nextOf(f.peer, SipMethod.Invite)
+      _      <- reply(
+        f.peer,
+        answerTo(
+          invite,
+          200,
+          "OK",
+          withContact = true,
+          recordRoute = recordRoute
+        )
+      )
+      _ <- f.call.awaitPickup
+    } yield invite
+
+  private def hosts(f: Fixture): IO[List[String]] =
+    f.resolved.get.map(_.map(_.host.toString))
+
+  test(
+    "a loose route set is followed: Route headers, the Contact as request-URI, the first route as next hop"
+  ) {
+    fixture(port"19010").use { f =>
+      for {
+        _ <- answeredVia(
+          f,
+          List("<sip:p2.example.com;lr>", "<sip:p1.example.com;lr>")
+        )
+        ack   <- nextOf(f.peer, SipMethod.Ack)
+        _     <- f.call.hangup
+        bye   <- nextOf(f.peer, SipMethod.Bye)
+        asked <- hosts(f)
+      } yield {
+        val routes = List("<sip:p1.example.com;lr>", "<sip:p2.example.com;lr>")
+        List(ack, bye).foreach { request =>
+          assertEquals(request.requestUri.render, "sip:bob@127.0.0.1:5061")
+          assertEquals(request.headers.routes.map(_.render), routes)
+        }
+        assertEquals(asked, List("p1.example.com", "p1.example.com"))
+      }
+    }
+  }
+
+  test(
+    "a strict router first rewrites the request-URI and appends the Contact to the routes"
+  ) {
+    fixture(port"19011").use { f =>
+      for {
+        _     <- answeredVia(f, List("<sip:strict.example.com>"))
+        ack   <- nextOf(f.peer, SipMethod.Ack)
+        asked <- hosts(f)
+      } yield {
+        assertEquals(ack.requestUri.render, "sip:strict.example.com")
+        assertEquals(
+          ack.headers.routes.map(_.render),
+          List("<sip:bob@127.0.0.1:5061>")
+        )
+        assertEquals(asked, List("strict.example.com"))
+      }
+    }
+  }
+
+  test("without a route set the requests go to the Contact") {
+    fixture(port"19012").use { f =>
+      for {
+        _     <- answeredVia(f, Nil)
+        ack   <- nextOf(f.peer, SipMethod.Ack)
+        asked <- hosts(f)
+      } yield {
+        assertEquals(ack.requestUri.render, "sip:bob@127.0.0.1:5061")
+        assertEquals(ack.headers.routes, Nil)
+        assertEquals(asked, List("127.0.0.1"))
+      }
+    }
+  }
+
+  test(
+    "a next hop that cannot be resolved falls back to the server that was dialled"
+  ) {
+    fixture(
+      port"19013",
+      resolveWith = _ => IO.raiseError(new RuntimeException("no such host"))
+    ).use { f =>
+      for {
+        _   <- answeredVia(f, List("<sip:p1.example.com;lr>"))
+        ack <- nextOf(f.peer, SipMethod.Ack) // still arrives, at the fallback
+      } yield assertEquals(
+        ack.headers.routes.map(_.render),
+        List("<sip:p1.example.com;lr>")
+      )
+    }
+  }
+
+  // ---- Requests from the remote party ----------------------------------------
+
+  private def established(f: Fixture) =
+    answered(f).flatMap { case (invite, ok) =>
+      nextOf(f.peer, SipMethod.Ack).as((invite, ok))
+    }
+
+  private def statusOf(peer: Transport[IO], method: SipMethod) =
+    peer.messages
+      .collectFirst {
+        case Inbound(_, r: SipResponse) if r.headers.cseq.method == method =>
+          r.statusCode
+      }
+      .compile
+      .lastOrError
+      .timeout(5.seconds)
+
+  test("a BYE for another dialog is answered 481 and the call goes on") {
+    fixture(port"19014").use { f =>
+      for {
+        established <- established(f)
+        (invite, ok) = established
+        stray        = byeFromPeer(invite, ok).copy(headers =
+          byeFromPeer(invite, ok).headers
+            .copy(from = nameAddr("<sip:bob@test.local>;tag=wrong"))
+        )
+        _      <- f.peer.send(us, stray)
+        status <- statusOf(f.peer, SipMethod.Bye)
+        ended  <- f.call.awaitHangup.timeout(300.millis).attempt
+      } yield {
+        assertEquals(status, 481)
+        assert(ended.isLeft, "the call must not have ended")
+      }
+    }
+  }
+
+  test(
+    "a request that is not newer than the last is answered 500; a newer one ends the call"
+  ) {
+    fixture(port"19015").use { f =>
+      def info(n: Int, ok: SipResponse, invite: SipRequest) =
+        byeFromPeer(invite, ok).copy(
+          method = SipMethod.Info,
+          headers = byeFromPeer(invite, ok).headers.copy(
+            cseq = cseq(n, SipMethod.Info),
+            vias = NonEmptyList.one(
+              via(s"SIP/2.0/UDP 127.0.0.1:5061;branch=z9hG4bKinfo$n")
+            )
+          ),
+          body = "Signal=5\r\nDuration=160\r\n"
+        )
+      for {
+        established <- established(f)
+        (invite, ok) = established
+        _       <- f.peer.send(us, info(5, ok, invite))
+        first   <- statusOf(f.peer, SipMethod.Info)
+        _       <- f.peer.send(us, info(4, ok, invite)) // older than 5
+        refused <- statusOf(f.peer, SipMethod.Info)
+      } yield {
+        assertEquals(first, 200)
+        assertEquals(refused, 500)
       }
     }
   }
