@@ -47,7 +47,7 @@ sealed trait SipAction
 object SipAction {
   // Requests the interpreter must build (need random Via branches)
   case class SendInvite(
-      callee: String,
+      callee: SipUri,
       callId: String,
       localTag: String,
       cseq: Int,
@@ -215,11 +215,12 @@ object CallFsm {
         // 200 OK after CANCEL (RFC 3261 §9 race) — must ACK then BYE immediately
         case (Closed(LocalHangup), ResponseReceived(response))
             if response.statusCode == Ok =>
-          val dialog = SipDialog.fromOk(
-            InviteCtx("", "", 0, "", "", offerInInvite = true),
-            response
+          State.pure(
+            SipDialog
+              .fromLateOk(response)
+              .toList
+              .flatMap(dialog => List(SendAck(dialog, None), SendBye(dialog)))
           )
-          State.pure(List(SendAck(dialog, None), SendBye(dialog)))
 
         case _ => State.pure(Nil)
       }

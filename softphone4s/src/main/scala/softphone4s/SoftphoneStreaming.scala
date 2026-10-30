@@ -37,17 +37,9 @@ class SoftphoneStreaming[F[_]: Async: Network] private (
       .map(_.map("%02x".format(_)).mkString)
       .map(_ + "@" + localIp.toString)
 
-  private def resolveHost(host: String): F[IpAddress] =
-    IpAddress.fromString(host) match {
-      case Some(ip) => Async[F].pure(ip)
-      case None     =>
-        Hostname.fromString(host) match {
-          case Some(h) =>
-            Dns.forAsync[F].resolve(h).adaptError { case _ =>
-              SoftphoneError.HostResolutionFailed(host)
-            }
-          case None => Async[F].raiseError(SoftphoneError.InvalidHostname(host))
-        }
+  private def resolveHost(host: Host): F[IpAddress] =
+    host.resolve[F](using Dns.forAsync[F], Async[F]).adaptError { case _ =>
+      SoftphoneError.HostResolutionFailed(host.toString)
     }
 
   override def call(
@@ -55,7 +47,10 @@ class SoftphoneStreaming[F[_]: Async: Network] private (
       extraHeaders: Map[String, List[String]] = Map.empty
   ): Resource[F, Call[F]] =
     for {
-      calleeAddr <- Resource.eval(resolveCalleeAddress(callee.value))
+      target <- Resource.eval(
+        Async[F].fromEither(SipMessageBuilder.calleeUri(callee, config.realm))
+      )
+      calleeAddr <- Resource.eval(resolveCalleeAddress(target))
       localIp    <- Resource.eval(
         localIpFor(calleeAddr).flatTap(ip =>
           logger.info(Map("address" -> ip.toString))("Advertising local IP")
@@ -72,7 +67,7 @@ class SoftphoneStreaming[F[_]: Async: Network] private (
       sendSip = (msg: SipMessage) => sendRaw(calleeAddr, msg)
       call <- buildCall(
         callId,
-        callee.value,
+        target,
         sipIn,
         sendSip,
         builder,
@@ -81,13 +76,11 @@ class SoftphoneStreaming[F[_]: Async: Network] private (
     } yield call
 
   private def resolveCalleeAddress(
-      callee: String
-  ): F[SocketAddress[IpAddress]] = {
-    val host =
-      if callee.contains("@") then callee.split("@").last
-      else config.realm
-    resolveHost(host).map(ip => SocketAddress(ip, config.serverPort))
-  }
+      target: SipUri
+  ): F[SocketAddress[IpAddress]] =
+    resolveHost(target.host).map(ip =>
+      SocketAddress(ip, target.port.getOrElse(config.serverPort))
+    )
 
   /** The address the OS would send from to reach `remote`: what the SDP and
     * Contact must advertise for replies to come back. Connecting a UDP socket
@@ -117,19 +110,21 @@ class SoftphoneStreaming[F[_]: Async: Network] private (
     nextCallIndex.getAndUpdate(_ + 1).flatMap { callIndex =>
       val portsPerCall = 2
       val rtpPortInt   = config.baseRtpPort.value + callIndex * portsPerCall
-      Port.fromInt(rtpPortInt) match {
-        case None =>
-          Async[F].raiseError(SoftphoneError.RtpPortExhausted(rtpPortInt))
-        case Some(rtpPort) =>
-          Async[F].pure(
-            new SipMessageBuilder(config, localIp, config.localSipPort, rtpPort)
-          )
-      }
+      for {
+        rtpPort <- Async[F].fromOption(
+          Port.fromInt(rtpPortInt),
+          SoftphoneError.RtpPortExhausted(rtpPortInt)
+        )
+        builder <- Async[F].fromEither(
+          SipMessageBuilder
+            .create(config, localIp, config.localSipPort, rtpPort)
+        )
+      } yield builder
     }
 
   private def buildCall(
       callId: String,
-      callee: String,
+      callee: SipUri,
       sipIn: Stream[F, SipMessage],
       sendSip: SipMessage => F[Unit],
       builder: SipMessageBuilder,

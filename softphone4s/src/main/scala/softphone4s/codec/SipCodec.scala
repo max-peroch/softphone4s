@@ -1,5 +1,6 @@
 package softphone4s.codec
 
+import cats.syntax.all.*
 import softphone4s.model.*
 
 /** Pure SIP text codec — no side effects. */
@@ -18,7 +19,7 @@ object SipCodec {
 
   private def encodeRequest(r: SipRequest): String = {
     val requestLine =
-      s"${r.method.toString.toUpperCase} ${r.requestUri} SIP/2.0"
+      s"${r.method.toString.toUpperCase} ${r.requestUri.render} SIP/2.0"
     s"$requestLine$CRLF${encodeHeaders(r.headers, r.body)}$CRLF${r.body}"
   }
 
@@ -80,10 +81,10 @@ object SipCodec {
 
   private def parseRequestLine(
       line: String
-  ): Either[String, (SipMethod, String)] =
+  ): Either[String, (SipMethod, SipUri)] =
     line.split(" ", 3) match {
       case Array(methodStr, uri, "SIP/2.0") =>
-        parseMethod(methodStr).map(_ -> uri)
+        (parseMethod(methodStr), SipUri.parse(uri)).tupled
       case _ => Left(s"bad request line: $line")
     }
 

@@ -8,8 +8,8 @@ sealed abstract class SoftphoneError(message: String)
     with scala.util.control.NoStackTrace
 
 object SoftphoneError {
-  final case class InvalidHostname(host: String)
-      extends SoftphoneError(s"Invalid hostname: '$host'")
+  final case class InvalidSipUri(input: String, reason: String)
+      extends SoftphoneError(s"Invalid SIP URI '$input': $reason")
   final case class HostResolutionFailed(host: String)
       extends SoftphoneError(s"Cannot resolve SIP server '$host'")
   final case class CallRejected(code: Int, reason: String)

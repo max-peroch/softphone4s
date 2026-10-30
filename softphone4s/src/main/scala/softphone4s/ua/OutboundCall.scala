@@ -107,7 +107,7 @@ private[softphone4s] class OutboundCall[F[_]: Async] private (
         newBranch().flatMap { branch =>
           inviteBranch.set(branch) >>
             logger.debug(
-              Map("callee" -> callee, "callId" -> callId)
+              Map("callee" -> callee.render, "callId" -> callId)
             )("Sending INVITE") >>
             sendSip(
               builder.buildInvite(
@@ -243,7 +243,7 @@ private[softphone4s] class OutboundCall[F[_]: Async] private (
 private[softphone4s] object OutboundCall {
   def create[F[_]: Async](
       callId: String,
-      callee: String,
+      callee: SipUri,
       sendSip: SipMessage => F[Unit],
       builder: SipMessageBuilder,
       supervisor: Supervisor[F],
@@ -291,7 +291,7 @@ private[softphone4s] object OutboundCall {
         logger
       )
       _ <- logger.debug(
-        Map("callee" -> callee, "callId" -> callId)
+        Map("callee" -> callee.render, "callId" -> callId)
       )("Sending INVITE")
       _ <- sendSip(
         builder.buildInvite(

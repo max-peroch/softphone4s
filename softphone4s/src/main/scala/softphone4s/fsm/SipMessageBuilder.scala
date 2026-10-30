@@ -1,32 +1,32 @@
 package softphone4s.fsm
 
-import com.comcast.ip4s.{IpAddress, Port}
+import com.comcast.ip4s.{Host, IpAddress, Port}
 import softphone4s.codec.{DigestAuth, SdpCodec}
 import softphone4s.config.SoftphoneConfig
 import softphone4s.model.*
 
-class SipMessageBuilder(
+/** Builds the SIP messages of a call. Construct via
+  * [[SipMessageBuilder.create]], which validates the account's user and realm
+  * as a SIP URI.
+  */
+final class SipMessageBuilder private (
     config: SoftphoneConfig,
     localIp: IpAddress,
     val localSipPort: Port,
-    val localRtpPort: Port
+    val localRtpPort: Port,
+    private[softphone4s] val localSipAddress: SipUri,
+    contact: SipUri
 ) {
-  val bindAddress: IpAddress                     = config.bindAddress
-  private def sipUri(user: String, host: String) = s"sip:$user@$host"
-  def calleeUri(callee: String): String          =
-    if callee.contains("@") then s"sip:$callee"
-    else sipUri(callee, config.realm)
-  private[softphone4s] val localSipAddress: String =
-    sipUri(config.user, config.realm)
-  private def contactUri = s"<sip:${config.user}@$localIp:$localSipPort>"
-  private def viaHost    = s"$localIp:$localSipPort"
+  val bindAddress: IpAddress = config.bindAddress
+  private def contactUri     = s"<${contact.render}>"
+  private def viaHost        = s"$localIp:$localSipPort"
 
   // -------------------------------------------------------------------------
   // INVITE
   // -------------------------------------------------------------------------
 
   def buildInvite(
-      callee: String,
+      callee: SipUri,
       callId: String,
       localTag: String,
       cseq: Int,
@@ -37,11 +37,11 @@ class SipMessageBuilder(
     val sessionDescription = SdpCodec.buildOffer(localIp, localRtpPort)
     SipRequest(
       method = SipMethod.Invite,
-      requestUri = calleeUri(callee),
+      requestUri = callee,
       headers = SipHeaders(
         callId = callId,
-        from = s"<$localSipAddress>;tag=$localTag",
-        to = s"<${calleeUri(callee)}>",
+        from = s"<${localSipAddress.render}>;tag=$localTag",
+        to = s"<${callee.render}>",
         via = s"$viaHost;branch=$branch",
         cseq = CSeq(cseq, SipMethod.Invite),
         contact = contactUri,
@@ -53,7 +53,7 @@ class SipMessageBuilder(
   }
 
   def computeAuthHeader(
-      callee: String,
+      callee: SipUri,
       headerName: String,
       challengeValue: Option[String],
       cnonce: String,
@@ -62,7 +62,7 @@ class SipMessageBuilder(
     challengeValue.map { challengeHeaderValue =>
       val authValue = DigestAuth.compute(
         "INVITE",
-        calleeUri(callee),
+        callee.render,
         config.user,
         config.password,
         challengeHeaderValue,
@@ -91,8 +91,8 @@ class SipMessageBuilder(
       requestUri = dialog.remoteTarget,
       headers = SipHeaders(
         callId = dialog.callId,
-        from = s"<${dialog.localUri}>;tag=${dialog.localTag}",
-        to = s"<${dialog.remoteUri}>;tag=${dialog.remoteTag}",
+        from = s"<${dialog.localUri.render}>;tag=${dialog.localTag}",
+        to = s"<${dialog.remoteUri.render}>;tag=${dialog.remoteTag}",
         via = s"$viaHost;branch=$branch",
         cseq = CSeq(dialog.localCseq, SipMethod.Ack),
         contact = contactUri,
@@ -112,10 +112,10 @@ class SipMessageBuilder(
   ): SipRequest =
     SipRequest(
       method = SipMethod.Ack,
-      requestUri = calleeUri(ctx.callee),
+      requestUri = ctx.callee,
       headers = SipHeaders(
         callId = ctx.callId,
-        from = s"<$localSipAddress>;tag=${ctx.localTag}",
+        from = s"<${localSipAddress.render}>;tag=${ctx.localTag}",
         to = response.headers.to,
         via = s"$viaHost;branch=$branch",
         cseq = CSeq(ctx.cseq, SipMethod.Ack),
@@ -130,11 +130,11 @@ class SipMessageBuilder(
   def buildCancel(ctx: InviteCtx, branch: String): SipRequest =
     SipRequest(
       method = SipMethod.Cancel,
-      requestUri = calleeUri(ctx.callee),
+      requestUri = ctx.callee,
       headers = SipHeaders(
         callId = ctx.callId,
-        from = s"<$localSipAddress>;tag=${ctx.localTag}",
-        to = s"<${calleeUri(ctx.callee)}>",
+        from = s"<${localSipAddress.render}>;tag=${ctx.localTag}",
+        to = s"<${ctx.callee.render}>",
         via = s"$viaHost;branch=$branch",
         cseq = CSeq(ctx.cseq, SipMethod.Cancel),
         contact = contactUri
@@ -151,8 +151,8 @@ class SipMessageBuilder(
       requestUri = dialog.remoteTarget,
       headers = SipHeaders(
         callId = dialog.callId,
-        from = s"<${dialog.localUri}>;tag=${dialog.localTag}",
-        to = s"<${dialog.remoteUri}>;tag=${dialog.remoteTag}",
+        from = s"<${dialog.localUri.render}>;tag=${dialog.localTag}",
+        to = s"<${dialog.remoteUri.render}>;tag=${dialog.remoteTag}",
         via = s"$viaHost;branch=$branch",
         cseq = CSeq(dialog.localCseq + 1, SipMethod.Bye),
         contact = contactUri,
@@ -192,4 +192,59 @@ class SipMessageBuilder(
     authHeader.fold(Map.empty) { case (name, value) =>
       Map(name -> List(value))
     }
+}
+
+object SipMessageBuilder {
+
+  /** Validates the account (`config.user` and `config.realm`) as a SIP URI and
+    * the advertised Contact; fails with `InvalidSipUri` if either is unusable.
+    */
+  def create(
+      config: SoftphoneConfig,
+      localIp: IpAddress,
+      localSipPort: Port,
+      localRtpPort: Port
+  ): Either[SoftphoneError, SipMessageBuilder] =
+    for {
+      user  <- User(config.user).left.map(invalid(config.user, _))
+      realm <- Host
+        .fromString(config.realm)
+        .toRight(invalid(config.realm, "not a valid host"))
+      address <- SipUri
+        .from(SipScheme.Sip, realm, Some(UserInfo(user, None)))
+        .left
+        .map(invalid(config.user, _))
+      contact <- SipUri
+        .from(
+          SipScheme.Sip,
+          localIp,
+          Some(UserInfo(user, None)),
+          Some(localSipPort)
+        )
+        .left
+        .map(invalid(config.user, _))
+    } yield new SipMessageBuilder(
+      config,
+      localIp,
+      localSipPort,
+      localRtpPort,
+      address,
+      contact
+    )
+
+  /** The URI to dial: `callee` as given when it names a host
+    * (`alice@sip.example.com`), otherwise at the account's `realm`. A `#` is
+    * percent-encoded, as the user part of a SIP URI requires.
+    */
+  def calleeUri(
+      callee: Callee,
+      realm: String
+  ): Either[SoftphoneError, SipUri] = {
+    val user  = callee.value.replace("#", "%23")
+    val input = if user.contains('@') then s"sip:$user" else s"sip:$user@$realm"
+    SipUri.parse(input).left.map(invalid(input, _))
+  }
+
+  private def invalid(input: String, reason: String): SoftphoneError =
+    SoftphoneError.InvalidSipUri(input, reason)
 }

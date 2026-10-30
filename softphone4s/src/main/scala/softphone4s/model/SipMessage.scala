@@ -29,7 +29,7 @@ sealed trait SipMessage {
 
 final case class SipRequest(
     method: SipMethod,
-    requestUri: String,
+    requestUri: SipUri,
     headers: SipHeaders,
     body: String = ""
 ) extends SipMessage

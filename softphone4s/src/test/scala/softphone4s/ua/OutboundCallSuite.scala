@@ -21,7 +21,12 @@ class OutboundCallSuite extends CatsEffectSuite {
   private val rtpPort    = port"19000"
   private val testConfig =
     SoftphoneConfig(user = "test", password = "test", realm = "test.local")
-  private val builder = SipMessageBuilder(testConfig, localIp, sipPort, rtpPort)
+  private val builder = SipMessageBuilder
+    .create(testConfig, localIp, sipPort, rtpPort)
+    .fold(err => throw err, identity)
+
+  private def uri(s: String): SipUri =
+    SipUri.parse(s).fold(err => throw new AssertionError(err), identity)
 
   private def mkHeaders(cseq: CSeq, to: String = "<sip:bob@test.local>") =
     SipHeaders(
@@ -41,7 +46,7 @@ class OutboundCallSuite extends CatsEffectSuite {
 
   private val byeRequest = SipRequest(
     SipMethod.Bye,
-    "sip:test@test.local",
+    uri("sip:test@test.local"),
     mkHeaders(CSeq(1, SipMethod.Bye))
   )
 
@@ -56,7 +61,7 @@ class OutboundCallSuite extends CatsEffectSuite {
       call  <- Resource.eval(
         OutboundCall.create(
           "test@call",
-          "sip:bob@test.local",
+          uri("sip:bob@test.local"),
           _ => IO.unit,
           builder,
           supervisor,

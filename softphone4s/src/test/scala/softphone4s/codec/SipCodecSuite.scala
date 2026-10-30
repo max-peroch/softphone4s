@@ -24,7 +24,7 @@ class SipCodecSuite extends FunSuite {
     SipCodec.decode(raw) match {
       case Right(req: SipRequest) =>
         assertEquals(req.method, SipMethod.Invite)
-        assertEquals(req.requestUri, "sip:+1234@example.com")
+        assertEquals(req.requestUri.render, "sip:+1234@example.com")
         assertEquals(req.headers.callId, "abc@192.168.1.1")
         assertEquals(req.headers.cseq, CSeq(1, SipMethod.Invite))
         assertEquals(req.headers.from, "<sip:user@realm>;tag=abc")
@@ -136,14 +136,21 @@ class SipCodecSuite extends FunSuite {
     assert(SipCodec.decode("").isLeft)
   }
 
+  test("decode fails when the request-URI is not a SIP URI") {
+    assert(SipCodec.decode(msg("INVITE tel:+15551234567 SIP/2.0")).isLeft)
+  }
+
   test("decode fails on bad request line") {
     assert(SipCodec.decode(msg("BOGUS")).isLeft)
   }
 
+  private def uri(s: String): SipUri =
+    SipUri.parse(s).fold(err => fail(err), identity)
+
   test("encode/decode round-trip preserves key fields") {
     val original = SipRequest(
       method = SipMethod.Bye,
-      requestUri = "sip:callee@host",
+      requestUri = uri("sip:callee@host"),
       headers = SipHeaders(
         callId = "roundtrip@host",
         from = "<sip:user@realm>;tag=local",
@@ -158,7 +165,7 @@ class SipCodecSuite extends FunSuite {
         assertEquals(decoded.method, SipMethod.Bye)
         assertEquals(decoded.headers.callId, "roundtrip@host")
         assertEquals(decoded.headers.cseq, CSeq(2, SipMethod.Bye))
-        assertEquals(decoded.requestUri, "sip:callee@host")
+        assertEquals(decoded.requestUri.render, "sip:callee@host")
       case other => fail(s"unexpected: $other")
     }
   }

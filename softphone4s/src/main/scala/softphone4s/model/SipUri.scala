@@ -133,6 +133,18 @@ object SipUri {
   given Eq[SipUri]   = Eq.fromUniversalEquals
   given Show[SipUri] = Show.show(_.render)
 
+  /** The URI of a `From`, `To` or `Contact` header value: the text inside
+    * `<...>` (after an optional display name), or for a bare addr-spec the text
+    * before the first `;`, since parameters there belong to the header.
+    */
+  def fromHeaderValue(value: String): Either[String, SipUri] = {
+    val v = value.trim
+    parse(
+      if v.contains('<') then v.dropWhile(_ != '<').drop(1).takeWhile(_ != '>')
+      else v.takeWhile(_ != ';')
+    )
+  }
+
   def parse(input: String): Either[String, SipUri] = {
     val s = input.trim
     s.indexOf(':') match {

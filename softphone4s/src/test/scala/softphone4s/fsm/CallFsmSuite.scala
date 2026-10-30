@@ -15,12 +15,15 @@ class CallFsmSuite extends FunSuite {
   ): (CallState, List[SipAction]) =
     CallFsm.transition(event).run(state).value
 
+  private def uri(s: String): SipUri =
+    SipUri.parse(s).fold(err => fail(err), identity)
+
   private val baseCtx = InviteCtx(
     callId = "call@test",
     localTag = "ltag",
     cseq = 1,
-    callee = "sip:callee@host",
-    localUri = "sip:user@realm",
+    callee = uri("sip:callee@host"),
+    localUri = uri("sip:user@realm"),
     offerInInvite = true
   )
 
@@ -58,7 +61,7 @@ class CallFsmSuite extends FunSuite {
   private def req(method: SipMethod, body: String = "") =
     SipRequest(
       method,
-      "sip:user@realm",
+      uri("sip:user@realm"),
       mkHeaders(cseq = CSeq(1, method)),
       body
     )
@@ -249,5 +252,26 @@ class CallFsmSuite extends FunSuite {
     assertEquals(state, Closed(LocalHangup))
     assert(actions.exists { case SendAck(_, None) => true; case _ => false })
     assert(actions.exists { case SendBye(_) => true; case _ => false })
+  }
+
+  test("late 200 OK after CANCEL builds the dialog from the response") {
+    val (_, actions) = step(
+      Closed(LocalHangup),
+      ResponseReceived(resp(200, "OK", to = "<sip:callee@host>;tag=rtag"))
+    )
+    val dialog = actions.collectFirst { case SendBye(d) => d }.get
+    assertEquals(dialog.localUri, uri("sip:user@realm"))
+    assertEquals(dialog.localTag, "ltag")
+    assertEquals(dialog.remoteUri, uri("sip:callee@host"))
+    assertEquals(dialog.remoteTag, "rtag")
+    assertEquals(dialog.callId, "call@test")
+  }
+
+  test("late 200 OK with an unparsable To header sends nothing") {
+    val (_, actions) = step(
+      Closed(LocalHangup),
+      ResponseReceived(resp(200, "OK", to = "<tel:+15551234567>;tag=rtag"))
+    )
+    assertEquals(actions, Nil)
   }
 }

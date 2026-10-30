@@ -142,7 +142,7 @@ All failures surface as `SoftphoneError` (a sealed `RuntimeException` hierarchy)
 
 | Error | Cause |
 |-------|-------|
-| `InvalidHostname(host)` | Hostname string could not be parsed |
+| `InvalidSipUri(input, reason)` | The callee, or the configured `user`/`realm`, is not a valid SIP URI |
 | `HostResolutionFailed(host)` | DNS lookup returned no result |
 | `CallRejected(code, reason)` | Remote returned a 4xx / 5xx / 6xx response |
 | `CallTimedOut` | No answer within `invite-timeout` |
