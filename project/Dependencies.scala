@@ -9,6 +9,7 @@ object Dependencies {
   private val otel4sVersion        = "1.1.0"
   private val opentelemetryVersion = "1.67.0"
   private val scribeVersion        = "3.19.0"
+  private val dnsjavaVersion       = "3.6.3"
 
   // Audio
   val sound4s = "io.github.max-peroch" %% "sound4s" % "0.2.0"
@@ -17,6 +18,9 @@ object Dependencies {
   val catsEffect = "org.typelevel" %% "cats-effect" % catsEffectVersion
   val fs2Core    = "co.fs2"        %% "fs2-core"    % fs2Version
   val fs2Io      = "co.fs2"        %% "fs2-io"      % fs2Version
+
+  // DNS (SRV and NAPTR records, with their TTLs)
+  val dnsjava = "dnsjava" % "dnsjava" % dnsjavaVersion
 
   // Testing
   val munit           = "org.scalameta" %% "munit"             % "1.3.6" % Test

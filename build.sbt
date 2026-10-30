@@ -32,7 +32,8 @@ lazy val softphone4s = project
       fs2Io,
       pureconfigCore,
       pureconfigGeneric,
-      log4catsCore
+      log4catsCore,
+      dnsjava
     )
   )
 
