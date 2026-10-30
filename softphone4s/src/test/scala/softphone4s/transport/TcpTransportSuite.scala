@@ -85,7 +85,7 @@ class TcpTransportSuite extends CatsEffectSuite {
       .timeout(5.seconds)
 
   private def tcp(config: StreamConfig = StreamConfig()) =
-    TcpTransport.resource[IO](ip"127.0.0.1", config, NoOpLogger.impl[IO])
+    TcpTransport.resource[IO](ip"127.0.0.1", None, config, NoOpLogger.impl[IO])
 
   test("a message sent arrives whole at the server") {
     (server(), tcp()).tupled.use { (srv, transport) =>
@@ -174,6 +174,137 @@ class TcpTransportSuite extends CatsEffectSuite {
           transport.send(srv.address, options(2)) >>
           firstN(srv, 2)
             .map(r => assertEquals(r.size, 2))
+    }
+  }
+
+  // ---- Accepting connections ------------------------------------------------------
+
+  private def listening(config: StreamConfig = StreamConfig()) =
+    TcpTransport
+      .resource[IO](ip"127.0.0.1", Some(port"0"), config, NoOpLogger.impl[IO])
+
+  private def connected(to: SocketAddress[IpAddress]): Resource[IO, RawPeer] =
+    Network[IO].connect(to).flatMap(RawPeer(_))
+
+  /** A request carrying `alias` for `sentBy`. */
+  private def aliased(n: Int, sentBy: String) = {
+    val base = options(n)
+    base.copy(headers =
+      base.headers.copy(vias =
+        NonEmptyList.one(via(s"SIP/2.0/TCP $sentBy;branch=z9hG4bK$n;alias"))
+      )
+    )
+  }
+
+  test("a listening transport reports the address it is bound to") {
+    listening().use(t => IO(assert(t.localAddress.port.value > 0)))
+  }
+
+  test(
+    "a message sent down a connection made to us is delivered, from the sender"
+  ) {
+    listening().use { transport =>
+      connected(transport.localAddress).use { peer =>
+        peer.send(options(1)) >>
+          transport.messages.head.compile.lastOrError
+            .timeout(5.seconds)
+            .map(assertEquals(_, Inbound(peer.local, options(1))))
+      }
+    }
+  }
+
+  test("a response goes back on the connection its request came in on") {
+    listening().use { transport =>
+      connected(transport.localAddress).use { peer =>
+        for {
+          _       <- peer.send(options(1))
+          inbound <- transport.messages.head.compile.lastOrError
+            .timeout(5.seconds)
+          _ <- transport.send(
+            inbound.from,
+            SipResponse(200, "OK", options(1).headers)
+          )
+          back <- peer.next
+        } yield assertEquals(back, SipResponse(200, "OK", options(1).headers))
+      }
+    }
+  }
+
+  test(
+    "a request to the address a Via names with alias goes down the connection it arrived on"
+  ) {
+    listening().use { transport =>
+      connected(transport.localAddress).use { peer =>
+        for {
+          // Nothing listens on 9999: only the alias can get the message there.
+          _ <- peer.send(aliased(1, "127.0.0.1:9999"))
+          _ <- transport.messages.head.compile.lastOrError.timeout(5.seconds)
+          _ <- transport.send(
+            SocketAddress(ip"127.0.0.1", port"9999"),
+            options(2)
+          )
+          back <- peer.next
+        } yield assertEquals(back, options(2))
+      }
+    }
+  }
+
+  test("an alias for another IP address than the connection's is ignored") {
+    val config = StreamConfig(connectTimeout = 500.millis)
+    listening(config).use { transport =>
+      connected(transport.localAddress).use { peer =>
+        for {
+          _ <- peer.send(aliased(1, "192.0.2.1:5060"))
+          _ <- transport.messages.head.compile.lastOrError.timeout(5.seconds)
+          result <- transport
+            .send(SocketAddress(ip"192.0.2.1", port"5060"), options(2))
+            .attempt
+          silent <- peer.quiet(300.millis)
+        } yield {
+          assert(result.isLeft, "the message must not be sent anywhere")
+          assert(silent, "and not down the connection that claimed the address")
+        }
+      }
+    }
+  }
+
+  test("an accepted connection idle for the timeout is closed") {
+    val config = StreamConfig(idleTimeout = 200.millis)
+    listening(config).use { transport =>
+      connected(transport.localAddress).use { peer =>
+        for {
+          _       <- peer.send(options(1))
+          inbound <- transport.messages.head.compile.lastOrError
+            .timeout(5.seconds)
+          _ <- IO.sleep(800.millis)
+          // The connection is gone, and its address with it: a reply would have
+          // to open a new connection to a port nobody listens on.
+          result <- transport.send(inbound.from, options(2)).attempt
+        } yield assert(result.isLeft)
+      }
+    }
+  }
+
+  test("connections made to us are served side by side") {
+    listening().use { transport =>
+      (
+        connected(transport.localAddress),
+        connected(transport.localAddress)
+      ).tupled.use { (a, b) =>
+        for {
+          _  <- a.send(options(1))
+          _  <- b.send(options(2))
+          in <- transport.messages.take(2).compile.toList.timeout(5.seconds)
+          _  <- in.traverse_(i =>
+            transport.send(i.from, SipResponse(200, "OK", i.message.headers))
+          )
+          ra <- a.next
+          rb <- b.next
+        } yield {
+          assertEquals(ra.headers.cseq.seq.value, 1)
+          assertEquals(rb.headers.cseq.seq.value, 2)
+        }
+      }
     }
   }
 }

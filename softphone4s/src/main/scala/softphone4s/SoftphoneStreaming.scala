@@ -151,7 +151,7 @@ class SoftphoneStreaming[F[_]: Async: Network] private (
             account.config,
             config.bindAddress,
             localIp,
-            config.localSipPort,
+            sipPortFor(protocol),
             config.baseRtpPort,
             protocol
           )
@@ -235,6 +235,15 @@ class SoftphoneStreaming[F[_]: Async: Network] private (
       )
       .handleError(_ => config.localIpFallback)
 
+  /** The port our messages over `transport` say they come from, and our Contact
+    * says to reach us at: where we listen for it, if we do.
+    */
+  private def sipPortFor(transport: TransportProtocol): Port =
+    if transport == TransportProtocol.Tls &&
+      config.listen.contains(TransportProtocol.Tls)
+    then config.tlsPort
+    else config.localSipPort
+
   /** `transport` itself, if we can speak it. */
   private def available(transport: TransportProtocol): F[TransportProtocol] =
     transport match {
@@ -263,7 +272,7 @@ class SoftphoneStreaming[F[_]: Async: Network] private (
             account.config,
             config.bindAddress,
             localIp,
-            config.localSipPort,
+            sipPortFor(transport),
             rtpPort,
             transport
           )
@@ -488,9 +497,22 @@ object SoftphoneStreaming {
         SocketAddress(config.bindAddress, config.localSipPort),
         logger
       )
-      tcp <- TcpTransport
-        .resource[F](config.bindAddress, config.tcp, logger)
-      tls <- TlsTransport.resource[F](config.bindAddress, config.tls, logger)
+      tcp <- TcpTransport.resource[F](
+        config.bindAddress,
+        Option.when(config.listen.contains(TransportProtocol.Tcp))(
+          config.localSipPort
+        ),
+        config.tcp,
+        logger
+      )
+      tls <- TlsTransport.resource[F](
+        config.bindAddress,
+        Option.when(config.listen.contains(TransportProtocol.Tls))(
+          config.tlsPort
+        ),
+        config.tls,
+        logger
+      )
       transport = RoutedTransport(udp, tcp, tls)
       layer <- TransactionManager.resource[F](
         transport,

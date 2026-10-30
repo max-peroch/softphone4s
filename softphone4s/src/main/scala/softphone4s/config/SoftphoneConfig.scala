@@ -33,7 +33,9 @@ case class SoftphoneConfig(
     transport: TransportProtocol = TransportProtocol.Udp,
     tcp: StreamConfig = StreamConfig(),
     tls: TlsConfig = TlsConfig(),
-    dns: DnsConfig = DnsConfig()
+    dns: DnsConfig = DnsConfig(),
+    listen: Set[TransportProtocol] = Set.empty,
+    tlsPort: Port = port"5061"
 ) {
 
   /** The account `call` and `register` use. */

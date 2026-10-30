@@ -10,7 +10,11 @@ import pureconfig.ConfigSource
 import softphone4s.SipLiterals.*
 import softphone4s.config.{AccountConfig, SoftphoneConfig}
 import softphone4s.model.*
-import softphone4s.transport.{HostnameVerification, TlsVersion}
+import softphone4s.transport.{
+  ClientAuthentication,
+  HostnameVerification,
+  TlsVersion
+}
 import softphone4s.transport.{Inbound, SipTransport, Transport}
 
 import javax.sound.sampled.AudioFormat
@@ -379,8 +383,45 @@ class MultiAccountSuite extends CatsEffectSuite {
 
   test("a DNS server that is not an address is an error") {
     val parsed = ConfigSource
-      .string("user = a\npassword = b\nrealm = c\ndns { servers = [\"dns.example.com\"] }")
+      .string(
+        "user = a\npassword = b\nrealm = c\ndns { servers = [\"dns.example.com\"] }"
+      )
       .load[SoftphoneConfig]
     assert(parsed.isLeft)
+  }
+
+  test("listening is read from configuration") {
+    val parsed = ConfigSource
+      .string(
+        """user = a
+          |password = b
+          |realm = c
+          |listen = [tcp, tls]
+          |tls-port = 5071
+          |tls {
+          |  server-certificate { path = "/etc/sip/server.p12", password = "s" }
+          |  client-authentication = "require"
+          |}""".stripMargin
+      )
+      .load[SoftphoneConfig]
+      .fold(failures => fail(failures.prettyPrint()), identity)
+    assertEquals(
+      parsed.listen,
+      Set(TransportProtocol.Tcp, TransportProtocol.Tls)
+    )
+    assertEquals(parsed.tlsPort.value, 5071)
+    assertEquals(parsed.tls.clientAuthentication, ClientAuthentication.Require)
+    assertEquals(
+      parsed.tls.serverCertificate.map(_.path.toString),
+      Some("/etc/sip/server.p12")
+    )
+  }
+
+  test(
+    "by default we listen for nothing but UDP, and ask for no client certificate"
+  ) {
+    val defaults = SoftphoneConfig("a", "b", "c")
+    assertEquals(defaults.listen, Set.empty[TransportProtocol])
+    assertEquals(defaults.tls.clientAuthentication, ClientAuthentication.Off)
   }
 }

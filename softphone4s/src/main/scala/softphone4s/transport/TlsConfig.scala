@@ -8,6 +8,12 @@ import pureconfig.ConfigReader
   *   the certificate authorities we trust; the JVM's own when absent.
   * @param clientCertificate
   *   the key and certificate we present if a server asks for one (mutual TLS).
+  * @param serverCertificate
+  *   the key and certificate we show to clients that connect to us; needed to
+  *   listen for TLS.
+  * @param clientAuthentication
+  *   whether, as a server, we ask clients for a certificate, to be checked
+  *   against `trustStore`.
   * @param minVersion
   *   the oldest protocol version we accept.
   * @param cipherSuites
@@ -23,6 +29,8 @@ import pureconfig.ConfigReader
 final case class TlsConfig(
     trustStore: Option[KeyStoreConfig] = None,
     clientCertificate: Option[KeyStoreConfig] = None,
+    serverCertificate: Option[KeyStoreConfig] = None,
+    clientAuthentication: ClientAuthentication = ClientAuthentication.Off,
     minVersion: TlsVersion = TlsVersion.Tls12,
     cipherSuites: Option[List[String]] = None,
     hostnameVerification: HostnameVerification = HostnameVerification.Verify,

@@ -2,7 +2,7 @@ package softphone4s.model
 
 import cats.syntax.all.*
 import cats.{Eq, Show}
-import com.comcast.ip4s.{Host, IpAddress, Port}
+import com.comcast.ip4s.{Host, IpAddress, Port, SocketAddress, port}
 
 import scala.collection.immutable.ListMap
 
@@ -31,6 +31,33 @@ final case class Via(
   }
 
   override def toString: String = render
+
+  /** This Via asking the peer to send requests for its sent-by address back on
+    * the connection this one came in on (RFC 5923).
+    */
+  def withAlias: Via = copy(params = params.updated(ParamName.Alias, None))
+
+  def hasAlias: Boolean = params.contains(ParamName.Alias)
+
+  /** Where the sender says it can be reached, if that is an IP address: its
+    * sent-by, with the transport's default port when none is given.
+    */
+  def sentBy: Option[SocketAddress[IpAddress]] =
+    host match {
+      case ip: IpAddress =>
+        Some(
+          SocketAddress(
+            ip,
+            port.getOrElse(
+              transport match {
+                case TransportProtocol.Tls | TransportProtocol.Wss => port"5061"
+                case _                                             => port"5060"
+              }
+            )
+          )
+        )
+      case _ => None
+    }
 }
 
 object Via {

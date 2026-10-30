@@ -18,6 +18,7 @@ object ParamName {
   /** Header parameters that Via and NameAddr model as typed fields. */
   private[model] val Branch: ParamName   = "branch"
   private[model] val RPort: ParamName    = "rport"
+  private[model] val Alias: ParamName    = "alias"
   private[model] val Received: ParamName = "received"
   private[model] val TagParam: ParamName = "tag"
 

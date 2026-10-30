@@ -143,4 +143,26 @@ object TlsFixtures {
     })
 
   def trusting(path: Path): KeyStoreConfig = KeyStoreConfig(path, password)
+
+  /** A client's side: it trusts what `trusts` holds, and shows `identity` if
+    * given.
+    */
+  def clientContext(
+      trusts: Path,
+      identity: Option[Path] = None
+  ): Resource[IO, TLSContext[IO]] =
+    Resource.eval(IO.blocking {
+      val trust =
+        TrustManagerFactory.getInstance(TrustManagerFactory.getDefaultAlgorithm)
+      trust.init(keyStore(trusts))
+      val keys = identity.map { path =>
+        val factory =
+          KeyManagerFactory.getInstance(KeyManagerFactory.getDefaultAlgorithm)
+        factory.init(keyStore(path), password.toCharArray)
+        factory.getKeyManagers
+      }
+      val context = SSLContext.getInstance("TLS")
+      context.init(keys.orNull, trust.getTrustManagers, null)
+      Network[IO].tlsContext.fromSSLContext(context)
+    })
 }

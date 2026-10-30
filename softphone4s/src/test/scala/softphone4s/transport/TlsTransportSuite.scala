@@ -93,7 +93,7 @@ class TlsTransportSuite extends CatsEffectSuite {
     } yield Server(address, received)
 
   private def client(config: TlsConfig) =
-    TlsTransport.resource[IO](ip"127.0.0.1", config, NoOpLogger.impl[IO])
+    TlsTransport.resource[IO](ip"127.0.0.1", None, config, NoOpLogger.impl[IO])
 
   private val trustsServer =
     TlsConfig(trustStore = Some(TlsFixtures.trusting(files.trustsServer)))
@@ -320,5 +320,109 @@ class TlsTransportSuite extends CatsEffectSuite {
     )
     assertEquals(lax.endpointIdentificationAlgorithm, None)
     assertEquals(lax.protocols, Some(List("TLSv1.2", "TLSv1.3")))
+  }
+
+  // ---- Accepting connections ------------------------------------------------------
+
+  private def listeningConfig(
+      authentication: ClientAuthentication = ClientAuthentication.Off
+  ) =
+    TlsConfig(
+      trustStore = Some(TlsFixtures.trusting(files.trustsClient)),
+      serverCertificate = Some(TlsFixtures.trusting(files.server)),
+      clientAuthentication = authentication
+    )
+
+  private def listening(config: TlsConfig) =
+    TlsTransport
+      .resource[IO](ip"127.0.0.1", Some(port"0"), config, NoOpLogger.impl[IO])
+
+  /** A TLS client for the server at `address`, reading the host as `localhost`.
+    */
+  private def connecting(
+      address: SocketAddress[IpAddress],
+      identity: Option[Path] = None
+  ): Resource[IO, RawPeer] =
+    for {
+      context <- TlsFixtures.clientContext(files.trustsServer, identity)
+      raw     <- Network[IO].connect(address)
+      tls     <- context
+        .clientBuilder(raw)
+        .withParameters(
+          TLSParameters(serverNames =
+            Some(List(new javax.net.ssl.SNIHostName("localhost")))
+          )
+        )
+        .build
+      peer <- RawPeer(tls)
+    } yield peer
+
+  test(
+    "a TLS client that connects to us is served, and our reply goes back to it"
+  ) {
+    listening(listeningConfig()).use { transport =>
+      connecting(transport.localAddress).use { peer =>
+        for {
+          _       <- peer.send(optionsTo("localhost"))
+          inbound <- transport.messages.head.compile.lastOrError
+            .timeout(5.seconds)
+          _ <- transport.send(
+            inbound.from,
+            SipResponse(200, "OK", optionsTo("localhost").headers)
+          )
+          back <- peer.next
+        } yield {
+          assertEquals(inbound.message, optionsTo("localhost"))
+          assertEquals(
+            back,
+            SipResponse(200, "OK", optionsTo("localhost").headers)
+          )
+        }
+      }
+    }
+  }
+
+  test("listening for TLS needs a server certificate") {
+    listening(TlsConfig()).use_.attempt.map {
+      case Left(SoftphoneError.TlsConfigurationInvalid(_)) => ()
+      case other => fail(s"unexpected $other")
+    }
+  }
+
+  test(
+    "a client with no certificate is turned away when one is required, and a trusted one is let in"
+  ) {
+    listening(listeningConfig(ClientAuthentication.Require)).use { transport =>
+      for {
+        anonymous <- connecting(transport.localAddress).use { peer =>
+          peer.send(optionsTo("localhost")) >> IO.sleep(300.millis)
+        }.attempt
+        none <- transport.messages.head.compile.last.timeout(500.millis).attempt
+        _    <- connecting(transport.localAddress, Some(files.client))
+          .use(_.send(optionsTo("localhost", 2)))
+        got <- transport.messages.head.compile.lastOrError.timeout(5.seconds)
+      } yield {
+        assert(
+          none.isLeft,
+          s"nothing must be delivered to an anonymous client: $anonymous"
+        )
+        assertEquals(got.message, optionsTo("localhost", 2))
+      }
+    }
+  }
+
+  test(
+    "a client with a certificate nobody we trust vouches for is turned away"
+  ) {
+    val untrusted = files.stranger
+    listening(listeningConfig(ClientAuthentication.Require)).use { transport =>
+      connecting(transport.localAddress, Some(untrusted)).use { peer =>
+        peer.send(optionsTo("localhost")) >> IO.sleep(300.millis)
+      }.attempt >>
+        transport.messages.head.compile.last
+          .timeout(500.millis)
+          .attempt
+          .map(r => assert(r.isLeft))
+    }
   }
 }

@@ -2,7 +2,7 @@ package softphone4s.transport
 
 import cats.effect.{Async, Resource, Sync}
 import cats.syntax.all.*
-import com.comcast.ip4s.{Hostname, IDN, IpAddress}
+import com.comcast.ip4s.{Hostname, IDN, IpAddress, Port, SocketAddress}
 import fs2.io.net.Network
 import fs2.io.net.tls.{TLSContext, TLSParameters, TLSSocket}
 import org.typelevel.log4cats.StructuredLogger
@@ -32,11 +32,15 @@ object TlsTransport {
     */
   def resource[F[_]: Async: Network](
       bindAddress: IpAddress,
+      listenOn: Option[Port],
       config: TlsConfig,
       logger: StructuredLogger[F]
   ): Resource[F, Transport[F]] =
     for {
-      context   <- Resource.eval(tlsContext[F](config))
+      context  <- Resource.eval(tlsContext[F](config, config.clientCertificate))
+      listener <- listenOn.traverse(port =>
+        listening(bindAddress, port, config, logger)
+      )
       transport <- StreamTransport.resource[F](
         bindAddress,
         config.connection,
@@ -49,9 +53,47 @@ object TlsTransport {
               .build
           } yield StreamTransport.Connected(tls, handshaken(tls)),
         serverNameOf = serverNameOf,
+        listener,
         logger
       )
     } yield transport
+
+  /** Listens for TLS at `port`, showing `config.serverCertificate`. */
+  private def listening[F[_]: Async: Network](
+      bindAddress: IpAddress,
+      port: Port,
+      config: TlsConfig,
+      logger: StructuredLogger[F]
+  ): Resource[F, StreamTransport.Listener[F]] =
+    for {
+      identity <- Resource.eval(
+        Async[F].fromOption(
+          config.serverCertificate,
+          SoftphoneError.TlsConfigurationInvalid(
+            "listening for TLS needs a server certificate"
+          )
+        )
+      )
+      context  <- Resource.eval(tlsContext[F](config, Some(identity)))
+      listener <- StreamListener
+        .bind[F](SocketAddress(bindAddress, port), logger)(socket =>
+          context
+            .serverBuilder(socket)
+            .withParameters(serverParameters(config))
+            .build
+            .map(tls => StreamTransport.Connected(tls, handshaken(tls)))
+        )
+    } yield listener
+
+  private[transport] def serverParameters(config: TlsConfig): TLSParameters =
+    TLSParameters(
+      protocols = Some(config.minVersion.protocols),
+      cipherSuites = config.cipherSuites,
+      needClientAuth =
+        config.clientAuthentication == ClientAuthentication.Require,
+      wantClientAuth =
+        config.clientAuthentication == ClientAuthentication.Request
+    )
 
   /** Completes when the handshake has. Nothing here moves it along: the reading
     * of the connection does, and a failure surfaces there.
@@ -102,23 +144,28 @@ object TlsTransport {
     )
 
   private def tlsContext[F[_]: Async: Network](
-      config: TlsConfig
+      config: TlsConfig,
+      identity: Option[KeyStoreConfig]
   ): F[TLSContext[F]] =
     Sync[F]
-      .blocking(sslContext(config))
+      .blocking(sslContext(config, identity))
       .adaptError { case NonFatal(error) =>
         SoftphoneError.TlsConfigurationInvalid(String.valueOf(error.getMessage))
       }
       .map(Network[F].tlsContext.fromSSLContext)
 
-  private def sslContext(config: TlsConfig): SSLContext = {
+  /** The trust is `config.trustStore`; the key we show is `identity`. */
+  private def sslContext(
+      config: TlsConfig,
+      identity: Option[KeyStoreConfig]
+  ): SSLContext = {
     val trust = config.trustStore.map { store =>
       val factory =
         TrustManagerFactory.getInstance(TrustManagerFactory.getDefaultAlgorithm)
       factory.init(keyStore(store))
       factory.getTrustManagers
     }
-    val keys = config.clientCertificate.map { store =>
+    val keys = identity.map { store =>
       val factory =
         KeyManagerFactory.getInstance(KeyManagerFactory.getDefaultAlgorithm)
       factory.init(keyStore(store), store.password.toCharArray)

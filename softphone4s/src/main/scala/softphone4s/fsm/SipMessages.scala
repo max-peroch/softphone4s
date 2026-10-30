@@ -12,7 +12,11 @@ import softphone4s.transaction.TransactionMessages
 object SipMessages {
 
   private def vias(e: LocalEndpoint, branch: Branch): NonEmptyList[Via] =
-    NonEmptyList.one(Via.request(e.transport, e.ip, e.sipPort, branch))
+    NonEmptyList.one {
+      val via = Via.request(e.transport, e.ip, e.sipPort, branch)
+      // On a connection we opened, ask the peer to send its requests back on it.
+      if e.transport == TransportProtocol.Udp then via else via.withAlias
+    }
 
   private def contacts(e: LocalEndpoint): List[NameAddr] =
     List(NameAddr(e.contact))

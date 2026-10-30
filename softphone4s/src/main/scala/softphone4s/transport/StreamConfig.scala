@@ -13,9 +13,12 @@ import scala.concurrent.duration.*
   *   opened again when the next message needs it.
   * @param framing
   *   the largest message a connection may carry.
+  * @param maxIncoming
+  *   how many connections made to us are served at once; the others wait.
   */
 final case class StreamConfig(
     connectTimeout: FiniteDuration = 5.seconds,
     idleTimeout: FiniteDuration = 5.minutes,
-    framing: FramingLimits = FramingLimits()
+    framing: FramingLimits = FramingLimits(),
+    maxIncoming: Int = 256
 ) derives ConfigReader

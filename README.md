@@ -61,8 +61,19 @@ softphone4s handles outbound SIP calls end-to-end:
   and a handshake that fails is a failed connection, not a lost message.
   Verification fails closed: a destination given as an IP address has no name
   to check, so use a host name, or switch verification off knowingly. A
-  `sips:` URI selects TLS. Incoming TLS connections are not accepted yet, only
-  the ones we open.
+  `sips:` URI selects TLS.
+- **Accepting connections**: with `listen = [tcp, tls]` we also listen for TCP
+  (on `local-sip-port`) and TLS (on `tls-port`, which needs
+  `tls.server-certificate`; `tls.client-authentication` is `off`, `request` or
+  `require`). A connection that comes in is served like one we opened, and the
+  responses to its requests go back on it. Our Via on TCP and TLS carries
+  `alias` (RFC 5923), and so does a peer's: a request with `alias` makes its
+  connection the one to use for requests to that address, provided the address
+  is on the IP the connection came from, so a peer cannot claim someone else's
+  traffic. Requests to a Contact then reuse the connection a request arrived on
+  when it is TCP; over TLS a connection is reused only for responses, since
+  reusing it for requests would need the peer's certificate checked against its
+  name. A connection that cannot be framed is dropped without affecting others.
 - **Mid-call requests from the remote party**: OPTIONS is answered with our
   `Allow` list; a re-INVITE or UPDATE with SDP is answered with our SDP, media
   follows the new address, and a hold (`sendonly`, `inactive` or `0.0.0.0`)
@@ -269,6 +280,10 @@ account every call is taken. Two accounts cannot have the same user.
 | `tcp.idle-timeout`  | `Duration`  | `5 minutes`  | A TCP connection with nothing sent or received for this long is closed |
 | `tcp.framing.max-header-bytes` / `max-body-bytes` | `Int` | 16 KiB / 1 MiB | Largest message a TCP connection may carry before it is dropped |
 | `tls.trust-store` / `tls.client-certificate` | `{ path, password, store-type }` | JVM trust / none | Key stores for the certificates we trust and the one we present (`store-type` is `PKCS12` or `JKS`) |
+| `listen`            | list of `tcp`/`tls` | empty | Transports we also accept connections on (UDP is always on) |
+| `tls-port`          | `Port`      | `5061`       | Port for the TLS listener                           |
+| `tls.server-certificate` | `{ path, password, store-type }` | none | The key and certificate we show to clients that connect to us |
+| `tls.client-authentication` | `off`/`request`/`require` | `off` | Whether, as a server, we ask clients for a certificate (checked against `tls.trust-store`) |
 | `dns.servers`       | list of `address[:port]` | system | DNS servers to ask for SRV and NAPTR records |
 | `dns.timeout`       | `Duration`  | `5 seconds`  | How long to wait for one DNS server                 |
 | `tls.min-version`   | `1.2`/`1.3` | `1.2`        | Oldest TLS version accepted                         |
