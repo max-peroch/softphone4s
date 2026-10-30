@@ -91,6 +91,11 @@ object SipAction {
   case class SendInfoOk(request: SipRequest)    extends SipAction
   case class SendOptionsOk(request: SipRequest) extends SipAction
 
+  /** A 200 to a re-INVITE that had no SDP: it carries our offer, and the answer
+    * comes in the ACK.
+    */
+  case class SendOfferOk(request: SipRequest) extends SipAction
+
   /** Send a re-INVITE offering `change`; `dialog` carries its CSeq. */
   case class SendReinvite(dialog: SipDialog, change: SessionChange)
       extends SipAction
@@ -337,6 +342,7 @@ object CallFsm {
             DialogRequest.of(request) match {
               case DialogRequest.Query   => List(SendOptionsOk(request))
               case DialogRequest.Refresh => List(SendSessionOk(request, None))
+              case DialogRequest.DelayedOffer => List(SendOfferOk(request))
               case DialogRequest.Offer(offer) =>
                 List(SendSessionOk(request, Some(offer)))
               case DialogRequest.Refused(status) =>

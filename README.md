@@ -38,12 +38,15 @@ softphone4s handles outbound SIP calls end-to-end:
   `Allow` list; a re-INVITE or UPDATE with SDP is answered with our SDP, media
   follows the new address, and a hold (`sendonly`, `inactive` or `0.0.0.0`)
   stops our outgoing RTP until the call resumes. A re-INVITE without SDP is
-  refused `488`.
+  answered with our offer in the `200`, and the answer in the ACK moves the
+  media. The `200` to a re-INVITE is repeated until its ACK, as for the first
+  INVITE.
 - **Forked calls** (RFC 3261 §13.2.2.4): when a proxy forks an outgoing call,
   the first branch to answer is the call. A `200` from any other branch is
   ACKed, so it stops retransmitting, and then ended with a BYE.
 - **Hold and resume**: `Call.hold` and `Call.resume` send a re-INVITE offering
-  `sendonly` or `sendrecv`. A clash with the remote party's own re-INVITE is
+  `sendonly` or `sendrecv`; `Call.changeSession` can send the same change in an
+  UPDATE (RFC 3311) instead, which needs no ACK. A clash with the remote party's own re-INVITE is
   settled as RFC 3261 §14 says: the remote's gets `491`, and if ours gets a
   `491` it is sent again after a random delay (2.1–4 s for the party that
   placed the call, 0–2 s for the other). A `408` or `481` ends the call.

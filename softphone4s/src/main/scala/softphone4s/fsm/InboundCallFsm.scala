@@ -92,6 +92,11 @@ enum InboundAction {
   case SendInfoOk(request: SipRequest)
   case SendOptionsOk(request: SipRequest)
 
+  /** A 200 to a re-INVITE that had no SDP: it carries our offer, and the answer
+    * comes in the ACK.
+    */
+  case SendOfferOk(request: SipRequest)
+
   /** A 200 to a re-INVITE or UPDATE: with our answer to `offer` if there is
     * one, after which media goes where the offer says (or stops, on hold).
     */
@@ -480,6 +485,7 @@ object InboundCallFsm {
             DialogRequest.of(request) match {
               case DialogRequest.Query   => List(SendOptionsOk(request))
               case DialogRequest.Refresh => List(SendSessionOk(request, None))
+              case DialogRequest.DelayedOffer => List(SendOfferOk(request))
               case DialogRequest.Offer(offer) =>
                 List(SendSessionOk(request, Some(offer)))
               case DialogRequest.Refused(status) =>

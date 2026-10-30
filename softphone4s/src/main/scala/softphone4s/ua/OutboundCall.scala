@@ -17,6 +17,7 @@ import softphone4s.transaction.{
   ClientNotice,
   ClientTransaction,
   ServerTransaction,
+  TransactionConfig,
   TransactionLayer,
   TransactionMessages
 }
@@ -50,6 +51,7 @@ private[softphone4s] class OutboundCall[F[_]: Async] private (
     entropy: Entropy[F],
     media: MediaSession[F],
     timers: Timers[F, CallTimer],
+    acks: SessionAcks[F],
     logger: StructuredLogger[F]
 ) extends Call[F] {
 
@@ -92,11 +94,13 @@ private[softphone4s] class OutboundCall[F[_]: Async] private (
           )
           .as(Option(SipEvent.RequestReceived(transaction.request)))
       case DialogInput.Unmatched(inbound) =>
-        Async[F].pure(inbound.message match {
+        inbound.message match {
           case response: SipResponse =>
-            Some(SipEvent.ResponseReceived(response))
-          case _: SipRequest => None
-        })
+            Async[F].pure(Some(SipEvent.ResponseReceived(response)))
+          case request: SipRequest if request.method == SipMethod.Ack =>
+            acks.acked(request).as(None)
+          case _: SipRequest => Async[F].pure(None)
+        }
     }
     fromDialog
       .merge(events.stream)
@@ -233,16 +237,38 @@ private[softphone4s] class OutboundCall[F[_]: Async] private (
       .drain
 
   /** Answers the in-dialog request `request` through its server transaction. */
-  private def respondTo(request: SipRequest, response: SipResponse): F[Unit] = {
+  private def respondTo(request: SipRequest, response: SipResponse): F[Unit] =
+    respondFrom(request, response).void
+
+  /** As [[respondTo]], and says where the response went. */
+  private def respondFrom(
+      request: SipRequest,
+      response: SipResponse
+  ): F[SocketAddress[IpAddress]] = {
     val key = (request.method, request.headers.cseq.seq)
     serverTransactions.modify(m => (m - key, m.get(key))).flatMap {
-      case Some(transaction) => transaction.respond(response)
-      case None              =>
+      case Some(transaction) =>
+        transaction.respond(response).as(transaction.from)
+      case None =>
         logger.warn(Map("method" -> request.method.toString))(
           "No server transaction to answer; sending the response directly"
-        ) >> layer.transmit(response, peer)
+        ) >> layer.transmit(response, peer).as(peer)
     }
   }
+
+  /** Answers a re-INVITE or UPDATE. The 2xx to a re-INVITE is repeated until
+    * its ACK, which carries our answer if the 2xx carried our offer.
+    */
+  private def answerSession(
+      request: SipRequest,
+      ok: SipResponse,
+      expectsAnswer: Boolean
+  ): F[Unit] =
+    if request.method == SipMethod.Invite then
+      acks.track(request, expectsAnswer)(
+        respondFrom(request, ok).map(ok -> _)
+      )
+    else respondTo(request, ok)
 
   // ---- Actions -------------------------------------------------------------------
 
@@ -371,17 +397,26 @@ private[softphone4s] class OutboundCall[F[_]: Async] private (
           respondTo(request, endpoint.buildOptionsOk(request))
 
       case SendSessionOk(request, offer) =>
+        val ok = endpoint.buildSessionOk(
+          request,
+          offer.fold("")(
+            SdpCodec.buildAnswerTo(_, endpoint.ip, endpoint.rtpPort)
+          )
+        )
         logger.debug("Answering a session change") >>
-          respondTo(
+          answerSession(request, ok, expectsAnswer = false) >>
+          offer.traverse_(o => media.retarget(o.ip, o.port, o.direction))
+
+      case SendOfferOk(request) =>
+        logger.debug("Answering a re-INVITE with an offer") >>
+          answerSession(
             request,
             endpoint.buildSessionOk(
               request,
-              offer.fold("")(
-                SdpCodec.buildAnswerTo(_, endpoint.ip, endpoint.rtpPort)
-              )
-            )
-          ) >>
-          offer.traverse_(o => media.retarget(o.ip, o.port, o.direction))
+              SdpCodec.buildOffer(endpoint.ip, endpoint.rtpPort)
+            ),
+            expectsAnswer = true
+          )
 
       case StartMedia(sdpBody) =>
         val (remoteIp, remotePort) =
@@ -467,6 +502,14 @@ private[softphone4s] object OutboundCall {
         Map.empty[(SipMethod, CSeqNumber), ServerTransaction[F]]
       )
       cancelled <- Ref[F].of(false)
+
+      acks <- SessionAcks.create(
+        supervisor,
+        TransactionConfig(),
+        (response, to) => layer.transmit(response, to),
+        offer => media.retarget(offer.ip, offer.port, offer.direction),
+        logger
+      )
       call = new OutboundCall(
         answered,
         callEnded,
@@ -486,6 +529,7 @@ private[softphone4s] object OutboundCall {
         entropy,
         media,
         timers,
+        acks,
         logger
       )
       _ <- timers.start(CallTimer.InviteTimeout, inviteTimeout)

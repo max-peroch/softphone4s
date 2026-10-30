@@ -20,6 +20,11 @@ enum DialogRequest {
     */
   case Offer(offer: AudioOffer)
 
+  /** A re-INVITE without SDP: we make the offer in our 200 and the ACK carries
+    * the answer (RFC 3261 §14.2).
+    */
+  case DelayedOffer
+
   /** A refusal: an SDP we cannot answer, or a method we do not handle. */
   case Refused(status: FailureStatus)
 }
@@ -30,10 +35,7 @@ object DialogRequest {
     case SipMethod.Options                   => Query
     case SipMethod.Invite | SipMethod.Update =>
       if request.body.isEmpty then
-        // A re-INVITE without an offer would have us make the offer in the 200
-        // and take the answer from the ACK; not supported yet.
-        if request.method == SipMethod.Update then Refresh
-        else Refused(FailureStatus.NotAcceptableHere)
+        if request.method == SipMethod.Update then Refresh else DelayedOffer
       else
         SdpCodec.parseOffer(request.body).filter(_.isAcceptable) match {
           case Some(offer) => Offer(offer)

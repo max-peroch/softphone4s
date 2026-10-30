@@ -749,9 +749,7 @@ class CallFsmSuite extends FunSuite {
     )
   }
 
-  test(
-    "a re-INVITE whose SDP we cannot answer is refused 488, and one without SDP too"
-  ) {
+  test("a re-INVITE whose SDP we cannot answer is refused 488") {
     val noPcmu = sdpBody().replace("RTP/AVP 0 101", "RTP/AVP 8")
     assertEquals(
       replyOf(
@@ -762,11 +760,15 @@ class CallFsmSuite extends FunSuite {
       ),
       List(488)
     )
+  }
+
+  test(
+    "a re-INVITE without SDP is answered with our offer, to be answered in the ACK"
+  ) {
+    val reinvite = req(SipMethod.Invite, number = 3)
     assertEquals(
-      replyOf(
-        step(active, RequestReceived(req(SipMethod.Invite, number = 3)))._2
-      ),
-      List(488)
+      step(active, RequestReceived(reinvite))._2,
+      List(SendOfferOk(reinvite))
     )
   }
 

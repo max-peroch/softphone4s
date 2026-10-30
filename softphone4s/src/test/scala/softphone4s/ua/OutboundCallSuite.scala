@@ -736,6 +736,87 @@ class OutboundCallSuite extends CatsEffectSuite {
 
   // ---- Session requests from the remote, and UPDATE from us -------------------------
 
+  private def peerInvite(
+      invite: SipRequest,
+      ok: SipResponse,
+      body: String,
+      n: Int = 7
+  ) = {
+    val base = byeFromPeer(invite, ok)
+    base.copy(
+      method = SipMethod.Invite,
+      headers = base.headers.copy(
+        cseq = cseq(n, SipMethod.Invite),
+        vias = NonEmptyList.one(
+          via(s"SIP/2.0/UDP 127.0.0.1:5061;branch=z9hG4bKre$n")
+        ),
+        contacts = List(nameAddr("<sip:bob@127.0.0.1:5061>")),
+        contentType = Option.when(body.nonEmpty)(MediaType.Sdp)
+      ),
+      body = body
+    )
+  }
+
+  private def finalResponses(peer: Transport[IO], method: SipMethod) =
+    peer.messages.collect {
+      case Inbound(_, r: SipResponse)
+          if r.statusCode >= 200 && r.headers.cseq.method == method =>
+        r
+    }
+
+  test(
+    "a re-INVITE without SDP is answered with our offer, and the answer in the ACK moves the media"
+  ) {
+    fixture(port"19020").use { f =>
+      for {
+        established <- established(f)
+        (invite, ok) = established
+        _      <- f.peer.send(us, peerInvite(invite, ok, ""))
+        answer <- finalResponses(
+          f.peer,
+          SipMethod.Invite
+        ).head.compile.lastOrError.timeout(5.seconds)
+        ack = SipRequest(
+          SipMethod.Ack,
+          uri("sip:test@127.0.0.1:19060"),
+          peerInvite(invite, ok, sdpAnswering("sendonly")).headers.copy(
+            cseq = cseq(7, SipMethod.Ack),
+            contentType = Some(MediaType.Sdp)
+          ),
+          sdpAnswering("sendonly")
+        )
+        _ <- f.peer.send(us, ack)
+        // The ACK ended the repeats: nothing more arrives.
+        more <- finalResponses(f.peer, SipMethod.Invite).head.compile.last
+          .timeout(1500.millis)
+          .attempt
+      } yield {
+        assertEquals(answer.statusCode, 200)
+        assertEquals(answer.headers.contentType, Some(MediaType.Sdp))
+        assert(answer.body.contains("m=audio"), answer.body)
+        assert(more.isLeft, "the 200 must stop being repeated once ACKed")
+      }
+    }
+  }
+
+  test("the 200 to a re-INVITE is repeated until the ACK arrives") {
+    fixture(port"19021").use { f =>
+      for {
+        established <- established(f)
+        (invite, ok) = established
+        _ <- f.peer.send(us, peerInvite(invite, ok, sdpAnswering("sendrecv")))
+        seen <- finalResponses(f.peer, SipMethod.Invite)
+          .take(3)
+          .compile
+          .toList
+          .timeout(6.seconds)
+      } yield {
+        assertEquals(seen.size, 3) // the 200, then two repeats
+        assertEquals(seen.map(_.statusCode).distinct, List(200))
+      }
+    }
+  }
+
   test("a hold by UPDATE sends an UPDATE that is answered without an ACK") {
     fixture(port"19022").use { f =>
       for {

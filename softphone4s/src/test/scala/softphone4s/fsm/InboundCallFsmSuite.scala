@@ -386,6 +386,14 @@ class InboundCallFsmSuite extends FunSuite {
     assertEquals(state, Active(ctx.dialog.seen(cseqNumber(12))))
   }
 
+  test("a re-INVITE without SDP is answered with our offer") {
+    val reinvite = request(SipMethod.Invite, 11)
+    assertEquals(
+      step(active, RequestReceived(reinvite))._2,
+      List(SendOfferOk(reinvite))
+    )
+  }
+
   test(
     "a re-INVITE we cannot answer is refused 488, an UPDATE without SDP is a refresh"
   ) {
