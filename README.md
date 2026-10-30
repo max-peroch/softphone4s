@@ -38,6 +38,18 @@ softphone4s handles outbound SIP calls end-to-end:
   connection is made when first needed, shared by everything sent to that
   destination, and closed after it has been idle for `tcp.idle-timeout`.
   Retransmission is left to TCP, so TCP and TLS transactions skip their timers.
+- **Locating the server** (RFC 3263): the domain of a callee or registrar is
+  looked up as the RFC says. A port in the URI, or a `server-port` other than
+  5060, is used as it is. Otherwise a transport parameter or `sips:` goes
+  straight to that transport's SRV records (`_sip._udp`, `_sip._tcp`,
+  `_sips._tcp`); with neither, NAPTR records say which transports the domain
+  offers and in what order; with no NAPTR each transport's SRV name is tried,
+  yours first; and with no SRV records the domain's own addresses are used at
+  the default port. Targets of one priority are picked at random in proportion
+  to their weights (RFC 2782). SRV and NAPTR answers are cached for their TTLs
+  (dnsjava); host addresses come from the system resolver, so the hosts file
+  and split DNS still apply. The first target is used; trying the next one when
+  it fails is not done yet.
 - **TLS** (RFC 3261 §26, RFC 5922): the server is identified by the host the
   request is addressed to (its first Route, else its Request-URI), which is sent
   as the SNI name and, by default, checked against the certificate. Trust comes
@@ -241,7 +253,7 @@ account every call is taken. Two accounts cannot have the same user.
 | `password`            | `String`    | required     | SIP password                                       |
 | `realm`             | `String`    | required     | SIP realm / server hostname                        |
 | `local-sip-port`    | `Port`      | `5060`       | Local UDP port for SIP                             |
-| `server-port`       | `Port`      | `5060`       | Remote SIP server port                             |
+| `server-port`       | `Port`      | `5060`       | Remote SIP server port. 5060 leaves the port to SRV records and the transport's default; any other value is used as it is and skips SRV |
 | `base-rtp-port`     | `Port`      | `8000`       | Base RTP port; each concurrent call uses two ports |
 | `bind-address`      | `IpAddress` | `0.0.0.0`    | Local bind address                                 |
 | `local-ip-fallback` | `IpAddress` | `127.0.0.1`  | Advertised when no IPv4 route to the SIP server is found |

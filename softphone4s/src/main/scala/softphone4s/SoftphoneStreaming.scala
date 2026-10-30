@@ -11,6 +11,12 @@ import fs2.concurrent.Channel
 import fs2.io.net.Network
 import org.typelevel.log4cats.StructuredLogger
 import softphone4s.config.SoftphoneConfig
+import softphone4s.dns.{
+  DnsJavaRecords,
+  DnsRecords,
+  ResolvedTarget,
+  TargetResolver
+}
 import softphone4s.fsm.CallTimer
 import softphone4s.model.*
 import softphone4s.registration.Registration
@@ -41,6 +47,7 @@ import javax.sound.sampled.AudioFormat
 class SoftphoneStreaming[F[_]: Async: Network] private (
     config: SoftphoneConfig,
     accountList: NonEmptyList[Account],
+    targets: TargetResolver[F],
     layer: TransactionLayer[F],
     routes: Ref[F, Map[CallId, Channel[F, DialogInput[F]]]],
     nextCallIndex: Ref[F, Int],
@@ -97,9 +104,10 @@ class SoftphoneStreaming[F[_]: Async: Network] private (
       target <- Resource.eval(
         Async[F].fromEither(callee.toSipUri(account.config.realm))
       )
-      protocol   <- Resource.eval(transportFor(account, target))
-      calleeAddr <- Resource.eval(resolveCalleeAddress(account, target))
-      localIp    <- Resource.eval(
+      resolved <- Resource.eval(firstTarget(account, target))
+      protocol <- Resource.eval(available(resolved.transport))
+      calleeAddr = resolved.address
+      localIp <- Resource.eval(
         localIpFor(calleeAddr).flatTap(ip =>
           logger.info(Map("address" -> ip.toString))("Advertising local IP")
         )
@@ -137,11 +145,10 @@ class SoftphoneStreaming[F[_]: Async: Network] private (
             .leftMap(SoftphoneError.InvalidSipUri(account.config.realm, _))
         )
       )
-      registrar <- Resource.eval(
-        resolveHost(host).map(SocketAddress(_, account.config.serverPort))
-      )
-      protocol <- Resource.eval(available(account.config.transport))
-      localIp  <- Resource.eval(localIpFor(registrar))
+      resolved <- Resource.eval(firstTarget(account, registrarUri))
+      protocol <- Resource.eval(available(resolved.transport))
+      registrar = resolved.address
+      localIp <- Resource.eval(localIpFor(registrar))
       // A REGISTER carries no media, so the RTP port is not used.
       endpoint <- Resource.eval(
         Async[F].fromEither(
@@ -178,13 +185,28 @@ class SoftphoneStreaming[F[_]: Async: Network] private (
     resolveHost(uri.host).map(SocketAddress(_, uri.port.getOrElse(defaultPort)))
   }
 
-  private def resolveCalleeAddress(
-      account: Account,
-      target: SipUri
-  ): F[SocketAddress[IpAddress]] =
-    resolveHost(target.host).map(ip =>
-      SocketAddress(ip, target.port.getOrElse(account.config.serverPort))
-    )
+  /** The first place to send a request for `uri` (RFC 3263): SRV and NAPTR
+    * records decide where and over what, unless the URI or the account's server
+    * port says so. Fails if nothing resolves.
+    */
+  private def firstTarget(account: Account, uri: SipUri): F[ResolvedTarget] =
+    targets
+      .resolve(aimed(account, uri), account.config.transport)
+      .flatMap(found =>
+        Async[F].fromOption(
+          found.headOption,
+          SoftphoneError.HostResolutionFailed(uri.host.toString)
+        )
+      )
+
+  /** `uri`, at the account's server port if that is set to something other than
+    * the default 5060 and the URI names no port: a port given is taken as it is
+    * and skips the SRV lookup, while the default leaves DNS to say.
+    */
+  private def aimed(account: Account, uri: SipUri): SipUri =
+    if uri.port.isEmpty && account.config.serverPort != port"5060" then
+      uri.withPort(account.config.serverPort)
+    else uri
 
   /** The address the OS would send from to reach `remote`: what the SDP and
     * Contact must advertise for replies to come back. Connecting a UDP socket
@@ -209,21 +231,6 @@ class SoftphoneStreaming[F[_]: Async: Network] private (
           .getOrElse(config.localIpFallback)
       )
       .handleError(_ => config.localIpFallback)
-
-  /** The transport a call to `target` as `account` uses: the one the URI names
-    * (`;transport=`), else the account's.
-    */
-  private def transportFor(
-      account: Account,
-      target: SipUri
-  ): F[TransportProtocol] =
-    available(
-      target.transport.getOrElse(
-        // A sips: URI asks for TLS all the way (RFC 3261 §26.2.2).
-        if target.scheme == SipScheme.Sips then TransportProtocol.Tls
-        else account.config.transport
-      )
-    )
 
   /** `transport` itself, if we can speak it. */
   private def available(transport: TransportProtocol): F[TransportProtocol] =
@@ -457,6 +464,17 @@ object SoftphoneStreaming {
       audioFormat: AudioFormat,
       logger: StructuredLogger[F]
   ): Resource[F, SoftphoneStreaming[F]] =
+    resourceWith(config, audioFormat, logger, DnsJavaRecords[F])
+
+  /** As [[resource]], looking names up with `dns` instead of the system's DNS
+    * servers.
+    */
+  def resourceWith[F[_]: Async: Network](
+      config: SoftphoneConfig,
+      audioFormat: AudioFormat,
+      logger: StructuredLogger[F],
+      dns: F[DnsRecords[F]]
+  ): Resource[F, SoftphoneStreaming[F]] =
     for {
       udp <- SipTransport.udp[F](
         SocketAddress(config.bindAddress, config.localSipPort),
@@ -481,9 +499,19 @@ object SoftphoneStreaming {
       incomingCalls <- Resource.eval(Queue.unbounded[F, IncomingCall[F]])
       callIndex     <- Resource.eval(Ref[F].of(0))
       entropy       <- Resource.eval(Entropy.secure[F])
+      records       <- Resource.eval(dns)
       softphone = new SoftphoneStreaming(
         config,
         accounts,
+        new TargetResolver[F](
+          records,
+          entropy,
+          Set(
+            TransportProtocol.Udp,
+            TransportProtocol.Tcp,
+            TransportProtocol.Tls
+          )
+        ),
         layer,
         routes,
         callIndex,

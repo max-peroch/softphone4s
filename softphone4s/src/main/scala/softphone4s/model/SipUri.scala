@@ -38,6 +38,8 @@ final case class SipUri private (
 
   def withTransport(t: TransportProtocol): SipUri = copy(transport = Some(t))
 
+  def withPort(p: Port): SipUri = copy(port = Some(p))
+
   def withLooseRouting: SipUri = copy(routing = Routing.Loose)
 
   def isLooseRouting: Boolean = routing == Routing.Loose

@@ -1,0 +1,184 @@
+package softphone4s
+
+import cats.effect.std.Queue
+import cats.effect.{IO, Resource}
+import cats.syntax.all.*
+import com.comcast.ip4s.*
+import fs2.Stream
+import fs2.io.net.{Network, Socket}
+import munit.CatsEffectSuite
+import org.typelevel.log4cats.noop.NoOpLogger
+import softphone4s.SipLiterals.*
+import softphone4s.codec.SipCodec
+import softphone4s.config.SoftphoneConfig
+import softphone4s.dns.{FakeDns, NaptrRecord, SrvRecord}
+import softphone4s.model.*
+import softphone4s.transaction.TransactionMessages
+import softphone4s.transport.StreamFraming
+
+import javax.sound.sampled.AudioFormat
+import scala.concurrent.duration.*
+
+/** Calls whose destination comes from DNS: NAPTR and SRV records decide the
+  * transport, the address and the port.
+  */
+class DnsCallSuite extends CatsEffectSuite {
+
+  private val audio = new AudioFormat(8000f, 16, 1, true, false)
+
+  /** A TCP SIP server on loopback; it queues what it is sent and answers INVITE
+    * and BYE.
+    */
+  private def server: Resource[IO, (Port, Queue[IO, SipRequest])] =
+    for {
+      requests  <- Resource.eval(Queue.unbounded[IO, SipRequest])
+      bound     <- Network[IO].bind(SocketAddress(ip"127.0.0.1", port"0"))
+      listening <- Resource.eval(bound.address match {
+        case a: SocketAddress[?] => IO.pure(a.port)
+        case _ => IO.raiseError(new RuntimeException("no port"))
+      })
+      _ <- bound.accept
+        .map { (socket: Socket[IO]) =>
+          socket.reads
+            .through(StreamFraming.frames[IO]())
+            .evalMap {
+              case Right(bytes) =>
+                SipCodec.decode(bytes) match {
+                  case Right(request: SipRequest) =>
+                    requests.offer(request) >>
+                      Option
+                        .when(
+                          request.method == SipMethod.Invite || request.method == SipMethod.Bye
+                        ) {
+                          val base = TransactionMessages.responseTo(
+                            request,
+                            200,
+                            "OK",
+                            Some(tag("rtag"))
+                          )
+                          base.copy(
+                            headers = base.headers.copy(
+                              contacts = List(
+                                nameAddr(
+                                  s"<sip:bob@127.0.0.1:$listening;transport=tcp>"
+                                )
+                              ),
+                              contentType = Some(MediaType.Sdp)
+                            ),
+                            body = "v=0\r\nc=IN IP4 127.0.0.1\r\nt=0 0\r\nm=audio 40000 RTP/AVP 0\r\n"
+                          )
+                        }
+                        .traverse_(r => socket.write(SipCodec.encode(r)))
+                  case _ => IO.unit
+                }
+              case Left(_) => IO.unit
+            }
+            .handleErrorWith(_ => Stream.empty)
+        }
+        .parJoinUnbounded
+        .compile
+        .drain
+        .background
+    } yield (listening, requests)
+
+  private def phone(dns: FakeDns, ours: Port) =
+    SoftphoneStreaming.resourceWith[IO](
+      SoftphoneConfig(
+        user = "test",
+        password = "test",
+        realm = "example.org",
+        localSipPort = ours,
+        baseRtpPort = port"19700",
+        bindAddress = ip"127.0.0.1",
+        hangupTimeout = 2.seconds
+      ),
+      audio,
+      NoOpLogger.impl[IO],
+      IO.pure(dns)
+    )
+
+  private val bob = Callee("bob").fold(err => fail(err), identity)
+
+  private def next(requests: Queue[IO, SipRequest], method: SipMethod) =
+    Stream
+      .fromQueueUnterminated(requests, limit = 1)
+      .filter(_.method == method)
+      .head
+      .compile
+      .lastOrError
+      .timeout(10.seconds)
+
+  test(
+    "NAPTR and SRV records choose TCP and the address and port, though UDP is configured"
+  ) {
+    server.use { (listening, requests) =>
+      for {
+        dns <- FakeDns(
+          naptrs = Map(
+            "example.org" -> List(
+              NaptrRecord(10, 1, "S", "SIP+D2T", "_sip._tcp.example.org.")
+            )
+          ),
+          srvs = Map(
+            "_sip._tcp.example.org." -> List(
+              SrvRecord(
+                10,
+                1,
+                listening,
+                Hostname.fromString("sip1.example.org").get
+              )
+            )
+          ),
+          hosts = Map("sip1.example.org" -> List(ip"127.0.0.1"))
+        )
+        invite <- phone(dns, port"19130").use { p =>
+          p.call(bob)
+            .use(call => call.awaitPickup >> next(requests, SipMethod.Invite))
+        }
+        asked <- dns.asked.get
+      } yield {
+        assertEquals(invite.headers.topVia.transport, TransportProtocol.Tcp)
+        assertEquals(invite.requestUri.host.toString, "example.org")
+        assert(asked.contains("NAPTR example.org"), asked.toString)
+        assert(asked.contains("SRV _sip._tcp.example.org."), asked.toString)
+      }
+    }
+  }
+
+  test("a domain that resolves to nothing cannot be called, and says so") {
+    for {
+      dns    <- FakeDns()
+      result <- phone(dns, port"19131").use(_.call(bob).use_.attempt)
+    } yield assertEquals(
+      result,
+      Left(SoftphoneError.HostResolutionFailed("example.org"))
+    )
+  }
+
+  test("registering follows the same records") {
+    server.use { (listening, requests) =>
+      for {
+        dns <- FakeDns(
+          srvs = Map(
+            "_sip._tcp.example.org." -> List(
+              SrvRecord(
+                10,
+                1,
+                listening,
+                Hostname.fromString("sip1.example.org").get
+              )
+            )
+          ),
+          hosts = Map("sip1.example.org" -> List(ip"127.0.0.1"))
+        )
+        register <- phone(dns, port"19132").use { p =>
+          // No NAPTR here: each transport's SRV name is tried in turn.
+          p.register.use(_ => next(requests, SipMethod.Register))
+        }
+      } yield assertEquals(
+        register.headers.topVia.transport,
+        TransportProtocol.Tcp
+      )
+    }
+  }
+}
