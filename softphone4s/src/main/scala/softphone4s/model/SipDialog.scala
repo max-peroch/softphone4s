@@ -1,5 +1,7 @@
 package softphone4s.model
 
+import scala.concurrent.duration.FiniteDuration
+
 /** Context kept while an INVITE is in flight, before a dialog is established.
   */
 final case class InviteCtx(
@@ -8,7 +10,8 @@ final case class InviteCtx(
     cseq: CSeqNumber,
     callee: SipUri,
     localUri: SipUri,
-    offerInInvite: Boolean // false → INVITE had no SDP, answer goes in ACK
+    offerInInvite: Boolean, // false → INVITE had no SDP, answer goes in ACK
+    inviteTimeout: FiniteDuration // how long to wait for an answer (Timer B)
 )
 
 /** Sufficient state to reconstruct correct headers for all mid-dialog requests

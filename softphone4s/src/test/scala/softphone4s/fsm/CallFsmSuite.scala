@@ -9,6 +9,8 @@ import softphone4s.fsm.CallState.*
 import softphone4s.fsm.SipEvent.*
 import softphone4s.fsm.TerminationReason.*
 
+import scala.concurrent.duration.*
+
 class CallFsmSuite extends FunSuite {
 
   private def step(
@@ -23,7 +25,8 @@ class CallFsmSuite extends FunSuite {
     cseq = cseqNumber(1),
     callee = uri("sip:callee@host"),
     localUri = uri("sip:user@realm"),
-    offerInInvite = true
+    offerInInvite = true,
+    inviteTimeout = 32.seconds
   )
 
   private def mkHeaders(
@@ -208,8 +211,9 @@ class CallFsmSuite extends FunSuite {
     })
   }
 
-  test("Inviting + Timeout → Failed, notifies timeout") {
-    val (state, actions) = step(Inviting(baseCtx), Timeout)
+  test("Inviting + InviteTimeout → Failed, notifies timeout") {
+    val (state, actions) =
+      step(Inviting(baseCtx), TimerFired(CallTimer.InviteTimeout))
     assert(state.isInstanceOf[Failed], s"expected Failed, got $state")
     assert(actions.contains(NotifyHangup(TimedOut)))
   }
@@ -276,8 +280,9 @@ class CallFsmSuite extends FunSuite {
     assert(!actions.exists { case NotifyDtmf(_) => true; case _ => false })
   }
 
-  test("Active + unrecognized event → no state change, no actions") {
-    val (state, actions) = step(active, Timeout)
+  test("Active + a stale timer expiry → no state change, no actions") {
+    val (state, actions) =
+      step(active, TimerFired(CallTimer.InviteTimeout))
     assertEquals(state, active)
     assertEquals(actions, Nil)
   }
@@ -291,10 +296,70 @@ class CallFsmSuite extends FunSuite {
     assert(actions.contains(NotifyHangup(LocalHangup)))
   }
 
-  test("ByeSent + Timeout → Closed(LocalHangup), notifies hangup") {
-    val (state, actions) = step(ByeSent(active.dialog), Timeout)
+  test("ByeSent + ByeTimeout → Closed(LocalHangup), notifies hangup") {
+    val (state, actions) =
+      step(ByeSent(active.dialog), TimerFired(CallTimer.ByeTimeout))
     assertEquals(state, Closed(LocalHangup))
     assert(actions.contains(NotifyHangup(LocalHangup)))
+  }
+
+  // ---- Timers -----------------------------------------------------------------
+
+  private val stopInvite = Timer(TimerAction.Cancel(CallTimer.InviteTimeout))
+
+  test("answering stops the invite timer") {
+    val (_, actions) = step(
+      Inviting(baseCtx),
+      ResponseReceived(resp(200, "OK", to = "<sip:callee@host>;tag=rtag"))
+    )
+    assert(actions.contains(stopInvite))
+  }
+
+  test("a rejection stops the invite timer") {
+    val (_, actions) =
+      step(Inviting(baseCtx), ResponseReceived(resp(486, "Busy Here")))
+    assert(actions.contains(stopInvite))
+  }
+
+  test("cancelling before the answer stops the invite timer") {
+    val (_, actions) = step(Inviting(baseCtx), HangupRequested)
+    assert(actions.contains(stopInvite))
+  }
+
+  test(
+    "an authenticated retry restarts the invite timer with the call's timeout"
+  ) {
+    val ctx          = baseCtx.copy(inviteTimeout = 7.seconds)
+    val (_, actions) = step(
+      Inviting(ctx),
+      ResponseReceived(
+        resp(
+          401,
+          "Unauthorized",
+          wwwAuth = List("""Digest realm="r", nonce="n"""")
+        )
+      )
+    )
+    assert(
+      actions.contains(
+        Timer(TimerAction.Start(CallTimer.InviteTimeout, 7.seconds))
+      )
+    )
+  }
+
+  test("hanging up an active call starts the BYE timer") {
+    val (_, actions) = step(active, HangupRequested)
+    assert(
+      actions.contains(
+        Timer(TimerAction.Start(CallTimer.ByeTimeout, CallFsm.ByeTimeoutAfter))
+      )
+    )
+  }
+
+  test("the BYE response stops the BYE timer") {
+    val (_, actions) =
+      step(ByeSent(active.dialog), ResponseReceived(resp(200, "OK")))
+    assert(actions.contains(Timer(TimerAction.Cancel(CallTimer.ByeTimeout))))
   }
 
   // ---- CANCEL race ------------------------------------------------------------

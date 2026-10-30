@@ -320,6 +320,12 @@ object SipParser {
       for {
         request <- parseRequestLine(startLine)
         headers <- parseHeaders(fields)
+        // RFC 3261 §8.1.1.5: the CSeq method must match the request line.
+        _ <- Either.cond(
+          headers.cseq.method == request._1,
+          (),
+          ParseError.MethodMismatch(request._1, headers.cseq.method)
+        )
       } yield SipRequest(request._1, request._2, headers, body)
 
   private def parseRequestLine(

@@ -10,8 +10,9 @@ import fs2.concurrent.Channel
 import fs2.io.net.Network
 import org.typelevel.log4cats.StructuredLogger
 import softphone4s.config.SoftphoneConfig
+import softphone4s.fsm.CallTimer
 import softphone4s.model.*
-import softphone4s.runtime.Entropy
+import softphone4s.runtime.{Entropy, Timers}
 import softphone4s.transport.{RtpTransport, SipTransport, Transport}
 import softphone4s.ua.{MediaSession, OutboundCall}
 
@@ -137,6 +138,7 @@ class SoftphoneStreaming[F[_]: Async: Network] private (
   ): Resource[F, OutboundCall[F]] =
     for {
       supervisor <- Supervisor[F](await = false)
+      timers     <- Timers.resource[F, CallTimer]
       media      <- Resource.eval(
         MediaSession.create(
           pcmFrameBytes,
@@ -153,6 +155,7 @@ class SoftphoneStreaming[F[_]: Async: Network] private (
           supervisor,
           entropy,
           media,
+          timers,
           config.inviteTimeout,
           logger,
           extraHeaders

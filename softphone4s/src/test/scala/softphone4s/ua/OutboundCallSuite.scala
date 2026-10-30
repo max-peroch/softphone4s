@@ -11,7 +11,8 @@ import softphone4s.SipLiterals.*
 import org.typelevel.log4cats.noop.NoOpLogger
 import softphone4s.config.SoftphoneConfig
 import softphone4s.model.*
-import softphone4s.runtime.Entropy
+import softphone4s.fsm.CallTimer
+import softphone4s.runtime.{Entropy, Timers}
 import softphone4s.model.SoftphoneError
 
 import scala.concurrent.duration.*
@@ -57,6 +58,7 @@ class OutboundCallSuite extends CatsEffectSuite {
       sipIn = Stream.fromQueueUnterminated(queue)
       supervisor <- Supervisor[IO]
       random     <- Resource.eval(Random.scalaUtilRandom[IO])
+      timers     <- Timers.resource[IO, CallTimer]
       media <- Resource.eval(MediaSession.create[IO](160, localIp, rtpPort))
       call  <- Resource.eval(
         OutboundCall.create(
@@ -67,6 +69,7 @@ class OutboundCallSuite extends CatsEffectSuite {
           supervisor,
           Entropy.fromRandom(random),
           media,
+          timers,
           32.seconds,
           NoOpLogger.impl[IO]
         )
@@ -116,6 +119,36 @@ class OutboundCallSuite extends CatsEffectSuite {
             s"awaitHangup should not complete on local hangup, got $result"
           )
         }
+    }
+  }
+
+  test("an unanswered call times out through the invite timer") {
+    val unanswered: Resource[IO, OutboundCall[IO]] =
+      for {
+        supervisor <- Supervisor[IO]
+        random     <- Resource.eval(Random.scalaUtilRandom[IO])
+        timers     <- Timers.resource[IO, CallTimer]
+        media      <- Resource.eval(
+          MediaSession.create[IO](160, localIp, port"19002")
+        )
+        call <- Resource.eval(
+          OutboundCall.create(
+            callId("timeout@call"),
+            uri("sip:bob@test.local"),
+            _ => IO.unit,
+            endpoint,
+            supervisor,
+            Entropy.fromRandom(random),
+            media,
+            timers,
+            150.millis,
+            NoOpLogger.impl[IO]
+          )
+        )
+        _ <- Resource.make(call.runEventLoop(Stream.never[IO]).start)(_.cancel)
+      } yield call
+    unanswered.use(_.awaitPickup.attempt).map { result =>
+      assertEquals(result, Left(SoftphoneError.CallTimedOut))
     }
   }
 }

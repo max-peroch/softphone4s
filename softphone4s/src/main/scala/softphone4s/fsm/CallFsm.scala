@@ -4,6 +4,8 @@ import cats.data.State
 import cats.syntax.all.*
 import softphone4s.model.*
 
+import scala.concurrent.duration.*
+
 // ---------------------------------------------------------------------------
 // Call state
 // ---------------------------------------------------------------------------
@@ -36,7 +38,7 @@ object SipEvent {
   case class ResponseReceived(response: SipResponse) extends SipEvent
   case class RequestReceived(request: SipRequest)    extends SipEvent
   case object HangupRequested                        extends SipEvent
-  case object Timeout                                extends SipEvent
+  case class TimerFired(timer: CallTimer)            extends SipEvent
 }
 
 // ---------------------------------------------------------------------------
@@ -77,6 +79,8 @@ object SipAction {
   case object NotifyAnswered                         extends SipAction
   case class NotifyHangup(reason: TerminationReason) extends SipAction
   case class NotifyDtmf(digit: DtmfDigit)            extends SipAction
+  // Timers
+  case class Timer(action: TimerAction[CallTimer]) extends SipAction
 }
 
 // ---------------------------------------------------------------------------
@@ -88,6 +92,9 @@ object CallFsm {
   import SipAction.*
   import SipEvent.*
   import TerminationReason.*
+
+  /** RFC 3261 Timer F: 64 * T1, with T1 = 500 ms. */
+  val ByeTimeoutAfter: FiniteDuration = 32.seconds
 
   private val Trying            = 100
   private val Ringing           = 180
@@ -152,23 +159,27 @@ object CallFsm {
             if response.statusCode >= ErrorResponseMin =>
           reject(ctx, response)
 
-        case (Inviting(_) | CallState.Ringing(_, _), Timeout) =>
+        case (
+              Inviting(_) | CallState.Ringing(_, _),
+              TimerFired(CallTimer.InviteTimeout)
+            ) =>
           go(Failed(408, "Request Timeout"), List(NotifyHangup(TimedOut)))
 
         case (Inviting(ctx), HangupRequested) =>
-          go(
-            Closed(LocalHangup),
-            List(SendCancel(ctx), NotifyHangup(LocalHangup))
-          )
+          cancelCall(ctx)
 
         case (CallState.Ringing(ctx, _), HangupRequested) =>
-          go(
-            Closed(LocalHangup),
-            List(SendCancel(ctx), NotifyHangup(LocalHangup))
-          )
+          cancelCall(ctx)
 
         case (Active(dialog), HangupRequested) =>
-          go(ByeSent(dialog), List(StopMedia, SendBye(dialog)))
+          go(
+            ByeSent(dialog),
+            List(
+              StopMedia,
+              SendBye(dialog),
+              Timer(TimerAction.Start(CallTimer.ByeTimeout, ByeTimeoutAfter))
+            )
+          )
 
         case (Active(dialog), RequestReceived(request))
             if request.method == SipMethod.Bye =>
@@ -179,9 +190,15 @@ object CallFsm {
 
         case (ByeSent(_), ResponseReceived(response))
             if response.statusCode >= FinalResponseMin =>
-          go(Closed(LocalHangup), List(NotifyHangup(LocalHangup)))
+          go(
+            Closed(LocalHangup),
+            List(
+              Timer(TimerAction.Cancel(CallTimer.ByeTimeout)),
+              NotifyHangup(LocalHangup)
+            )
+          )
 
-        case (ByeSent(_), Timeout) =>
+        case (ByeSent(_), TimerFired(CallTimer.ByeTimeout)) =>
           go(Closed(LocalHangup), List(NotifyHangup(LocalHangup)))
 
         case (Active(_), RequestReceived(request))
@@ -208,10 +225,20 @@ object CallFsm {
   private def go(next: CallState, actions: List[SipAction]): Transition =
     State.set(next).as(actions)
 
+  private val stopInviteTimer: SipAction =
+    Timer(TimerAction.Cancel(CallTimer.InviteTimeout))
+
+  private def cancelCall(ctx: InviteCtx): Transition =
+    go(
+      Closed(LocalHangup),
+      List(stopInviteTimer, SendCancel(ctx), NotifyHangup(LocalHangup))
+    )
+
   private def reject(ctx: InviteCtx, response: SipResponse): Transition =
     go(
       Failed(response.statusCode, response.reason),
       List(
+        stopInviteTimer,
         SendAckForNon2xx(ctx, response),
         NotifyHangup(Rejected(response.statusCode, response.reason))
       )
@@ -233,7 +260,9 @@ object CallFsm {
           Inviting(newCtx),
           List(
             SendAckForNon2xx(ctx, response),
-            RetryInviteWithAuth(newCtx, kind, challenge)
+            RetryInviteWithAuth(newCtx, kind, challenge),
+            // The retry is a new INVITE transaction, so Timer B starts over.
+            Timer(TimerAction.Start(CallTimer.InviteTimeout, ctx.inviteTimeout))
           )
         )
       }
@@ -244,6 +273,7 @@ object CallFsm {
     go(
       Active(dialog),
       List(
+        stopInviteTimer,
         SendAck(dialog, remoteSdpForAnswer),
         StartMedia(response.body),
         NotifyAnswered

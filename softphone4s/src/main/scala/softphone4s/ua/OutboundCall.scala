@@ -11,7 +11,7 @@ import softphone4s.codec.SdpCodec
 import softphone4s.fsm.*
 import softphone4s.fsm.SipMessages.*
 import softphone4s.model.*
-import softphone4s.runtime.Entropy
+import softphone4s.runtime.{Entropy, Timers}
 import SipAction.*
 import TerminationReason.*
 
@@ -30,7 +30,7 @@ private[softphone4s] class OutboundCall[F[_]: Async] private (
     nonceCounts: Ref[F, Map[Nonce, NonceCount]],
     entropy: Entropy[F],
     media: MediaSession[F],
-    inviteTimeout: FiniteDuration,
+    timers: Timers[F, CallTimer],
     logger: StructuredLogger[F]
 ) extends Call[F] {
 
@@ -57,7 +57,7 @@ private[softphone4s] class OutboundCall[F[_]: Async] private (
   private[softphone4s] def runEventLoop(
       sipIn: Stream[F, SipMessage]
   ): F[Unit] = {
-    val timeout   = Stream.sleep[F](inviteTimeout).as(SipEvent.Timeout)
+    val timeout   = timers.fired.map(SipEvent.TimerFired(_))
     val sipEvents = sipIn.map {
       case req: SipRequest  => SipEvent.RequestReceived(req)
       case res: SipResponse => SipEvent.ResponseReceived(res)
@@ -101,7 +101,7 @@ private[softphone4s] class OutboundCall[F[_]: Async] private (
           "reason"     -> res.reason
         )
       )("Received SIP response")
-    case SipEvent.HangupRequested | SipEvent.Timeout => Async[F].unit
+    case SipEvent.HangupRequested | SipEvent.TimerFired(_) => Async[F].unit
   }
 
   private def interpretAction(action: SipAction): F[Unit] =
@@ -238,6 +238,9 @@ private[softphone4s] class OutboundCall[F[_]: Async] private (
 
       case NotifyDtmf(digit) =>
         dtmfChannel.send(digit).void
+
+      case Timer(action) =>
+        timers.run(action)
     }
 }
 
@@ -250,6 +253,7 @@ private[softphone4s] object OutboundCall {
       supervisor: Supervisor[F],
       entropy: Entropy[F],
       media: MediaSession[F],
+      timers: Timers[F, CallTimer],
       inviteTimeout: FiniteDuration,
       logger: StructuredLogger[F],
       extraHeaders: List[ExtensionHeader] = Nil
@@ -264,7 +268,8 @@ private[softphone4s] object OutboundCall {
         cseq = CSeqNumber.One,
         callee = callee,
         localUri = endpoint.accountUri,
-        offerInInvite = true
+        offerInInvite = true,
+        inviteTimeout = inviteTimeout
       )
       answered     <- Deferred[F, Either[Throwable, Unit]]
       callEnded    <- Deferred[F, Throwable]
@@ -285,9 +290,10 @@ private[softphone4s] object OutboundCall {
         nonceCounts,
         entropy,
         media,
-        inviteTimeout,
+        timers,
         logger
       )
+      _ <- timers.start(CallTimer.InviteTimeout, inviteTimeout)
       _ <- logger.debug(
         Map("callee" -> callee.render, "callId" -> callId.value)
       )("Sending INVITE")

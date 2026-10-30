@@ -211,7 +211,13 @@ object SipGen extends munit.Assertions {
       uri     <- uriGen
       headers <- headersGen
       body    <- bodyGen
-    } yield SipRequest(method, uri, headers, body)
+    } yield SipRequest(
+      method,
+      uri,
+      // A request's CSeq names the request's own method (RFC 3261 §8.1.1.5).
+      headers.copy(cseq = headers.cseq.copy(method = method)),
+      body
+    )
 
   val responseGen: Gen[SipResponse] =
     for {
