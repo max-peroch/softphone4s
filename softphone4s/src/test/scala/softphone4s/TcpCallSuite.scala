@@ -108,7 +108,7 @@ class TcpCallSuite extends CatsEffectSuite {
 
   private def next(srv: Server, method: SipMethod) =
     Stream
-      .fromQueueUnterminated(srv.requests)
+      .fromQueueUnterminated(srv.requests, limit = 1)
       .filter(_.method == method)
       .head
       .compile
@@ -161,10 +161,10 @@ class TcpCallSuite extends CatsEffectSuite {
       }
   }
 
-  test("a transport we cannot speak yet is refused, not tried") {
+  test("a transport we cannot speak is refused, not tried") {
     server((_, _) => None)
       .flatMap(srv =>
-        phone(srv.port, port"19112", TransportProtocol.Tls).map(srv -> _)
+        phone(srv.port, port"19112", TransportProtocol.Sctp).map(srv -> _)
       )
       .use { (srv, phone) =>
         for {
@@ -172,8 +172,8 @@ class TcpCallSuite extends CatsEffectSuite {
           reg  <- phone.register.use_.attempt
           seen <- srv.connections.get
         } yield {
-          assertEquals(call, Left(SoftphoneError.TransportUnavailable("tls")))
-          assertEquals(reg, Left(SoftphoneError.TransportUnavailable("tls")))
+          assertEquals(call, Left(SoftphoneError.TransportUnavailable("sctp")))
+          assertEquals(reg, Left(SoftphoneError.TransportUnavailable("sctp")))
           assertEquals(seen, 0)
         }
       }

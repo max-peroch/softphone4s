@@ -4,7 +4,7 @@ import pureconfig.ConfigReader
 
 import scala.concurrent.duration.*
 
-/** How outgoing TCP connections are made and kept (RFC 3261 §18).
+/** How outgoing TCP and TLS connections are made and kept (RFC 3261 §18).
   *
   * @param connectTimeout
   *   how long to wait for a connection to be made.
@@ -14,7 +14,7 @@ import scala.concurrent.duration.*
   * @param framing
   *   the largest message a connection may carry.
   */
-final case class TcpConfig(
+final case class StreamConfig(
     connectTimeout: FiniteDuration = 5.seconds,
     idleTimeout: FiniteDuration = 5.minutes,
     framing: FramingLimits = FramingLimits()

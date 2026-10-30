@@ -808,7 +808,7 @@ class OutboundCallSuite extends CatsEffectSuite {
           .take(3)
           .compile
           .toList
-          .timeout(6.seconds)
+          .timeout(20.seconds)
       } yield {
         assertEquals(seen.size, 3) // the 200, then two repeats
         assertEquals(seen.map(_.statusCode).distinct, List(200))

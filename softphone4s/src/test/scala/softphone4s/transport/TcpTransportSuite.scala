@@ -78,13 +78,13 @@ class TcpTransportSuite extends CatsEffectSuite {
   /** The next `n` messages the server received. */
   private def firstN(srv: Server, n: Int): IO[List[SipMessage]] =
     Stream
-      .fromQueueUnterminated(srv.received)
+      .fromQueueUnterminated(srv.received, limit = 1)
       .take(n.toLong)
       .compile
       .toList
       .timeout(5.seconds)
 
-  private def tcp(config: TcpConfig = TcpConfig()) =
+  private def tcp(config: StreamConfig = StreamConfig()) =
     TcpTransport.resource[IO](ip"127.0.0.1", config, NoOpLogger.impl[IO])
 
   test("a message sent arrives whole at the server") {
@@ -135,7 +135,7 @@ class TcpTransportSuite extends CatsEffectSuite {
   test(
     "a connection idle for the timeout is closed, and the next send opens another"
   ) {
-    val config = TcpConfig(idleTimeout = 200.millis)
+    val config = StreamConfig(idleTimeout = 200.millis)
     (server(), tcp(config)).tupled.use { (srv, transport) =>
       transport.send(srv.address, options(1)) >>
         IO.sleep(800.millis) >>
