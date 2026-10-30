@@ -42,10 +42,11 @@ softphone4s handles outbound SIP calls end-to-end:
 Call lifecycle is modelled as `Resource[F, Call[F]]` — acquiring the resource
 dials the number, releasing it sends BYE and drains the event loop.
 
-softphone4s places outbound calls and can register the account at its
-registrar. It does not handle inbound INVITEs yet, and has no SDP offer/answer
-beyond what's needed to set up a call it initiated. It's not a full Scala port
-of a SIP stack.
+softphone4s places and receives calls and can register the account at its
+registrar. An incoming call is answered with a single SDP answer (G.711 μ-law,
+plus RFC 4733 DTMF if the caller offered it); a call whose offer has no PCMU, or
+no SDP at all, is refused with `488`. There is no re-INVITE or UPDATE yet, and
+it is not a full Scala port of a SIP stack.
 
 `softphone4s` takes an explicit
 [`org.typelevel.log4cats.Logger[F]`](https://typelevel.org/log4cats/) — this
@@ -107,6 +108,31 @@ val program: IO[Unit] =
 Releasing the `call` resource sends BYE and waits up to `hangup-timeout`
 for the event loop to drain, then cancels the fiber.
 
+### Receiving calls
+
+`phone.incoming` is a stream of calls placed to the softphone. Ring, then accept
+or reject; a call nobody answers is turned away with `480` after
+`answer-timeout`.
+
+```scala
+phone.incoming.evalMap { call =>
+  call.ringing >>
+    call.accept.use { accepted =>
+      accepted.awaitPickup >>            // the caller's ACK arrived
+        micStream.through(accepted.sink)
+          .concurrently(accepted.source.through(speakerPipe))
+          .interruptWhen(accepted.awaitHangup.attempt)
+          .compile.drain
+    }
+}.compile.drain
+```
+
+`call.caller` and `call.callee` are the From and To; `call.cancelled` completes
+if the caller gives up first; `call.reject(FailureStatus.BusyHere)` turns the
+call away. Releasing `accept` hangs up with a BYE. The 200 OK is repeated until
+the ACK arrives (RFC 3261 §13.3.1.4), and a request that is not newer than the
+last one in the dialog is answered `500`.
+
 ### Registering
 
 Holding `phone.register` keeps the account registered at its registrar: the
@@ -158,6 +184,7 @@ example wiring in tracing and audio hardware.
 | `hangup-timeout`    | `Duration`  | `5 seconds`  | Grace period for event loop drain on release       |
 | `invite-timeout`    | `Duration`  | `32 seconds` | Max wait for remote to answer (RFC 3261 Timer B)   |
 | `register-expires`  | `Duration`  | `1 hour`     | Binding lifetime asked for when registering        |
+| `answer-timeout`    | `Duration`  | `60 seconds` | How long an incoming call may ring before `480`     |
 
 ## Errors
 

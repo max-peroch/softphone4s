@@ -1,7 +1,7 @@
 package softphone4s
 
 import cats.effect.*
-import cats.effect.std.Supervisor
+import cats.effect.std.{Queue, Supervisor}
 import cats.effect.syntax.all.*
 import cats.syntax.all.*
 import com.comcast.ip4s.*
@@ -23,7 +23,7 @@ import softphone4s.transaction.{
   TransactionMessages
 }
 import softphone4s.transport.{Inbound, RtpTransport, SipTransport}
-import softphone4s.ua.{DialogInput, MediaSession, OutboundCall}
+import softphone4s.ua.{DialogInput, InboundCall, MediaSession, OutboundCall}
 
 import javax.sound.sampled.AudioFormat
 
@@ -38,6 +38,8 @@ class SoftphoneStreaming[F[_]: Async: Network] private (
     nextCallIndex: Ref[F, Int],
     entropy: Entropy[F],
     pcmFrameBytes: Int,
+    supervisor: Supervisor[F],
+    incomingCalls: Queue[F, IncomingCall[F]],
     logger: StructuredLogger[F]
 ) extends Softphone[F] {
 
@@ -216,12 +218,135 @@ class SoftphoneStreaming[F[_]: Async: Network] private (
           .timeoutTo(config.hangupTimeout, fiber.cancel)
       )
     } yield call
+
+  // ---- Incoming calls ----------------------------------------------------------
+
+  override def incoming: Stream[F, IncomingCall[F]] =
+    Stream.fromQueueUnterminated(incomingCalls)
+
+  /** Hands each request to the call it belongs to. An INVITE with no To-tag and
+    * a new Call-ID starts an incoming call; anything else for a call that is
+    * gone, or never was, gets `481 Call/Transaction Does Not Exist` (RFC 3261
+    * §12.2.2), and a new INVITE reusing a live Call-ID gets
+    * `482 Loop Detected`.
+    */
+  private[softphone4s] def routeIncoming: F[Unit] =
+    layer.incoming.evalMap(route).compile.drain
+
+  private def isNewInvite(request: SipRequest): Boolean =
+    request.method == SipMethod.Invite && request.headers.to.tag.isEmpty
+
+  private def route(transaction: ServerTransaction[F]): F[Unit] = {
+    val request = transaction.request
+    routes.get.flatMap(_.get(request.headers.callId) match {
+      case Some(_) if isNewInvite(request) =>
+        transaction.respond(
+          TransactionMessages.responseTo(request, 482, "Loop Detected")
+        )
+      case Some(channel) => channel.send(DialogInput.Request(transaction)).void
+      case None if isNewInvite(request) => acceptInbound(transaction)
+      case None                         =>
+        logger.debug(Map("callId" -> request.headers.callId.value))(
+          "Request for a call that does not exist"
+        ) >>
+          transaction.respond(
+            TransactionMessages.responseTo(
+              request,
+              FailureStatus.CallDoesNotExist.value,
+              FailureStatus.CallDoesNotExist.reason
+            )
+          )
+    })
+  }
+
+  /** Hands messages no transaction claimed (the ACK of a 2xx, a retransmitted
+    * 2xx) to their call.
+    */
+  private[softphone4s] def routeUnmatched: F[Unit] =
+    layer.unmatched
+      .evalMap { (inbound: Inbound) =>
+        routes.get.flatMap(_.get(inbound.message.headers.callId) match {
+          case Some(channel) =>
+            channel.send(DialogInput.Unmatched(inbound)).void
+          case None =>
+            logger.debug(Map("callId" -> inbound.message.headers.callId.value))(
+              "Dropping a message for a call that does not exist"
+            )
+        })
+      }
+      .compile
+      .drain
+
+  /** Registers the route first, so a CANCEL or ACK right behind the INVITE
+    * finds its call, then runs the call on its own fiber for as long as it
+    * lasts.
+    */
+  private def acceptInbound(invite: ServerTransaction[F]): F[Unit] = {
+    val callId = invite.request.headers.callId
+    Channel.bounded[F, DialogInput[F]](128).flatMap { channel =>
+      routes.update(_ + (callId -> channel)) >>
+        supervisor
+          .supervise(
+            inboundCall(invite, channel)
+              .handleErrorWith { error =>
+                logger.error(Map("error" -> String.valueOf(error.getMessage)))(
+                  "Could not take the incoming call"
+                ) >> invite.respond(
+                  TransactionMessages.responseTo(
+                    invite.request,
+                    FailureStatus.ServerInternalError.value,
+                    FailureStatus.ServerInternalError.reason
+                  )
+                )
+              }
+              .guarantee(routes.update(_ - callId))
+          )
+          .void
+    }
+  }
+
+  /** Builds the call's resources, offers the call to the application if it can
+    * be answered, and runs it to its end.
+    */
+  private def inboundCall(
+      invite: ServerTransaction[F],
+      channel: Channel[F, DialogInput[F]]
+  ): F[Unit] =
+    (for {
+      callSupervisor <- Supervisor[F](await = false)
+      timers         <- Timers.resource[F, CallTimer]
+      localIp        <- Resource.eval(localIpFor(invite.from))
+      endpoint       <- Resource.eval(allocateEndpoint(localIp))
+      media          <- Resource.eval(
+        MediaSession
+          .create(pcmFrameBytes, endpoint.bindAddress, endpoint.rtpPort)
+      )
+      call <- Resource.eval(
+        InboundCall.create(
+          invite,
+          layer,
+          endpoint,
+          callSupervisor,
+          entropy,
+          media,
+          timers,
+          TransactionConfig(),
+          config.answerTimeout,
+          config.hangupTimeout,
+          logger
+        )
+      )
+    } yield call).use { call =>
+      call.isOpen.flatMap(incomingCalls.offer(call).whenA(_)) >>
+        call.run(channel.stream)
+    }
 }
 
 object SoftphoneStreaming {
 
   /** Binds the local SIP UDP socket and returns a ready-to-use `Softphone`. The
-    * socket and its message router are released when the resource is.
+    * socket, the transaction layer and the routers that hand messages to calls
+    * are released when the resource is.
     */
   def resource[F[_]: Async: Network](
       config: SoftphoneConfig,
@@ -242,72 +367,22 @@ object SoftphoneStreaming {
       routes <- Resource.eval(
         Ref[F].of(Map.empty[CallId, Channel[F, DialogInput[F]]])
       )
-      supervisor <- Supervisor[F](await = false)
-      _          <- Resource.eval(
-        supervisor.supervise(routeIncoming(layer, routes, logger))
+      supervisor    <- Supervisor[F](await = false)
+      incomingCalls <- Resource.eval(Queue.unbounded[F, IncomingCall[F]])
+      callIndex     <- Resource.eval(Ref[F].of(0))
+      entropy       <- Resource.eval(Entropy.secure[F])
+      softphone = new SoftphoneStreaming(
+        config,
+        layer,
+        routes,
+        callIndex,
+        entropy,
+        pcmFrameBytes = audioFormat.getFrameSize * RtpTransport.PacketSamples,
+        supervisor,
+        incomingCalls,
+        logger
       )
-      _ <- Resource.eval(
-        supervisor.supervise(routeUnmatched(layer, routes, logger))
-      )
-      callIndex <- Resource.eval(Ref[F].of(0))
-      entropy   <- Resource.eval(Entropy.secure[F])
-    } yield new SoftphoneStreaming(
-      config,
-      layer,
-      routes,
-      callIndex,
-      entropy,
-      pcmFrameBytes = audioFormat.getFrameSize * RtpTransport.PacketSamples,
-      logger
-    )
-
-  /** Hands requests within a dialog to their call; a call that is gone, or
-    * never was, gets `481 Call/Transaction Does Not Exist` (RFC 3261 §12.2.2).
-    */
-  private def routeIncoming[F[_]: Async](
-      layer: TransactionLayer[F],
-      routes: Ref[F, Map[CallId, Channel[F, DialogInput[F]]]],
-      logger: StructuredLogger[F]
-  ): F[Unit] =
-    layer.incoming
-      .evalMap { (transaction: ServerTransaction[F]) =>
-        routes.get.flatMap(_.get(transaction.request.headers.callId) match {
-          case Some(channel) =>
-            channel.send(DialogInput.Request(transaction)).void
-          case None =>
-            logger.debug(
-              Map("callId" -> transaction.request.headers.callId.value)
-            )("Request for a call that does not exist") >>
-              transaction.respond(
-                TransactionMessages.responseTo(
-                  transaction.request,
-                  481,
-                  "Call/Transaction Does Not Exist"
-                )
-              )
-        })
-      }
-      .compile
-      .drain
-
-  /** Hands messages no transaction claimed (a retransmitted 2xx) to their call.
-    */
-  private def routeUnmatched[F[_]: Async](
-      layer: TransactionLayer[F],
-      routes: Ref[F, Map[CallId, Channel[F, DialogInput[F]]]],
-      logger: StructuredLogger[F]
-  ): F[Unit] =
-    layer.unmatched
-      .evalMap { (inbound: Inbound) =>
-        routes.get.flatMap(_.get(inbound.message.headers.callId) match {
-          case Some(channel) =>
-            channel.send(DialogInput.Unmatched(inbound)).void
-          case None =>
-            logger.debug(
-              Map("callId" -> inbound.message.headers.callId.value)
-            )("Dropping a message for a call that does not exist")
-        })
-      }
-      .compile
-      .drain
+      _ <- Resource.eval(supervisor.supervise(softphone.routeIncoming))
+      _ <- Resource.eval(supervisor.supervise(softphone.routeUnmatched))
+    } yield softphone
 }

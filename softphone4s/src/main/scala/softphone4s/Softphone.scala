@@ -43,4 +43,10 @@ trait Softphone[F[_]] {
     * unreachable.
     */
   def register: Resource[F, Registration[F]]
+
+  /** Calls placed to this softphone, as they arrive. Each is answered with
+    * `IncomingCall.accept` or turned away with `reject`; one that is neither is
+    * rejected with `480 Temporarily Unavailable` after `answer-timeout`.
+    */
+  def incoming: Stream[F, IncomingCall[F]]
 }

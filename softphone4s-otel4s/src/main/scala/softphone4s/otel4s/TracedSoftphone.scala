@@ -6,7 +6,7 @@ import fs2.{Pipe, Stream}
 import io.opentelemetry.context.ContextStorage
 import org.typelevel.otel4s.Attribute
 import org.typelevel.otel4s.trace.{SpanKind, SpanOps, Tracer}
-import softphone4s.{Call, Softphone}
+import softphone4s.{Call, IncomingCall, Softphone}
 import softphone4s.model.{Callee, DtmfDigit}
 import softphone4s.registration.Registration
 
@@ -94,6 +94,8 @@ final class TracedSoftphone[F[_]: Async](
           call <- underlying.call(callee, traceHeaders ++ extraHeaders)
         } yield new TracedCall(call, tracer)
       }
+
+  def incoming: Stream[F, IncomingCall[F]] = underlying.incoming
 
   def register: Resource[F, Registration[F]] =
     tracer
