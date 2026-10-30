@@ -63,7 +63,7 @@ Delivered as listed, with these notes:
 - The ACK for a failure left `CallFsm`; a retransmitted 2xx is now ACKed again; the call-level BYE timer is gone (the transaction's Timer F replaces it).
 - The CANCEL/200 race used to be dead code, since the event loop stopped at the hangup; the loop now waits for the INVITE's final response after a CANCEL, so a 200 that crosses it is ACKed and ended with a BYE.
 - RFC 2543 (no magic-cookie) matching is not supported: such messages go to `unmatched`.
-- The transport's reliability is a parameter of `TransactionManager`; `Transport` has no `reliability` member until TCP and TLS arrive in Phase 3.
+- The transport's reliability is no longer a parameter of `TransactionManager`: each transaction takes it from the transport its top Via names (`Reliability.of`), so UDP and TCP transactions can run side by side.
 
 Original list:
 
@@ -86,6 +86,8 @@ Progress: item 2 (the UAS role) is done too: `InboundCallFsm`, `InboundCall`, `S
 7. **Multi-account:** `Softphone` holds N accounts, each with its own registration, Contact and credentials. Single-account configuration stays supported.
 
 ### Phase 3: Transports and routing
+
+Progress: item 1 is done for TCP. A message goes out on the transport its top Via names (`RoutedTransport`), `TcpTransport` keeps one connection per destination (reused, idle timeout, retry on a fresh connection, connect timeout), `StreamFraming` cuts the stream on `Content-Length` and skips keep-alive CRLFs, and the endpoint's Via and Contact say `TCP`. The protocol enum is `TransportProtocol` (it used to clash with the `Transport` trait). Still open in item 1: TLS and its typed configuration, accepting connections (a TCP/TLS listener), and sending in-dialog requests over the connection a request arrived on rather than opening a new one to the Contact. Items 2 to 4 have not started; the UDP-to-TCP switch for large messages belongs to item 4.
 
 1. **TCP and TLS** via fs2-io: stream framing with `Content-Length`, a connection pool keyed by destination with reuse (RFC 3261 §18), idle timeout, and reconnect on failure. TLS config is typed (trust store, client cert, SNI, cipher/protocol floor) and defaults to hostname verification.
 2. **Resolution (RFC 3263):** NAPTR → SRV → A/AAAA, with failover to the next target on timeout or transport error, TTL-aware cache. Replaces the single-host lookup.

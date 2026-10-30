@@ -22,7 +22,13 @@ import softphone4s.transaction.{
   TransactionManager,
   TransactionMessages
 }
-import softphone4s.transport.{Inbound, RtpTransport, SipTransport}
+import softphone4s.transport.{
+  Inbound,
+  RoutedTransport,
+  RtpTransport,
+  SipTransport,
+  TcpTransport
+}
 import softphone4s.ua.{DialogInput, InboundCall, MediaSession, OutboundCall}
 
 import javax.sound.sampled.AudioFormat
@@ -90,13 +96,14 @@ class SoftphoneStreaming[F[_]: Async: Network] private (
       target <- Resource.eval(
         Async[F].fromEither(callee.toSipUri(account.config.realm))
       )
+      protocol   <- Resource.eval(transportFor(account, target))
       calleeAddr <- Resource.eval(resolveCalleeAddress(account, target))
       localIp    <- Resource.eval(
         localIpFor(calleeAddr).flatTap(ip =>
           logger.info(Map("address" -> ip.toString))("Advertising local IP")
         )
       )
-      endpoint <- Resource.eval(allocateEndpoint(account, localIp))
+      endpoint <- Resource.eval(allocateEndpoint(account, localIp, protocol))
       callId   <- Resource.eval(entropy.callId(localIp))
       sipCh    <- Resource.make(
         Channel
@@ -132,7 +139,8 @@ class SoftphoneStreaming[F[_]: Async: Network] private (
       registrar <- Resource.eval(
         resolveHost(host).map(SocketAddress(_, account.config.serverPort))
       )
-      localIp <- Resource.eval(localIpFor(registrar))
+      protocol <- Resource.eval(available(account.config.transport))
+      localIp  <- Resource.eval(localIpFor(registrar))
       // A REGISTER carries no media, so the RTP port is not used.
       endpoint <- Resource.eval(
         Async[F].fromEither(
@@ -141,7 +149,8 @@ class SoftphoneStreaming[F[_]: Async: Network] private (
             config.bindAddress,
             localIp,
             config.localSipPort,
-            config.baseRtpPort
+            config.baseRtpPort,
+            protocol
           )
         )
       )
@@ -200,9 +209,27 @@ class SoftphoneStreaming[F[_]: Async: Network] private (
       )
       .handleError(_ => config.localIpFallback)
 
+  /** The transport a call to `target` as `account` uses: the one the URI names
+    * (`;transport=`), else the account's.
+    */
+  private def transportFor(
+      account: Account,
+      target: SipUri
+  ): F[TransportProtocol] =
+    available(target.transport.getOrElse(account.config.transport))
+
+  /** `transport` itself, if we can speak it. */
+  private def available(transport: TransportProtocol): F[TransportProtocol] =
+    transport match {
+      case TransportProtocol.Udp | TransportProtocol.Tcp => transport.pure[F]
+      case other                                         =>
+        Async[F].raiseError(SoftphoneError.TransportUnavailable(other.token))
+    }
+
   private def allocateEndpoint(
       account: Account,
-      localIp: IpAddress
+      localIp: IpAddress,
+      transport: TransportProtocol
   ): F[LocalEndpoint] =
     nextCallIndex.getAndUpdate(_ + 1).flatMap { callIndex =>
       val portsPerCall = 2
@@ -218,7 +245,8 @@ class SoftphoneStreaming[F[_]: Async: Network] private (
             config.bindAddress,
             localIp,
             config.localSipPort,
-            rtpPort
+            rtpPort,
+            transport
           )
         )
       } yield endpoint
@@ -375,8 +403,14 @@ class SoftphoneStreaming[F[_]: Async: Network] private (
       callSupervisor <- Supervisor[F](await = false)
       timers         <- Timers.resource[F, CallTimer]
       localIp        <- Resource.eval(localIpFor(invite.from))
-      endpoint       <- Resource.eval(allocateEndpoint(account, localIp))
-      media          <- Resource.eval(
+      endpoint       <- Resource.eval(
+        allocateEndpoint(
+          account,
+          localIp,
+          invite.request.headers.topVia.transport
+        )
+      )
+      media <- Resource.eval(
         MediaSession
           .create(pcmFrameBytes, endpoint.bindAddress, endpoint.rtpPort)
       )
@@ -415,10 +449,13 @@ object SoftphoneStreaming {
       logger: StructuredLogger[F]
   ): Resource[F, SoftphoneStreaming[F]] =
     for {
-      transport <- SipTransport.udp[F](
+      udp <- SipTransport.udp[F](
         SocketAddress(config.bindAddress, config.localSipPort),
         logger
       )
+      tcp <- TcpTransport
+        .resource[F](config.bindAddress, config.tcp, logger)
+      transport = RoutedTransport(udp, tcp)
       layer <- TransactionManager.resource[F](
         transport,
         TransactionConfig(),

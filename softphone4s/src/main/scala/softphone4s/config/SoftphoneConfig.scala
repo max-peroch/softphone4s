@@ -4,6 +4,8 @@ import cats.data.NonEmptyList
 import com.comcast.ip4s.*
 import pureconfig.*
 import pureconfig.generic.semiauto.*
+import softphone4s.model.TransportProtocol
+import softphone4s.transport.TcpConfig
 
 import scala.concurrent.duration.*
 
@@ -26,12 +28,21 @@ case class SoftphoneConfig(
     inviteTimeout: FiniteDuration = 32.seconds,
     registerExpires: FiniteDuration = 1.hour,
     answerTimeout: FiniteDuration = 60.seconds,
-    additionalAccounts: List[AccountConfig] = Nil
+    additionalAccounts: List[AccountConfig] = Nil,
+    transport: TransportProtocol = TransportProtocol.Udp,
+    tcp: TcpConfig = TcpConfig()
 ) {
 
   /** The account `call` and `register` use. */
   def defaultAccount: AccountConfig =
-    AccountConfig(user, password, realm, serverPort, registerExpires)
+    AccountConfig(
+      user,
+      password,
+      realm,
+      serverPort,
+      registerExpires,
+      transport
+    )
 
   /** Every account, the default first. */
   def accounts: NonEmptyList[AccountConfig] =

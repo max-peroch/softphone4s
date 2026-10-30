@@ -280,4 +280,33 @@ class MultiAccountSuite extends CatsEffectSuite {
         }
     }
   }
+
+  test("transport and the TCP settings are read from configuration") {
+    val parsed = ConfigSource
+      .string(
+        """user = alice
+          |password = pw
+          |realm = example.com
+          |transport = tcp
+          |tcp { connect-timeout = 2 seconds, idle-timeout = 10 minutes }
+          |additional-accounts = [
+          |  { user = bob, password = pw2, realm = example.org, transport = udp }
+          |]""".stripMargin
+      )
+      .load[SoftphoneConfig]
+      .fold(failures => fail(failures.prettyPrint()), identity)
+    assertEquals(
+      parsed.accounts.map(_.transport).toList,
+      List(TransportProtocol.Tcp, TransportProtocol.Udp)
+    )
+    assertEquals(parsed.tcp.connectTimeout, 2.seconds)
+    assertEquals(parsed.tcp.idleTimeout, 10.minutes)
+  }
+
+  test("an unknown transport in configuration is an error") {
+    val parsed = ConfigSource
+      .string("user = a\npassword = b\nrealm = c\ntransport = carrier-pigeon")
+      .load[SoftphoneConfig]
+    assert(parsed.isLeft)
+  }
 }

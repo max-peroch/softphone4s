@@ -33,7 +33,12 @@ Scala, Cats Effect, and fs2 versions this release was built against.
 
 softphone4s handles outbound SIP calls end-to-end:
 
-- **SIP** (RFC 3261) over UDP — INVITE / ACK / BYE / CANCEL
+- **SIP** (RFC 3261) over UDP or TCP — INVITE / ACK / BYE / CANCEL. A call, or
+  an account's registration, uses the transport you configure; a TCP
+  connection is made when first needed, shared by everything sent to that
+  destination, and closed after it has been idle for `tcp.idle-timeout`.
+  Retransmission is left to TCP, so TCP transactions skip their timers. TLS is
+  not available yet.
 - **Mid-call requests from the remote party**: OPTIONS is answered with our
   `Allow` list; a re-INVITE or UPDATE with SDP is answered with our SDP, media
   follows the new address, and a hold (`sendonly`, `inactive` or `0.0.0.0`)
@@ -235,6 +240,10 @@ account every call is taken. Two accounts cannot have the same user.
 | `invite-timeout`    | `Duration`  | `32 seconds` | Max wait for remote to answer (RFC 3261 Timer B)   |
 | `register-expires`  | `Duration`  | `1 hour`     | Binding lifetime asked for when registering        |
 | `answer-timeout`    | `Duration`  | `60 seconds` | How long an incoming call may ring before `480`     |
+| `transport`         | `udp`/`tcp` | `udp`        | Transport of the default account (`tls` is refused for now) |
+| `tcp.connect-timeout` | `Duration` | `5 seconds` | How long to wait for a TCP connection           |
+| `tcp.idle-timeout`  | `Duration`  | `5 minutes`  | A TCP connection with nothing sent or received for this long is closed |
+| `tcp.framing.max-header-bytes` / `max-body-bytes` | `Int` | 16 KiB / 1 MiB | Largest message a TCP connection may carry before it is dropped |
 | `additional-accounts` | list      | empty        | More accounts: each has `user`, `password`, `realm`, and optionally `server-port` and `register-expires` |
 
 ## Errors
@@ -250,6 +259,7 @@ All failures surface as `SoftphoneError` (a sealed `RuntimeException` hierarchy)
 | `CallTimedOut` | No answer within `invite-timeout` |
 | `CallCancelled` | BYE received from remote, or local hangup |
 | `TransportFailed` | The SIP transport could not send a request of the call |
+| `TransportUnavailable(transport)` | The configured transport (`tls`) is not available yet |
 | `UnknownAccount(account)` | `callAs` or `registerAs` named an account the softphone does not hold |
 | `DuplicateAccount(user)` | Two configured accounts share a user |
 | `RtpPortExhausted(port)` | Computed RTP port exceeds 65535 (too many concurrent calls) |

@@ -3,7 +3,7 @@ package softphone4s.fsm
 import com.comcast.ip4s.*
 import munit.FunSuite
 import softphone4s.SipLiterals.*
-import softphone4s.config.SoftphoneConfig
+import softphone4s.config.{AccountConfig, SoftphoneConfig}
 import softphone4s.fsm.SipMessages.*
 import softphone4s.model.*
 
@@ -285,5 +285,40 @@ class SipMessagesSuite extends FunSuite {
       List("<sip:p1.example.com;lr>")
     )
     assert(r.body.contains("a=sendonly"), r.body)
+  }
+
+  test("an endpoint speaking TCP says so in its Via, and in its Contact") {
+    val tcp = ok(
+      LocalEndpoint.from(
+        AccountConfig("alice", "pw", "sip.example.com"),
+        ip"0.0.0.0",
+        ip"192.168.1.5",
+        port"5060",
+        port"8000",
+        TransportProtocol.Tcp
+      )
+    )
+    val invite = tcp.buildInvite(
+      uri("sip:bob@example.com"),
+      callId("t@h"),
+      tag("lt"),
+      cseqNumber(1),
+      branch("z9hG4bKt")
+    )
+    assertEquals(invite.headers.topVia.transport, TransportProtocol.Tcp)
+    assertEquals(
+      invite.headers.contacts.map(_.render),
+      List("<sip:alice@192.168.1.5:5060;transport=tcp>")
+    )
+    // The default endpoint is unchanged.
+    val udp = endpoint.buildInvite(
+      uri("sip:bob@example.com"),
+      callId("t@h"),
+      tag("lt"),
+      cseqNumber(1),
+      branch("z9hG4bKt")
+    )
+    assertEquals(udp.headers.topVia.transport, TransportProtocol.Udp)
+    assert(!udp.headers.contacts.head.render.contains("transport"))
   }
 }

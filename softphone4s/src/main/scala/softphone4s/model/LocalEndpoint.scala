@@ -15,7 +15,8 @@ final case class LocalEndpoint private (
     bindAddress: IpAddress,
     accountUri: SipUri,
     contact: SipUri,
-    credentials: Credentials
+    credentials: Credentials,
+    transport: TransportProtocol
 )
 
 object LocalEndpoint {
@@ -29,15 +30,23 @@ object LocalEndpoint {
       sipPort: Port,
       rtpPort: Port
   ): Either[SoftphoneError, LocalEndpoint] =
-    from(config.defaultAccount, config.bindAddress, ip, sipPort, rtpPort)
+    from(
+      config.defaultAccount,
+      config.bindAddress,
+      ip,
+      sipPort,
+      rtpPort,
+      config.transport
+    )
 
-  /** The endpoint for one of the accounts. */
+  /** The endpoint for one of the accounts, speaking SIP over `transport`. */
   def from(
       config: AccountConfig,
       bindAddress: IpAddress,
       ip: IpAddress,
       sipPort: Port,
-      rtpPort: Port
+      rtpPort: Port,
+      transport: TransportProtocol
   ): Either[SoftphoneError, LocalEndpoint] =
     for {
       user    <- User(config.user).left.map(invalid(config.user, _))
@@ -47,7 +56,8 @@ object LocalEndpoint {
           SipScheme.Sip,
           ip,
           Some(UserInfo(user, None)),
-          Some(sipPort)
+          Some(sipPort),
+          Option.when(transport != TransportProtocol.Udp)(transport)
         )
         .left
         .map(invalid(config.user, _))
@@ -58,7 +68,8 @@ object LocalEndpoint {
       bindAddress,
       account,
       contact,
-      Credentials(config.user, config.password)
+      Credentials(config.user, config.password),
+      transport
     )
 
   /** The account's address-of-record, `sip:user@realm`. */
