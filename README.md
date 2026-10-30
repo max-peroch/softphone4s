@@ -34,6 +34,11 @@ Scala, Cats Effect, and fs2 versions this release was built against.
 softphone4s handles outbound SIP calls end-to-end:
 
 - **SIP** (RFC 3261) over UDP — INVITE / ACK / BYE / CANCEL
+- **Mid-call requests from the remote party**: OPTIONS is answered with our
+  `Allow` list; a re-INVITE or UPDATE with SDP is answered with our SDP, media
+  follows the new address, and a hold (`sendonly`, `inactive` or `0.0.0.0`)
+  stops our outgoing RTP until the call resumes. A re-INVITE without SDP is
+  refused `488`.
 - **Dialogs** (RFC 3261 §12): requests within a call follow the Record-Route
   set, with loose or strict routing, so a BYE goes to the first route hop and
   not straight to the remote's Contact. A request whose tags do not match the

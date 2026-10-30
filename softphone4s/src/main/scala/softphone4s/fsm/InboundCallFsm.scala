@@ -79,6 +79,12 @@ enum InboundAction {
   case Reply(request: SipRequest, status: Int, reason: String)
   case SendByeOk(request: SipRequest)
   case SendInfoOk(request: SipRequest)
+  case SendOptionsOk(request: SipRequest)
+
+  /** A 200 to a re-INVITE or UPDATE: with our answer to `offer` if there is
+    * one, after which media goes where the offer says (or stops, on hold).
+    */
+  case SendSessionOk(request: SipRequest, offer: Option[AudioOffer])
   case SendBye(dialog: SipDialog)
   case StartMedia(offer: AudioOffer)
   case StopMedia
@@ -370,7 +376,7 @@ object InboundCallFsm {
         case SipMethod.Info if !answeredWithoutAck =>
           val digit = CallFsm.parseDtmf(request.body).map(NotifyDtmf(_)).toList
           go(Active(seen), SendInfoOk(request) :: digit)
-        case _ =>
+        case _ if answeredWithoutAck =>
           State.pure(
             List(
               Reply(
@@ -379,6 +385,18 @@ object InboundCallFsm {
                 FailureStatus.NotImplemented.reason
               )
             )
+          )
+        case _ =>
+          go(
+            Active(seen),
+            DialogRequest.of(request) match {
+              case DialogRequest.Query   => List(SendOptionsOk(request))
+              case DialogRequest.Refresh => List(SendSessionOk(request, None))
+              case DialogRequest.Offer(offer) =>
+                List(SendSessionOk(request, Some(offer)))
+              case DialogRequest.Refused(status) =>
+                List(Reply(request, status.value, status.reason))
+            }
           )
       }
     }

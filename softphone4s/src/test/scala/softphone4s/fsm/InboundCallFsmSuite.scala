@@ -335,16 +335,73 @@ class InboundCallFsmSuite extends FunSuite {
     )
   }
 
-  test("a re-INVITE, or an INFO before the ACK, is answered 501 for now") {
-    val reinvite = request(SipMethod.Invite, 11)
+  private def sdpBody(
+      direction: String = "sendrecv",
+      ip: String = "192.0.2.77",
+      port: Int = 4002
+  ): String =
+    List(
+      "v=0",
+      s"o=- 1 1 IN IP4 $ip",
+      "s=-",
+      s"c=IN IP4 $ip",
+      "t=0 0",
+      s"m=audio $port RTP/AVP 0 101",
+      "a=rtpmap:0 PCMU/8000",
+      "a=rtpmap:101 telephone-event/8000",
+      s"a=$direction"
+    ).mkString("", "\r\n", "\r\n")
+
+  test("before the ACK a re-INVITE or INFO is answered 501") {
+    val reinvite = request(SipMethod.Invite, 11, body = sdpBody())
     assertEquals(
-      step(active, RequestReceived(reinvite))._2,
-      List(Reply(reinvite, 501, "Not Implemented"))
+      step(answered, RequestReceived(reinvite))._2.collect {
+        case Reply(_, c, _) => c
+      },
+      List(501)
     )
     val info = request(SipMethod.Info, 11, body = "5")
     assertEquals(
       step(answered, RequestReceived(info))._2,
       List(Reply(info, 501, "Not Implemented"))
+    )
+  }
+
+  test(
+    "once established OPTIONS is answered 200 and a re-INVITE moves or holds the media"
+  ) {
+    val options = request(SipMethod.Options, 11)
+    assertEquals(
+      step(active, RequestReceived(options))._2,
+      List(SendOptionsOk(options))
+    )
+    val hold = request(SipMethod.Invite, 12, body = sdpBody("sendonly"))
+    step(active, RequestReceived(hold))._2 match {
+      case List(SendSessionOk(r, Some(offer))) =>
+        assertEquals(r, hold)
+        assert(offer.isHold)
+      case other => fail(s"unexpected $other")
+    }
+    val (state, _) = step(active, RequestReceived(hold))
+    assertEquals(state, Active(ctx.dialog.seen(cseqNumber(12))))
+  }
+
+  test(
+    "a re-INVITE we cannot answer is refused 488, an UPDATE without SDP is a refresh"
+  ) {
+    val bad = request(
+      SipMethod.Invite,
+      11,
+      body = sdpBody().replace("RTP/AVP 0 101", "RTP/AVP 8")
+    )
+    assertEquals(
+      step(active, RequestReceived(bad))._2,
+      List(Reply(bad, 488, "Not Acceptable Here"))
+    )
+    val update = request(SipMethod.Update, 11)
+    assertEquals(
+      step(active, RequestReceived(update))._2,
+      List(SendSessionOk(update, None))
     )
   }
 

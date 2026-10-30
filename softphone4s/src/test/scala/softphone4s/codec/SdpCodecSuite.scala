@@ -104,4 +104,44 @@ class SdpCodecSuite extends FunSuite {
     assert(!bare.contains("telephone-event"), bare)
     assert(!bare.contains("\n\n") && bare.contains("\r\n"))
   }
+
+  private def offerWith(extra: String, ip: String = "192.168.1.2") =
+    SdpCodec
+      .parseOffer(
+        s"v=0\r\nc=IN IP4 $ip\r\nt=0 0\r\nm=audio 20000 RTP/AVP 0\r\n$extra"
+      )
+      .getOrElse(fail("unparseable"))
+
+  test("the direction of an offer is read, defaulting to sendrecv") {
+    import softphone4s.model.MediaDirection.*
+    assertEquals(offerWith("").direction, SendRecv)
+    assertEquals(offerWith("a=sendonly\r\n").direction, SendOnly)
+    assertEquals(offerWith("a=recvonly\r\n").direction, RecvOnly)
+    assertEquals(offerWith("a=inactive\r\n").direction, Inactive)
+  }
+
+  test(
+    "an offer is a hold if its sender will not receive, or the address is 0.0.0.0"
+  ) {
+    assert(offerWith("a=sendonly\r\n").isHold)
+    assert(offerWith("a=inactive\r\n").isHold)
+    assert(offerWith("", ip = "0.0.0.0").isHold)
+    assert(!offerWith("a=recvonly\r\n").isHold)
+    assert(!offerWith("").isHold)
+  }
+
+  test("the answer mirrors the direction of the offer (RFC 3264 §6.1)") {
+    val ip = IpAddress.fromString("10.0.0.1").get
+    List(
+      "sendonly" -> "recvonly",
+      "recvonly" -> "sendonly",
+      "inactive" -> "inactive",
+      "sendrecv" -> "sendrecv"
+    )
+      .foreach { (offered, answered) =>
+        val answer =
+          SdpCodec.buildAnswerTo(offerWith(s"a=$offered\r\n"), ip, defaultPort)
+        assert(answer.contains(s"a=$answered\r\n"), answer)
+      }
+  }
 }

@@ -497,6 +497,7 @@ object SipParser {
       case "OPTIONS"  => Right(SipMethod.Options)
       case "INFO"     => Right(SipMethod.Info)
       case "REGISTER" => Right(SipMethod.Register)
+      case "UPDATE"   => Right(SipMethod.Update)
       case other      => Left(ParseError.UnknownMethod(other))
     }
 }

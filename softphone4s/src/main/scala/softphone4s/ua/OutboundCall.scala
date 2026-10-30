@@ -334,6 +334,23 @@ private[softphone4s] class OutboundCall[F[_]: Async] private (
         logger.debug("Acknowledging INFO") >>
           respondTo(request, endpoint.buildInfoOk(request))
 
+      case SendOptionsOk(request) =>
+        logger.debug("Answering OPTIONS") >>
+          respondTo(request, endpoint.buildOptionsOk(request))
+
+      case SendSessionOk(request, offer) =>
+        logger.debug("Answering a session change") >>
+          respondTo(
+            request,
+            endpoint.buildSessionOk(
+              request,
+              offer.fold("")(
+                SdpCodec.buildAnswerTo(_, endpoint.ip, endpoint.rtpPort)
+              )
+            )
+          ) >>
+          offer.traverse_(o => media.retarget(o.ip, o.port, o.direction))
+
       case StartMedia(sdpBody) =>
         val (remoteIp, remotePort) =
           SdpCodec.parseAudioEndpoint(

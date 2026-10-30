@@ -1,6 +1,7 @@
 package softphone4s.codec
 
 import com.comcast.ip4s.{IpAddress, Port}
+import softphone4s.model.MediaDirection
 
 /** Minimal SDP offer/answer codec for a single audio stream. */
 object SdpCodec {
@@ -33,8 +34,14 @@ object SdpCodec {
       ip: IpAddress,
       port: Port,
       payloadTypes: List[Int],
-      offersTelephoneEvent: Boolean
+      offersTelephoneEvent: Boolean,
+      direction: MediaDirection = MediaDirection.SendRecv
   ) {
+
+    /** Whether this offer puts the call on hold: nothing is to be sent to its
+      * sender (`sendonly`, `inactive`, or the old connection address 0.0.0.0).
+      */
+    def isHold: Boolean = !direction.receives
 
     /** We can only speak PCMU (payload type 0). */
     def isAcceptable: Boolean = payloadTypes.contains(PcmuPayloadType)
@@ -65,7 +72,18 @@ object SdpCodec {
         lines.exists(l =>
           l.startsWith(s"a=rtpmap:$TelephoneEventPayloadType ") &&
             l.toLowerCase.contains("telephone-event")
-        )
+        ),
+      direction =
+        if ip.toString == "0.0.0.0" then MediaDirection.Inactive
+        else
+          lines
+            .flatMap(l =>
+              if l.startsWith("a=") then
+                MediaDirection.fromAttribute(l.drop(2).trim)
+              else None
+            )
+            .headOption
+            .getOrElse(MediaDirection.SendRecv)
     )
   }
 
@@ -94,7 +112,7 @@ object SdpCodec {
         |t=0 0
         |m=audio $localRtpPort RTP/AVP $payloads
         |a=rtpmap:$PcmuPayloadType PCMU/8000
-        |${events}a=sendrecv
+        |${events}a=${offer.direction.answer.sdpAttribute}
         |""".stripMargin.replace("\n", "\r\n")
   }
 

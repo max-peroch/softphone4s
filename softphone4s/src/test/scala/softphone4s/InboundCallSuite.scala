@@ -388,4 +388,42 @@ class InboundCallSuite extends CatsEffectSuite {
       }
     }
   }
+
+  test(
+    "a re-INVITE is answered with our SDP, a hold is mirrored, and OPTIONS lists our methods"
+  ) {
+    scenario().use { (phone, peer) =>
+      def sdp(direction: String) =
+        s"v=0\r\no=- 1 1 IN IP4 127.0.0.1\r\ns=-\r\nc=IN IP4 127.0.0.1\r\nt=0 0\r\nm=audio 19300 RTP/AVP 0\r\na=$direction\r\n"
+      for {
+        call     <- ring(phone, peer)
+        accepted <- call.accept.allocated
+        ok       <- response(peer, status(200))
+        _        <- send(peer, inDialog(SipMethod.Ack, 1, ok))
+        _        <- accepted._1.awaitPickup.timeout(5.seconds)
+        _    <- send(peer, inDialog(SipMethod.Invite, 2, ok, sdp("sendonly")))
+        held <- response(
+          peer,
+          r =>
+            r.statusCode >= 200 && r.headers.cseq.method == SipMethod.Invite && r.headers.cseq.seq.value == 2
+        )
+        _       <- send(peer, inDialog(SipMethod.Options, 3, ok))
+        options <- response(
+          peer,
+          r => r.headers.cseq.method == SipMethod.Options
+        )
+        _ <- accepted._2
+      } yield {
+        assertEquals(held.statusCode, 200)
+        assertEquals(held.headers.contentType, Some(MediaType.Sdp))
+        assert(held.body.contains("a=recvonly"), held.body)
+        assertEquals(options.statusCode, 200)
+        assert(
+          options.headers.others.exists(h =>
+            h.name.matches("Allow") && h.value.contains("UPDATE")
+          )
+        )
+      }
+    }
+  }
 }

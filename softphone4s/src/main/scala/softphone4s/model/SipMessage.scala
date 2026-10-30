@@ -3,7 +3,7 @@ package softphone4s.model
 import cats.data.NonEmptyList
 
 enum SipMethod {
-  case Invite, Ack, Bye, Cancel, Options, Info, Register
+  case Invite, Ack, Bye, Cancel, Options, Info, Register, Update
 }
 
 final case class CSeq(seq: CSeqNumber, method: SipMethod)

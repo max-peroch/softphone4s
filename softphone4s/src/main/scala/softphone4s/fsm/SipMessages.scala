@@ -221,6 +221,25 @@ object SipMessages {
         req.headers.copy(contacts = contacts(e), contentType = None)
       )
 
+    /** The 200 to an OPTIONS query: what we can do (RFC 3261 §11.2). */
+    def buildOptionsOk(req: SipRequest): SipResponse = {
+      val ok = buildInfoOk(req)
+      ok.copy(headers =
+        ok.headers.copy(others =
+          ExtensionHeader(FieldName.Allow, AllowedMethods) :: ok.headers.others
+        )
+      )
+    }
+
+    /** The 200 to a re-INVITE or UPDATE, carrying our SDP `answer`. */
+    def buildSessionOk(req: SipRequest, answer: String): SipResponse = {
+      val ok = buildInfoOk(req)
+      ok.copy(
+        headers = ok.headers.copy(contentType = Some(MediaType.Sdp)),
+        body = answer
+      )
+    }
+
     // -----------------------------------------------------------------------
     // SDP answer (Mode B — offer was in 200, answer goes in ACK)
     // -----------------------------------------------------------------------
@@ -228,6 +247,9 @@ object SipMessages {
     def buildSdpAnswer: String =
       SdpCodec.buildAnswer(e.ip, e.rtpPort)
   }
+
+  private val AllowedMethods: String =
+    "INVITE, ACK, BYE, CANCEL, OPTIONS, INFO, UPDATE"
 
   private def remoteParty(dialog: SipDialog): NameAddr =
     NameAddr(

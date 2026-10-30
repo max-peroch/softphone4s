@@ -44,10 +44,14 @@ object RtpTransport {
       }
     }
 
-  /** Encodes incoming PCMU bytes as RTP and writes them to `socket`. */
+  /** Encodes incoming PCMU bytes as RTP and writes them to `socket`, to
+    * wherever `target` says at the time: it changes when the remote party moves
+    * its media, and is `None` while the call is on hold, when packets are
+    * dropped (their sequence numbers are skipped, as for silence).
+    */
   def sendPipe[F[_]: Async](
       socket: DatagramSocket[F],
-      remoteAddr: SocketAddress[IpAddress]
+      target: F[Option[SocketAddress[IpAddress]]]
   ): Pipe[F, Byte, Unit] = upstream =>
     Stream
       .eval(Async[F].delay(scala.util.Random.nextLong() & 0xffffffffL))
@@ -55,20 +59,22 @@ object RtpTransport {
         upstream
           .chunkN(PacketSamples, allowFewer = false)
           .zipWithIndex
-          .map { case (chunk, packetIndex) =>
-            Datagram(
-              remoteAddr,
-              RtpCodec.encode(
-                payloadType = PayloadTypePcmu,
-                sequenceNumber = (packetIndex & 0xffff).toInt,
-                timestamp = (packetIndex * PacketSamples) & 0xffffffffL,
-                ssrc = ssrc,
-                payload = chunk,
-                marker = packetIndex == 0
+          .evalMap { case (chunk, packetIndex) =>
+            target.map(_.map { remoteAddr =>
+              Datagram(
+                remoteAddr,
+                RtpCodec.encode(
+                  payloadType = PayloadTypePcmu,
+                  sequenceNumber = (packetIndex & 0xffff).toInt,
+                  timestamp = (packetIndex * PacketSamples) & 0xffffffffL,
+                  ssrc = ssrc,
+                  payload = chunk,
+                  marker = packetIndex == 0
+                )
               )
-            )
+            })
           }
-          .evalMap(socket.write)
+          .evalMap(_.traverse_(socket.write))
       }
 
   private def handleSoftphoneEvent[F[_]: Async](

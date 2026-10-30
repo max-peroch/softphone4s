@@ -9,7 +9,7 @@ import fs2.concurrent.Channel
 import fs2.{Chunk, Pipe, Stream}
 import fs2.io.net.Network
 import softphone4s.codec.G711Codec
-import softphone4s.model.DtmfDigit
+import softphone4s.model.{DtmfDigit, MediaDirection}
 import softphone4s.transport.RtpTransport
 
 private[softphone4s] class MediaSession[F[_]: Async: Network] private (
@@ -18,7 +18,8 @@ private[softphone4s] class MediaSession[F[_]: Async: Network] private (
     localRtpPort: Port,
     audioChannel: Channel[F, Chunk[Byte]],
     sendPipeReady: Deferred[F, Pipe[F, Byte, Unit]],
-    mediaStop: Deferred[F, Unit]
+    mediaStop: Deferred[F, Unit],
+    target: Ref[F, Option[SocketAddress[IpAddress]]]
 ) {
 
   val source: Stream[F, Byte] =
@@ -29,13 +30,31 @@ private[softphone4s] class MediaSession[F[_]: Async: Network] private (
       upstream.through(pipe).interruptWhen(mediaStop.get.attempt)
     }
 
+  /** Points outgoing media at the remote party's (possibly new) address, or
+    * stops it while `direction` says they will not receive (call on hold).
+    */
+  def retarget(
+      remoteIp: IpAddress,
+      remotePort: Port,
+      direction: MediaDirection
+  ): F[Unit] =
+    target.set(
+      Option.when(direction.receives)(SocketAddress(remoteIp, remotePort))
+    )
+
   def start(
       remoteIp: IpAddress,
       remotePort: Port,
       supervisor: Supervisor[F],
       onDtmf: DtmfDigit => F[Unit]
+  ): F[Unit] =
+    retarget(remoteIp, remotePort, MediaDirection.SendRecv) >>
+      run(supervisor, onDtmf)
+
+  private def run(
+      supervisor: Supervisor[F],
+      onDtmf: DtmfDigit => F[Unit]
   ): F[Unit] = {
-    val remoteAddr = SocketAddress(remoteIp, remotePort)
     supervisor
       .supervise(
         Ref[F].of((-1L, -1)).flatMap { lastDtmfKey =>
@@ -55,7 +74,7 @@ private[softphone4s] class MediaSession[F[_]: Async: Network] private (
 
               val pcmToRtp: Pipe[F, Byte, Unit] =
                 _.through(G711Codec.pcmToMulawPipe(pcmFrameBytes))
-                  .through(RtpTransport.sendPipe(socket, remoteAddr))
+                  .through(RtpTransport.sendPipe(socket, target.get))
 
               sendPipeReady.complete(pcmToRtp) >>
                 receiveF.race(mediaStop.get.void).void
@@ -78,12 +97,14 @@ private[softphone4s] object MediaSession {
       audioChannel  <- Channel.bounded[F, Chunk[Byte]](64)
       sendPipeReady <- Deferred[F, Pipe[F, Byte, Unit]]
       mediaStop     <- Deferred[F, Unit]
+      target        <- Ref[F].of(Option.empty[SocketAddress[IpAddress]])
     } yield new MediaSession(
       pcmFrameBytes,
       bindAddress,
       localRtpPort,
       audioChannel,
       sendPipeReady,
-      mediaStop
+      mediaStop,
+      target
     )
 }

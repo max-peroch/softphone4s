@@ -2,6 +2,7 @@ package softphone4s.fsm
 
 import cats.data.State
 import cats.syntax.all.*
+import softphone4s.codec.SdpCodec.AudioOffer
 import softphone4s.model.*
 
 // ---------------------------------------------------------------------------
@@ -75,8 +76,15 @@ object SipAction {
   case class SendCancel(ctx: InviteCtx) extends SipAction
   case class SendBye(dialog: SipDialog) extends SipAction
   // Responses the interpreter builds deterministically
-  case class SendByeOk(request: SipRequest)  extends SipAction
-  case class SendInfoOk(request: SipRequest) extends SipAction
+  case class SendByeOk(request: SipRequest)     extends SipAction
+  case class SendInfoOk(request: SipRequest)    extends SipAction
+  case class SendOptionsOk(request: SipRequest) extends SipAction
+
+  /** A 200 to a re-INVITE or UPDATE: with our answer to `offer` if there is
+    * one, after which media goes where the offer says (or stops, on hold).
+    */
+  case class SendSessionOk(request: SipRequest, offer: Option[AudioOffer])
+      extends SipAction
 
   /** A final failure response to a request within the dialog. */
   case class SendReply(request: SipRequest, status: FailureStatus)
@@ -243,11 +251,18 @@ object CallFsm {
             SendInfoOk(request) :: notify
           )
 
-        // A re-INVITE, UPDATE or anything else we do not handle yet.
+        // OPTIONS, re-INVITE, UPDATE, or something we do not handle.
         case (Active(dialog), RequestReceived(request)) =>
           go(
             Active(dialog.seen(request.headers.cseq.seq)),
-            List(SendReply(request, FailureStatus.NotImplemented))
+            DialogRequest.of(request) match {
+              case DialogRequest.Query   => List(SendOptionsOk(request))
+              case DialogRequest.Refresh => List(SendSessionOk(request, None))
+              case DialogRequest.Offer(offer) =>
+                List(SendSessionOk(request, Some(offer)))
+              case DialogRequest.Refused(status) =>
+                List(SendReply(request, status))
+            }
           )
 
         // 200 OK after CANCEL (RFC 3261 §9 race) — must ACK then BYE immediately

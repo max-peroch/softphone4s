@@ -663,15 +663,105 @@ class CallFsmSuite extends FunSuite {
     )
   }
 
+  private def sdpBody(
+      direction: String = "sendrecv",
+      ip: String = "192.0.2.77",
+      port: Int = 4002
+  ): String =
+    List(
+      "v=0",
+      s"o=- 1 1 IN IP4 $ip",
+      "s=-",
+      s"c=IN IP4 $ip",
+      "t=0 0",
+      s"m=audio $port RTP/AVP 0 101",
+      "a=rtpmap:0 PCMU/8000",
+      "a=rtpmap:101 telephone-event/8000",
+      s"a=$direction"
+    ).mkString("", "\r\n", "\r\n")
+
+  private def withBody(r: SipRequest, body: String): SipRequest =
+    r.copy(body = body)
+
+  test("OPTIONS in a call is answered 200 and advances the CSeq") {
+    val options          = req(SipMethod.Options, number = 3)
+    val (state, actions) = step(active, RequestReceived(options))
+    assertEquals(actions, List(SendOptionsOk(options)))
+    assertEquals(replyOf(step(state, RequestReceived(options))._2), List(500))
+  }
+
   test(
-    "a re-INVITE or UPDATE is answered 501 for now, and still advances the CSeq"
+    "a re-INVITE with an SDP we can answer is answered 200 and moves the media"
   ) {
-    val reinvite         = req(SipMethod.Invite, number = 3)
-    val (state, actions) = step(active, RequestReceived(reinvite))
+    val reinvite = withBody(
+      req(SipMethod.Invite, number = 3),
+      sdpBody(ip = "192.0.2.99", port = 5000)
+    )
+    val (_, actions) = step(active, RequestReceived(reinvite))
+    actions match {
+      case List(SendSessionOk(r, Some(offer))) =>
+        assertEquals(r, reinvite)
+        assertEquals(offer.port.value, 5000)
+        assertEquals(offer.ip.toString, "192.0.2.99")
+      case other => fail(s"unexpected $other")
+    }
+  }
+
+  test("an SDP that is sendonly or inactive is a hold; sendrecv is not") {
+    def hold(direction: String) =
+      step(
+        active,
+        RequestReceived(
+          withBody(req(SipMethod.Update, number = 3), sdpBody(direction))
+        )
+      )._2 match {
+        case List(SendSessionOk(_, Some(offer))) => offer.isHold
+        case other                               => fail(s"unexpected $other")
+      }
+    assert(hold("sendonly"))
+    assert(hold("inactive"))
+    assert(!hold("sendrecv"))
+    assert(!hold("recvonly"))
+  }
+
+  test("an UPDATE without a body is a refresh: 200, no media change") {
+    val update = req(SipMethod.Update, number = 3)
+    assertEquals(
+      step(active, RequestReceived(update))._2,
+      List(SendSessionOk(update, None))
+    )
+  }
+
+  test(
+    "a re-INVITE whose SDP we cannot answer is refused 488, and one without SDP too"
+  ) {
+    val noPcmu = sdpBody().replace("RTP/AVP 0 101", "RTP/AVP 8")
+    assertEquals(
+      replyOf(
+        step(
+          active,
+          RequestReceived(withBody(req(SipMethod.Invite, number = 3), noPcmu))
+        )._2
+      ),
+      List(488)
+    )
+    assertEquals(
+      replyOf(
+        step(active, RequestReceived(req(SipMethod.Invite, number = 3)))._2
+      ),
+      List(488)
+    )
+  }
+
+  test(
+    "a method we do not handle is answered 501 and still advances the CSeq"
+  ) {
+    val (state, actions) =
+      step(active, RequestReceived(req(SipMethod.Register, number = 3)))
     assertEquals(replyOf(actions), List(501))
     assertEquals(
       replyOf(
-        step(state, RequestReceived(req(SipMethod.Invite, number = 3)))._2
+        step(state, RequestReceived(req(SipMethod.Register, number = 3)))._2
       ),
       List(500)
     )
