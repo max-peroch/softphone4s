@@ -86,11 +86,6 @@ class SoftphoneStreaming[F[_]: Async: Network] private (
         .map(n => values.map(ExtensionHeader(n, _)))
     }
 
-  private def resolveHost(host: Host): F[IpAddress] =
-    host.resolve[F](using Dns.forAsync[F], Async[F]).adaptError { case _ =>
-      SoftphoneError.HostResolutionFailed(host.toString)
-    }
-
   override def callAs(
       id: AccountId,
       callee: Callee,
@@ -174,16 +169,24 @@ class SoftphoneStreaming[F[_]: Async: Network] private (
       )
     } yield registration
 
-  /** The address of a dialog's next hop: its host (resolved) and port, or the
-    * default for its scheme.
+  /** Where a request within a dialog that runs over `transport` goes when its
+    * next hop is `uri`: the Contact or the first Route, located as RFC 3263
+    * says (an address or a port in it is used as it is, otherwise SRV and NAPTR
+    * records decide). The request carries a Via for `transport`, so only a
+    * target reached that way will do; for any other the caller falls back to
+    * the server it dialled.
     */
-  private def resolveNextHop(uri: SipUri): F[SocketAddress[IpAddress]] = {
-    val defaultPort = uri.scheme match {
-      case SipScheme.Sip  => port"5060"
-      case SipScheme.Sips => port"5061"
-    }
-    resolveHost(uri.host).map(SocketAddress(_, uri.port.getOrElse(defaultPort)))
-  }
+  private def nextHopOver(
+      transport: TransportProtocol
+  )(uri: SipUri): F[SocketAddress[IpAddress]] =
+    targets
+      .resolve(uri, transport)
+      .flatMap(found =>
+        Async[F].fromOption(
+          found.find(_.transport == transport).map(_.address),
+          SoftphoneError.HostResolutionFailed(uri.host.toString)
+        )
+      )
 
   /** The first place to send a request for `uri` (RFC 3263): SRV and NAPTR
     * records decide where and over what, unless the URI or the account's server
@@ -292,7 +295,7 @@ class SoftphoneStreaming[F[_]: Async: Network] private (
           callee,
           layer,
           peer,
-          resolveNextHop,
+          nextHopOver(endpoint.transport),
           endpoint,
           supervisor,
           entropy,
@@ -435,7 +438,7 @@ class SoftphoneStreaming[F[_]: Async: Network] private (
           invite,
           account.id,
           layer,
-          resolveNextHop,
+          nextHopOver(endpoint.transport),
           endpoint,
           callSupervisor,
           entropy,
@@ -464,7 +467,12 @@ object SoftphoneStreaming {
       audioFormat: AudioFormat,
       logger: StructuredLogger[F]
   ): Resource[F, SoftphoneStreaming[F]] =
-    resourceWith(config, audioFormat, logger, DnsJavaRecords[F])
+    resourceWith(
+      config,
+      audioFormat,
+      logger,
+      DnsJavaRecords.configured[F](config.dns)
+    )
 
   /** As [[resource]], looking names up with `dns` instead of the system's DNS
     * servers.

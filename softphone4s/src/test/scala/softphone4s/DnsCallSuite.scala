@@ -29,7 +29,9 @@ class DnsCallSuite extends CatsEffectSuite {
   /** A TCP SIP server on loopback; it queues what it is sent and answers INVITE
     * and BYE.
     */
-  private def server: Resource[IO, (Port, Queue[IO, SipRequest])] =
+  private def server(
+      recordRoute: Option[String] = None
+  ): Resource[IO, (Port, Queue[IO, SipRequest])] =
     for {
       requests  <- Resource.eval(Queue.unbounded[IO, SipRequest])
       bound     <- Network[IO].bind(SocketAddress(ip"127.0.0.1", port"0"))
@@ -63,6 +65,8 @@ class DnsCallSuite extends CatsEffectSuite {
                                   s"<sip:bob@127.0.0.1:$listening;transport=tcp>"
                                 )
                               ),
+                              recordRoutes =
+                                recordRoute.map(nameAddr(_)).toList,
                               contentType = Some(MediaType.Sdp)
                             ),
                             body = "v=0\r\nc=IN IP4 127.0.0.1\r\nt=0 0\r\nm=audio 40000 RTP/AVP 0\r\n"
@@ -111,7 +115,7 @@ class DnsCallSuite extends CatsEffectSuite {
   test(
     "NAPTR and SRV records choose TCP and the address and port, though UDP is configured"
   ) {
-    server.use { (listening, requests) =>
+    server().use { (listening, requests) =>
       for {
         dns <- FakeDns(
           naptrs = Map(
@@ -156,7 +160,7 @@ class DnsCallSuite extends CatsEffectSuite {
   }
 
   test("registering follows the same records") {
-    server.use { (listening, requests) =>
+    server().use { (listening, requests) =>
       for {
         dns <- FakeDns(
           srvs = Map(
@@ -179,6 +183,78 @@ class DnsCallSuite extends CatsEffectSuite {
         register.headers.topVia.transport,
         TransportProtocol.Tcp
       )
+    }
+  }
+
+  private val naptrToTcp = Map(
+    "example.org" -> List(
+      NaptrRecord(10, 1, "S", "SIP+D2T", "_sip._tcp.example.org.")
+    )
+  )
+
+  private def host(name: String) =
+    Hostname.fromString(name).getOrElse(fail(name))
+
+  test(
+    "a Record-Route host is located through SRV records, and the BYE goes there"
+  ) {
+    server(recordRoute = Some("<sip:proxy.example.org;lr>")).use {
+      (listening, requests) =>
+        for {
+          dns <- FakeDns(
+            naptrs = naptrToTcp,
+            srvs = Map(
+              "_sip._tcp.example.org." -> List(
+                SrvRecord(10, 1, listening, host("sip1.example.org"))
+              ),
+              "_sip._tcp.proxy.example.org." -> List(
+                SrvRecord(10, 1, listening, host("edge.example.org"))
+              )
+            ),
+            hosts = Map(
+              "sip1.example.org" -> List(ip"127.0.0.1"),
+              "edge.example.org" -> List(ip"127.0.0.1")
+            )
+          )
+          bye <- phone(dns, port"19133").use { p =>
+            p.call(bob).use(_.awaitPickup) >> next(requests, SipMethod.Bye)
+          }
+          asked <- dns.asked.get
+        } yield {
+          assertEquals(
+            bye.headers.routes.map(_.render),
+            List("<sip:proxy.example.org;lr>")
+          )
+          assert(
+            asked.contains("SRV _sip._tcp.proxy.example.org."),
+            asked.toString
+          )
+        }
+    }
+  }
+
+  test(
+    "a Record-Route host that resolves to nothing falls back to the server we dialled"
+  ) {
+    server(recordRoute = Some("<sip:unknown.example.org;lr>")).use {
+      (listening, requests) =>
+        for {
+          dns <- FakeDns(
+            naptrs = naptrToTcp,
+            srvs = Map(
+              "_sip._tcp.example.org." -> List(
+                SrvRecord(10, 1, listening, host("sip1.example.org"))
+              )
+            ),
+            hosts = Map("sip1.example.org" -> List(ip"127.0.0.1"))
+          )
+          bye <- phone(dns, port"19134").use { p =>
+            p.call(bob).use(_.awaitPickup) >> next(requests, SipMethod.Bye)
+          }
+        } yield assertEquals(
+          bye.headers.routes.map(_.render),
+          List("<sip:unknown.example.org;lr>")
+        )
     }
   }
 }

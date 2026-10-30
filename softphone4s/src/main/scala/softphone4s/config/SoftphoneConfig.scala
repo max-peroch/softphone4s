@@ -4,6 +4,7 @@ import cats.data.NonEmptyList
 import com.comcast.ip4s.*
 import pureconfig.*
 import pureconfig.generic.semiauto.*
+import softphone4s.dns.DnsConfig
 import softphone4s.model.TransportProtocol
 import softphone4s.transport.{StreamConfig, TlsConfig}
 
@@ -31,7 +32,8 @@ case class SoftphoneConfig(
     additionalAccounts: List[AccountConfig] = Nil,
     transport: TransportProtocol = TransportProtocol.Udp,
     tcp: StreamConfig = StreamConfig(),
-    tls: TlsConfig = TlsConfig()
+    tls: TlsConfig = TlsConfig(),
+    dns: DnsConfig = DnsConfig()
 ) {
 
   /** The account `call` and `register` use. */

@@ -358,4 +358,29 @@ class MultiAccountSuite extends CatsEffectSuite {
         assert(parsed.isLeft, line)
     }
   }
+
+  test("DNS servers are read as address or address:port, defaulting to 53") {
+    val parsed = ConfigSource
+      .string(
+        """user = a
+          |password = b
+          |realm = c
+          |dns { servers = ["10.0.0.53", "192.0.2.1:5353", "[2001:db8::53]:53"], timeout = 2 seconds }""".stripMargin
+      )
+      .load[SoftphoneConfig]
+      .fold(failures => fail(failures.prettyPrint()), identity)
+    assertEquals(
+      parsed.dns.servers.map(_.toString),
+      List("10.0.0.53:53", "192.0.2.1:5353", "[2001:db8::53]:53")
+    )
+    assertEquals(parsed.dns.timeout, 2.seconds)
+    assertEquals(SoftphoneConfig("a", "b", "c").dns.servers, Nil)
+  }
+
+  test("a DNS server that is not an address is an error") {
+    val parsed = ConfigSource
+      .string("user = a\npassword = b\nrealm = c\ndns { servers = [\"dns.example.com\"] }")
+      .load[SoftphoneConfig]
+    assert(parsed.isLeft)
+  }
 }

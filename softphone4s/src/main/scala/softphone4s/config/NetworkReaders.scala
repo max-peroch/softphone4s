@@ -5,7 +5,7 @@ import pureconfig.*
 import softphone4s.model.TransportProtocol
 
 /** How ports and IP addresses are read from configuration. */
-private[config] object NetworkReaders {
+private[softphone4s] object NetworkReaders {
   given ConfigReader[Port] = ConfigReader[Int].emap(i =>
     Port
       .fromInt(i)
@@ -16,6 +16,19 @@ private[config] object NetworkReaders {
       .fromToken(s)
       .toRight(
         error.CannotConvert(s, "TransportProtocol", "not a known transport")
+      )
+  )
+
+  /** `address` or `address:port` (`[v6]:port`), the port defaulting to 53: the
+    * only thing we read this for is a DNS server.
+    */
+  given ConfigReader[SocketAddress[IpAddress]] = ConfigReader[String].emap(s =>
+    SocketAddress
+      .fromStringIp(s)
+      .orElse(IpAddress.fromString(s).map(SocketAddress(_, port"53")))
+      .toRight(
+        error
+          .CannotConvert(s, "SocketAddress", "expected address or address:port")
       )
   )
   given ConfigReader[IpAddress] = ConfigReader[String].emap(s =>

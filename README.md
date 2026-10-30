@@ -48,8 +48,11 @@ softphone4s handles outbound SIP calls end-to-end:
   the default port. Targets of one priority are picked at random in proportion
   to their weights (RFC 2782). SRV and NAPTR answers are cached for their TTLs
   (dnsjava); host addresses come from the system resolver, so the hosts file
-  and split DNS still apply. The first target is used; trying the next one when
-  it fails is not done yet.
+  and split DNS still apply, and the DNS servers can be set with `dns.servers`.
+  The next hop of a dialog (the Contact, or the first Route) and Record-Route
+  hosts are located the same way, over the dialog's own transport; one that
+  resolves to nothing falls back to the server that was dialled. The first
+  target is used; trying the next one when it fails is not done yet.
 - **TLS** (RFC 3261 §26, RFC 5922): the server is identified by the host the
   request is addressed to (its first Route, else its Request-URI), which is sent
   as the SNI name and, by default, checked against the certificate. Trust comes
@@ -266,6 +269,8 @@ account every call is taken. Two accounts cannot have the same user.
 | `tcp.idle-timeout`  | `Duration`  | `5 minutes`  | A TCP connection with nothing sent or received for this long is closed |
 | `tcp.framing.max-header-bytes` / `max-body-bytes` | `Int` | 16 KiB / 1 MiB | Largest message a TCP connection may carry before it is dropped |
 | `tls.trust-store` / `tls.client-certificate` | `{ path, password, store-type }` | JVM trust / none | Key stores for the certificates we trust and the one we present (`store-type` is `PKCS12` or `JKS`) |
+| `dns.servers`       | list of `address[:port]` | system | DNS servers to ask for SRV and NAPTR records |
+| `dns.timeout`       | `Duration`  | `5 seconds`  | How long to wait for one DNS server                 |
 | `tls.min-version`   | `1.2`/`1.3` | `1.2`        | Oldest TLS version accepted                         |
 | `tls.cipher-suites` | list        | JVM default  | Cipher suites to allow, by Java name                |
 | `tls.hostname-verification` | `verify`/`skip` | `verify` | Whether the certificate must name the host we meant |

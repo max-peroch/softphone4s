@@ -1,5 +1,6 @@
 package softphone4s.dns
 
+import cats.data.NonEmptyList
 import cats.effect.{IO, Ref, Resource}
 import com.comcast.ip4s.*
 import fs2.Chunk
@@ -99,7 +100,7 @@ class DnsJavaRecordsSuite extends CatsEffectSuite {
     } yield (address, queries)
 
   private def records(address: SocketAddress[IpAddress]) =
-    DnsJavaRecords.against[IO](address, 1.second)
+    DnsJavaRecords.against[IO](NonEmptyList.one(address), 1.second)
 
   test("SRV records come back with their priority, weight, port and target") {
     server.use { (address, _) =>
@@ -204,6 +205,30 @@ class DnsJavaRecordsSuite extends CatsEffectSuite {
     records(dead).flatMap(_.srv("_sip._tcp.example.com.")).attempt.map {
       case Left(_: SoftphoneError.HostResolutionFailed) => ()
       case other => fail(s"unexpected $other")
+    }
+  }
+
+  test("the servers in the configuration are the ones asked") {
+    server.use { (address, queries) =>
+      val config = DnsConfig(List(address), 1.second)
+      for {
+        dns   <- DnsJavaRecords.configured[IO](config)
+        found <- dns.srv("_sip._tcp.example.com.")
+        asked <- queries.get
+      } yield {
+        assertEquals(found.size, 2)
+        assertEquals(asked, 1)
+      }
+    }
+  }
+
+  test("a server that does not answer is skipped for the next one") {
+    server.use { (address, _) =>
+      val dead = SocketAddress(ip"127.0.0.1", port"1")
+      DnsJavaRecords
+        .against[IO](NonEmptyList.of(dead, address), 1.second)
+        .flatMap(_.srv("_sip._tcp.example.com."))
+        .map(found => assertEquals(found.size, 2))
     }
   }
 }

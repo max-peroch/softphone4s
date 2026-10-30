@@ -1,5 +1,6 @@
 package softphone4s.dns
 
+import cats.data.NonEmptyList
 import cats.effect.{Async, Sync}
 import cats.syntax.all.*
 import com.comcast.ip4s.{Dns, Host, Hostname, IpAddress, Port, SocketAddress}
@@ -36,14 +37,25 @@ object DnsJavaRecords {
   def apply[F[_]: Async]: F[DnsRecords[F]] =
     session(new ExtendedResolver())
 
-  /** Asks one server, waiting at most `timeout` for each answer. */
+  /** Asks the servers `config` names, or the system's if it names none. */
+  def configured[F[_]: Async](config: DnsConfig): F[DnsRecords[F]] =
+    NonEmptyList
+      .fromList(config.servers)
+      .fold(apply[F])(against(_, config.timeout))
+
+  /** Asks `servers` in turn, waiting at most `timeout` for each answer. */
   def against[F[_]: Async](
-      server: SocketAddress[IpAddress],
+      servers: NonEmptyList[SocketAddress[IpAddress]],
       timeout: FiniteDuration
   ): F[DnsRecords[F]] =
     session {
-      val resolver = new SimpleResolver(server.toInetSocketAddress)
-      resolver.setTimeout(java.time.Duration.ofMillis(timeout.toMillis))
+      val resolver = new ExtendedResolver(
+        servers.toList.map { server =>
+          val one = new SimpleResolver(server.toInetSocketAddress)
+          one.setTimeout(java.time.Duration.ofMillis(timeout.toMillis))
+          one: Resolver
+        }.toArray
+      )
       resolver
     }
 
