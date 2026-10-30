@@ -1,7 +1,7 @@
 package softphone4s
 
 import cats.data.NonEmptyList
-import cats.effect.{IO, Resource}
+import cats.effect.{Deferred, IO, Resource}
 import cats.syntax.all.*
 import com.comcast.ip4s.*
 import munit.CatsEffectSuite
@@ -9,7 +9,9 @@ import org.typelevel.log4cats.noop.NoOpLogger
 import softphone4s.SipLiterals.*
 import softphone4s.config.SoftphoneConfig
 import softphone4s.model.*
-import softphone4s.transport.{Inbound, SipTransport, Transport}
+import fs2.io.net.Network
+import softphone4s.codec.SipCodec
+import softphone4s.transport.{Inbound, SipTransport, StreamFraming, Transport}
 
 import javax.sound.sampled.AudioFormat
 import scala.concurrent.duration.*
@@ -450,6 +452,81 @@ class InboundCallSuite extends CatsEffectSuite {
         assert(reinvite.body.contains("a=sendonly"), reinvite.body)
         assertEquals(reinvite.headers.cseq.seq.value, 2)
         assertEquals(ack.headers.cseq.seq, reinvite.headers.cseq.seq)
+      }
+    }
+  }
+
+  // ---- Requests within a dialog that are too big for UDP -------------------------------
+
+  /** Record-Route entries enough to make every request in the dialog big; the
+    * first is the caller's own address, which is where the first hop is.
+    */
+  private def bigRoute: List[NameAddr] =
+    nameAddr("<sip:127.0.0.1:19081;lr>") ::
+      (1 to 59).toList.map(n => nameAddr(s"<sip:proxy$n.example.com;lr>"))
+
+  /** A TCP server where the caller is, handing over the first request it gets.
+    */
+  private def tcpServer: Resource[IO, Deferred[IO, SipRequest]] =
+    for {
+      got   <- Resource.eval(Deferred[IO, SipRequest])
+      bound <- Network[IO].bind(SocketAddress(ip"127.0.0.1", theirs))
+      _     <- bound.accept
+        .map(
+          _.reads
+            .through(StreamFraming.frames[IO]())
+            .evalMap {
+              case Right(bytes) =>
+                SipCodec
+                  .decode(bytes)
+                  .toOption
+                  .collect { case r: SipRequest => r }
+                  .traverse_(got.complete)
+              case Left(_) => IO.unit
+            }
+            .handleErrorWith(_ => fs2.Stream.empty)
+        )
+        .parJoinUnbounded
+        .compile
+        .drain
+        .background
+    } yield got
+
+  private def routed: SipRequest =
+    invite().copy(headers = invite().headers.copy(recordRoutes = bigRoute))
+
+  /** An answered call that is then hung up. */
+  private def hangUpAnswered(
+      phone: SoftphoneStreaming[IO],
+      peer: Transport[IO]
+  ) =
+    for {
+      call     <- ring(phone, peer, routed)
+      accepted <- call.accept.allocated
+      ok       <- response(peer, status(200))
+      _        <- send(peer, inDialog(SipMethod.Ack, 1, ok))
+      _        <- accepted._1.awaitPickup.timeout(5.seconds)
+      _        <- accepted._2.start
+    } yield ()
+
+  test("our BYE, too big for UDP, goes over TCP to the first hop") {
+    tcpServer.flatMap(got => scenario().map(got -> _)).use { (got, scene) =>
+      val (phone, peer) = scene
+      hangUpAnswered(phone, peer) >> got.get.timeout(5.seconds).map { bye =>
+        assertEquals(bye.method, SipMethod.Bye)
+        assertEquals(bye.headers.topVia.transport, TransportProtocol.Tcp)
+        assertEquals(bye.headers.routes.size, 60)
+      }
+    }
+  }
+
+  test(
+    "when that TCP connection cannot be made the BYE comes over UDP instead"
+  ) {
+    scenario().use { (phone, peer) =>
+      hangUpAnswered(phone, peer) >> request(peer, SipMethod.Bye).map { bye =>
+        assertEquals(bye.headers.topVia.transport, TransportProtocol.Udp)
+        assertEquals(bye.headers.routes.size, 60)
       }
     }
   }

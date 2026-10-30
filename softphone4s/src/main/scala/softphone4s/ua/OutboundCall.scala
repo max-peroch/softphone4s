@@ -196,6 +196,63 @@ private[softphone4s] class OutboundCall[F[_]: Async] private (
         }
     }
 
+  /** Sends a request within `dialog` to `to`. One that would go over UDP but is
+    * too big for a datagram goes over TCP instead (RFC 3261 §18.1.1): its Via
+    * and Contact are made TCP's, it is sent to where the dialog's next hop
+    * serves TCP, and if that connection cannot be made it is sent again over
+    * UDP as a new transaction.
+    */
+  private def startInDialog(
+      request: SipRequest,
+      dialog: SipDialog,
+      to: SocketAddress[IpAddress]
+  ): F[Unit] =
+    uplink.get.flatMap { current =>
+      val stream =
+        current.endpoint.via(current.endpoint.ip, TransportProtocol.Tcp)
+      stream match {
+        case Right(tcp) if StreamSwitch.tooBigForUdp(request, udpLimit) =>
+          for {
+            tcpTo <- resolve(TransportProtocol.Tcp, dialog.route.nextHop)
+              .handleError(_ => to)
+            _ <- logger.info(Map("method" -> request.method.toString))(
+              "Request too big for UDP; sending it over TCP"
+            )
+            _ <- startClient(
+              StreamSwitch.over(request, tcp),
+              tcpTo,
+              failover = newBranch().flatMap(branch =>
+                startClient(StreamSwitch.reissued(request, branch), to).as(true)
+              )
+            )
+          } yield ()
+        case _ => startClient(request, to)
+      }
+    }
+
+  /** Sends a request that is not part of a transaction, the ACK of a 2xx,
+    * within `dialog`. Too big for UDP, it goes over TCP, and over UDP after all
+    * if that cannot be written.
+    */
+  private def transmitInDialog(
+      request: SipRequest,
+      dialog: SipDialog,
+      to: SocketAddress[IpAddress]
+  ): F[Unit] =
+    uplink.get.flatMap { current =>
+      current.endpoint.via(current.endpoint.ip, TransportProtocol.Tcp) match {
+        case Right(tcp) if StreamSwitch.tooBigForUdp(request, udpLimit) =>
+          resolve(TransportProtocol.Tcp, dialog.route.nextHop)
+            .handleError(_ => to)
+            .flatMap(tcpTo =>
+              layer
+                .transmit(StreamSwitch.over(request, tcp), tcpTo)
+                .handleErrorWith(_ => layer.transmit(request, to))
+            )
+        case _ => layer.transmit(request, to)
+      }
+    }
+
   private def startClient(
       request: SipRequest,
       to: SocketAddress[IpAddress],
@@ -464,12 +521,13 @@ private[softphone4s] class OutboundCall[F[_]: Async] private (
       case SendAck(dialog, remoteSdpForAnswer) =>
         (newBranch(), destinationFor(dialog)).flatMapN { (branch, to) =>
           logger.debug("Sending ACK") >>
-            layer.transmit(
+            transmitInDialog(
               endpoint.buildAck(
                 dialog,
                 branch,
                 remoteSdpForAnswer.map(_ => endpoint.buildSdpAnswer)
               ),
+              dialog,
               to
             )
         }
@@ -484,8 +542,9 @@ private[softphone4s] class OutboundCall[F[_]: Async] private (
 
       case SendBye(dialog) =>
         (newBranch(), destinationFor(dialog)).flatMapN { (branch, to) =>
-          logger.debug("Sending BYE") >> startClient(
+          logger.debug("Sending BYE") >> startInDialog(
             endpoint.buildBye(dialog, branch),
+            dialog,
             to
           )
         }
@@ -509,8 +568,9 @@ private[softphone4s] class OutboundCall[F[_]: Async] private (
           logger.debug(Map("change" -> change.toString))(
             "Sending a session change"
           ) >>
-            startClient(
+            startInDialog(
               endpoint.buildSessionRequest(dialog, branch, change),
+              dialog,
               to
             )
         }

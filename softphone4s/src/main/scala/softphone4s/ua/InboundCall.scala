@@ -35,7 +35,8 @@ private[softphone4s] final class InboundCall[F[_]: Async] private (
     invite: ServerTransaction[F],
     val account: AccountId,
     layer: TransactionLayer[F],
-    resolve: SipUri => F[SocketAddress[IpAddress]],
+    resolve: (TransportProtocol, SipUri) => F[SocketAddress[IpAddress]],
+    udpLimit: Int,
     endpoint: LocalEndpoint,
     supervisor: Supervisor[F],
     entropy: Entropy[F],
@@ -206,8 +207,9 @@ private[softphone4s] final class InboundCall[F[_]: Async] private (
           logger.debug(Map("change" -> change.toString))(
             "Sending a session change"
           ) >>
-            startClient(
+            startInDialog(
               endpoint.buildSessionRequest(dialog, branch, change),
+              dialog,
               to
             )
         }
@@ -215,7 +217,11 @@ private[softphone4s] final class InboundCall[F[_]: Async] private (
       case SendAck(dialog) =>
         (entropy.branch, destinationFor(dialog)).flatMapN { (branch, to) =>
           logger.debug("Sending ACK") >>
-            layer.transmit(endpoint.buildAck(dialog, branch, None), to)
+            transmitInDialog(
+              endpoint.buildAck(dialog, branch, None),
+              dialog,
+              to
+            )
         }
 
       case ApplyAnswer(response) => applyAnswer(response)
@@ -253,8 +259,9 @@ private[softphone4s] final class InboundCall[F[_]: Async] private (
 
       case SendBye(dialog) =>
         (entropy.branch, destinationFor(dialog)).flatMapN { (branch, to) =>
-          logger.debug("Sending BYE") >> startClient(
+          logger.debug("Sending BYE") >> startInDialog(
             endpoint.buildBye(dialog, branch),
+            dialog,
             to
           )
         }
@@ -335,7 +342,7 @@ private[softphone4s] final class InboundCall[F[_]: Async] private (
     * resolved.
     */
   private def destinationFor(dialog: SipDialog): F[SocketAddress[IpAddress]] =
-    resolve(dialog.route.nextHop).handleErrorWith { error =>
+    resolve(endpoint.transport, dialog.route.nextHop).handleErrorWith { error =>
       logger
         .warn(Map("error" -> String.valueOf(error.getMessage)))(
           "Cannot resolve the next hop; using the INVITE's source"
@@ -352,13 +359,66 @@ private[softphone4s] final class InboundCall[F[_]: Async] private (
       .filter(_.isAcceptable)
       .traverse_(o => media.retarget(o.ip, o.port, o.direction))
 
-  private def startClient(
+  /** Sends a request within `dialog` to `to`. One that would go over UDP but is
+    * too big for a datagram goes over TCP instead (RFC 3261 §18.1.1): its Via
+    * and Contact are made TCP's, it is sent to where the dialog's next hop
+    * serves TCP, and if that connection cannot be made it is sent again over
+    * UDP as a new transaction.
+    */
+  private def startInDialog(
       request: SipRequest,
+      dialog: SipDialog,
       to: SocketAddress[IpAddress]
   ): F[Unit] =
+    endpoint.via(endpoint.ip, TransportProtocol.Tcp) match {
+      case Right(tcp) if StreamSwitch.tooBigForUdp(request, udpLimit) =>
+        for {
+          tcpTo <- resolve(TransportProtocol.Tcp, dialog.route.nextHop)
+            .handleError(_ => to)
+          _ <- logger.info(Map("method" -> request.method.toString))(
+            "Request too big for UDP; sending it over TCP"
+          )
+          _ <- startClient(
+            StreamSwitch.over(request, tcp),
+            tcpTo,
+            failover = entropy.branch.flatMap(branch =>
+              startClient(StreamSwitch.reissued(request, branch), to).as(true)
+            )
+          )
+        } yield ()
+      case _ => startClient(request, to)
+    }
+
+  /** Sends a request that is not part of a transaction, the ACK of a 2xx,
+    * within `dialog`. Too big for UDP, it goes over TCP, and over UDP after all
+    * if that cannot be written.
+    */
+  private def transmitInDialog(
+      request: SipRequest,
+      dialog: SipDialog,
+      to: SocketAddress[IpAddress]
+  ): F[Unit] =
+    endpoint.via(endpoint.ip, TransportProtocol.Tcp) match {
+      case Right(tcp) if StreamSwitch.tooBigForUdp(request, udpLimit) =>
+        resolve(TransportProtocol.Tcp, dialog.route.nextHop)
+          .handleError(_ => to)
+          .flatMap(tcpTo =>
+            layer
+              .transmit(StreamSwitch.over(request, tcp), tcpTo)
+              .handleErrorWith(_ => layer.transmit(request, to))
+          )
+      case _ => layer.transmit(request, to)
+    }
+
+  private def startClient(
+      request: SipRequest,
+      to: SocketAddress[IpAddress],
+      failover: F[Boolean] = Async[F].pure(false)
+  ): F[Unit] =
     layer.client(request, to).flatMap {
-      case Right(transaction) => supervisor.supervise(forward(transaction)).void
-      case Left(error)        =>
+      case Right(transaction) =>
+        supervisor.supervise(forward(transaction, failover)).void
+      case Left(error) =>
         logger.warn(Map("error" -> error.message))(
           "Cannot start a transaction"
         ) >>
@@ -369,18 +429,35 @@ private[softphone4s] final class InboundCall[F[_]: Async] private (
             .void
     }
 
-  private def forward(transaction: ClientTransaction[F]): F[Unit] =
+  /** Passes on what a client transaction reports. When it ends without an
+    * answer, `failover` may find another way to try; if it does, that is the
+    * end of this transaction and nothing is reported.
+    */
+  private def forward(
+      transaction: ClientTransaction[F],
+      failover: F[Boolean]
+  ): F[Unit] =
     transaction.notices
       .evalMap {
         case ClientNotice.Response(response) =>
-          events.send(InboundEvent.ResponseReceived(response))
+          events.send(InboundEvent.ResponseReceived(response)).void
         case ClientNotice.TimedOut =>
-          events.send(
-            InboundEvent.TransactionFailed(TransactionFailure.TimedOut)
+          failover.ifM(
+            Async[F].unit,
+            events
+              .send(InboundEvent.TransactionFailed(TransactionFailure.TimedOut))
+              .void
           )
         case ClientNotice.TransportFailed =>
-          events.send(
-            InboundEvent.TransactionFailed(TransactionFailure.TransportFailed)
+          failover.ifM(
+            Async[F].unit,
+            events
+              .send(
+                InboundEvent.TransactionFailed(
+                  TransactionFailure.TransportFailed
+                )
+              )
+              .void
           )
       }
       .compile
@@ -397,7 +474,8 @@ private[softphone4s] object InboundCall {
       invite: ServerTransaction[F],
       account: AccountId,
       layer: TransactionLayer[F],
-      resolve: SipUri => F[SocketAddress[IpAddress]],
+      resolve: (TransportProtocol, SipUri) => F[SocketAddress[IpAddress]],
+      udpLimit: Int,
       endpoint: LocalEndpoint,
       supervisor: Supervisor[F],
       entropy: Entropy[F],
@@ -439,6 +517,7 @@ private[softphone4s] object InboundCall {
         account,
         layer,
         resolve,
+        udpLimit,
         endpoint,
         supervisor,
         entropy,

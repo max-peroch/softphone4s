@@ -54,6 +54,7 @@ class OutboundCallSuite extends CatsEffectSuite {
       inviteTimeout: FiniteDuration = 32.seconds,
       resolveWith: SipUri => IO[SocketAddress[IpAddress]] = _ => IO.pure(them),
       alternatives: List[Uplink] = Nil,
+      streamPeer: SocketAddress[IpAddress] = them,
       oversize: Option[Uplink] = None,
       udpLimit: Int = 1300,
       extraHeaders: List[ExtensionHeader] = Nil,
@@ -83,7 +84,10 @@ class OutboundCallSuite extends CatsEffectSuite {
           alternatives,
           oversize,
           udpLimit,
-          (_, uri) => resolved.update(_ :+ uri) >> resolveWith(uri),
+          (transport, uri) =>
+            resolved.update(_ :+ uri) >>
+              (if transport == TransportProtocol.Tcp then IO.pure(streamPeer)
+               else resolveWith(uri)),
           supervisor,
           Entropy.fromRandom(random),
           media,
@@ -1055,6 +1059,77 @@ class OutboundCallSuite extends CatsEffectSuite {
       answered(f).map((invite, _) =>
         assertEquals(invite.headers.topVia.transport, TransportProtocol.Tcp)
       )
+    }
+  }
+
+  // ---- Requests within a dialog that are too big for UDP -------------------------------
+
+  /** A route set long enough that every request in the dialog is a big one. */
+  private val longRoute =
+    (1 to 60).map(n => s"<sip:proxy$n.example.com;lr>").toList
+
+  private def answeredWithRoute(f: Fixture) =
+    for {
+      invite <- nextOf(f.peer, SipMethod.Invite)
+      _      <- reply(
+        f.peer,
+        answerTo(invite, 200, "OK", withContact = true, recordRoute = longRoute)
+      )
+      _ <- f.call.awaitPickup
+    } yield invite
+
+  test("the ACK and BYE of a dialog with a long route set go over TCP") {
+    fixture(port"19034").use { f =>
+      for {
+        _   <- answeredWithRoute(f)
+        ack <- nextOf(f.peer, SipMethod.Ack)
+        _   <- f.call.hangup
+        bye <- nextOf(f.peer, SipMethod.Bye)
+      } yield {
+        List(ack, bye).foreach { request =>
+          assertEquals(request.headers.topVia.transport, TransportProtocol.Tcp)
+          assertEquals(
+            request.headers.contacts.flatMap(_.uri.transport),
+            List(TransportProtocol.Tcp)
+          )
+          assertEquals(request.headers.routes.size, 60)
+        }
+      }
+    }
+  }
+
+  test(
+    "a big BYE whose TCP connection cannot be made is sent again over UDP, once"
+  ) {
+    val rtp = port"19035"
+    fixture(
+      rtp,
+      streamPeer = unreachable,
+      reach = FlakyTransport(_, failing = Set(unreachable))
+    ).use { f =>
+      for {
+        _     <- answeredWithRoute(f)
+        _     <- f.call.hangup
+        bye   <- nextOf(f.peer, SipMethod.Bye)
+        again <- nextOf(f.peer, SipMethod.Bye).timeout(400.millis).attempt
+      } yield {
+        assertEquals(bye.headers.topVia.transport, TransportProtocol.Udp)
+        assert(again.isLeft, "the BYE must arrive once")
+      }
+    }
+  }
+
+  test("a request within a dialog that fits in a datagram stays on UDP") {
+    fixture(port"19036").use { f =>
+      for {
+        _   <- answered(f)
+        ack <- nextOf(f.peer, SipMethod.Ack)
+        _   <- f.call.hangup
+        bye <- nextOf(f.peer, SipMethod.Bye)
+      } yield {
+        assertEquals(ack.headers.topVia.transport, TransportProtocol.Udp)
+        assertEquals(bye.headers.topVia.transport, TransportProtocol.Udp)
+      }
     }
   }
 }

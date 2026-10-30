@@ -117,8 +117,8 @@ class SoftphoneStreaming[F[_]: Async: Network] private (
       streamWay    <- Resource.eval(
         streamWayTo(account, target, endpoint, calleeAddr)
       )
-      callId       <- Resource.eval(entropy.callId(localIp))
-      sipCh        <- Resource.make(
+      callId <- Resource.eval(entropy.callId(localIp))
+      sipCh  <- Resource.make(
         Channel
           .bounded[F, DialogInput[F]](128)
           .flatTap(ch => routes.update(_ + (callId -> ch)))
@@ -532,7 +532,8 @@ class SoftphoneStreaming[F[_]: Async: Network] private (
           invite,
           account.id,
           layer,
-          nextHopOver(endpoint.transport),
+          (transport, uri) => nextHopOver(transport)(uri),
+          config.maxUdpMessage,
           endpoint,
           callSupervisor,
           entropy,

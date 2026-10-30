@@ -349,4 +349,29 @@ class SipMessagesSuite extends FunSuite {
   test("an endpoint is left as it is for a sip: request") {
     assertEquals(endpoint.forScheme(SipScheme.Sip), Right(endpoint))
   }
+
+  test(
+    "a REGISTER, even with an exaggerated credential, stays under a datagram's limit"
+  ) {
+    // Why REGISTER needs no switch to TCP: its content is fixed (one Contact,
+    // no headers of the user's). Every field of this credential is several
+    // times the usual length and the request is still 400 bytes short.
+    val credentials = ExtensionHeader(
+      FieldName.Authorization,
+      "Digest username=\"" + "u" * 64 + "\", realm=\"" + "r" * 64 + "\", nonce=\"" + "n" * 128 +
+        "\", uri=\"sip:" + "d" * 64 + "\", response=\"" + "f" * 64 + "\", algorithm=SHA-256, " +
+        "cnonce=\"" + "c" * 32 + "\", qop=auth, nc=00000001, opaque=\"" + "o" * 64 + "\""
+    )
+    val register = endpoint.buildRegister(
+      uri("sip:sip.example.com"),
+      callId("reg@h"),
+      tag("lt"),
+      cseqNumber(1),
+      branch("z9hG4bKr"),
+      Expires.of(scala.concurrent.duration.FiniteDuration(1, "hour")),
+      Some(credentials)
+    )
+    val size = softphone4s.codec.SipCodec.encode(register).size
+    assert(size < 1300 - 300, s"a REGISTER of $size bytes")
+  }
 }

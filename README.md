@@ -159,11 +159,14 @@ and the domain's DNS records decide. An INVITE too big for a UDP datagram
 (`max-udp-message`, 1300 bytes by default, RFC 3261 §18.1.1) is sent over TCP
 instead, and over UDP after all if that connection cannot be made. The TCP
 server is looked up as RFC 3263 says (`_sip._tcp` SRV records), so a domain
-that serves TCP on another port is found. This applies to the first INVITE of a
-call; requests within a dialog stay on the dialog's transport. A call to a
-`sips:` URI uses a `sips:` Contact (RFC 5630), and so does an incoming `sips:`
-call; a `sips:` INVITE that arrives over UDP or TCP is refused `403 Forbidden`,
-since every hop of it was to be TLS.
+that serves TCP on another port is found. The same goes for the ACK, BYE and
+re-INVITE or UPDATE of a dialog, whose size grows with its route set: they go
+over TCP to the dialog's next hop, with the Via and Contact of TCP, and over
+UDP after all if the connection fails. REGISTER cannot get near the limit (its
+content is fixed), and responses go back on the transport of their request, as
+the RFC says. A call to a `sips:` URI uses a `sips:` Contact (RFC 5630), and so
+does an incoming `sips:` call; a `sips:` INVITE that arrives over UDP or TCP is
+refused `403 Forbidden`, since every hop of it was to be TLS.
 
 ```scala
 import cats.effect.*
