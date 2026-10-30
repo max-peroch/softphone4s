@@ -6,6 +6,7 @@ import cats.effect.{IO, Resource}
 import com.comcast.ip4s.*
 import munit.CatsEffectSuite
 import org.typelevel.log4cats.noop.NoOpLogger
+import softphone4s.DigestVerifier
 import softphone4s.SipLiterals.*
 import softphone4s.config.SoftphoneConfig
 import softphone4s.model.*
@@ -264,6 +265,152 @@ class RegistrationSuite extends CatsEffectSuite {
           assertEquals(failedAt, 32.seconds)
           within(retriedAt - failedAt, 5.seconds)
           assertEquals(retry.headers.callId, first.headers.callId)
+        }
+      }
+    )
+  }
+
+  private val sha256 =
+    """Digest realm="test.local", nonce="n-sha", algorithm=SHA-256, qop="auth""""
+
+  test(
+    "a SHA-256 challenge is answered with a response the registrar can verify"
+  ) {
+    TestControl.executeEmbed(
+      agent().use { (reg, peer) =>
+        for {
+          first <- nextRegister(peer)
+          _     <- answer(
+            peer,
+            first,
+            401,
+            "Unauthorized",
+            challenge = Some(sha256)
+          )
+          retry <- nextRegister(peer)
+          _     <- answer(peer, retry, 200, granted = Some(3600))
+          _     <- reg.awaitRegistered
+        } yield {
+          val verdict = DigestVerifier
+            .verify(retry, "secret")
+            .getOrElse(fail("no Authorization"))
+          assert(verdict.valid, verdict.toString)
+          assertEquals(verdict.algorithm, "SHA-256")
+        }
+      }
+    )
+  }
+
+  test("SHA-256 is used when the registrar offers MD5 as well") {
+    TestControl.executeEmbed(
+      agent().use { (reg, peer) =>
+        for {
+          first <- nextRegister(peer)
+          base = TransactionMessages.responseTo(
+            first,
+            401,
+            "Unauthorized",
+            Some(tag("srv"))
+          )
+          _ <- peer.send(
+            us,
+            base.copy(headers =
+              base.headers.copy(wwwAuthenticate =
+                List(
+                  challengeOf(
+                    """Digest realm="test.local", nonce="n-md5", algorithm=MD5, qop="auth""""
+                  ),
+                  challengeOf(sha256)
+                )
+              )
+            )
+          )
+          retry <- nextRegister(peer)
+          _     <- answer(peer, retry, 200, granted = Some(3600))
+          _     <- reg.awaitRegistered
+        } yield assertEquals(
+          DigestVerifier
+            .verify(retry, "secret")
+            .map(v => (v.valid, v.algorithm)),
+          Some((true, "SHA-256"))
+        )
+      }
+    )
+  }
+
+  test("a refresh reuses the credentials at once, with a higher nonce count") {
+    TestControl.executeEmbed(
+      agent().use { (reg, peer) =>
+        for {
+          first <- nextRegister(peer)
+          _     <- answer(
+            peer,
+            first,
+            401,
+            "Unauthorized",
+            challenge = Some(sha256)
+          )
+          retry   <- nextRegister(peer)
+          _       <- answer(peer, retry, 200, granted = Some(600))
+          _       <- reg.awaitRegistered
+          refresh <- nextRegister(
+            peer
+          ) // after about 300 s, with no 401 in between
+          _     <- answer(peer, refresh, 200, granted = Some(600))
+          later <- nextRegister(peer)
+        } yield {
+          val verdicts =
+            List(retry, refresh, later).map(DigestVerifier.verify(_, "secret"))
+          assert(verdicts.forall(_.exists(_.valid)), verdicts.toString)
+          assertEquals(
+            verdicts.map(_.map(_.nonce)),
+            List.fill(3)(Some("n-sha"))
+          )
+          assertEquals(
+            verdicts.map(_.flatMap(_.nc)),
+            List(Some("00000001"), Some("00000002"), Some("00000003"))
+          )
+          assertEquals(refresh.headers.cseq.seq, retry.headers.cseq.seq.next)
+        }
+      }
+    )
+  }
+
+  test(
+    "when the registrar finds the cached nonce stale, the fresh one is used"
+  ) {
+    TestControl.executeEmbed(
+      agent().use { (reg, peer) =>
+        for {
+          first <- nextRegister(peer)
+          _     <- answer(
+            peer,
+            first,
+            401,
+            "Unauthorized",
+            challenge = Some(sha256)
+          )
+          retry   <- nextRegister(peer)
+          _       <- answer(peer, retry, 200, granted = Some(600))
+          _       <- reg.awaitRegistered
+          refresh <- nextRegister(peer)
+          _       <- answer(
+            peer,
+            refresh,
+            401,
+            "Unauthorized",
+            challenge = Some(
+              """Digest realm="test.local", nonce="n-new", algorithm=SHA-256, qop="auth", stale=true"""
+            )
+          )
+          again <- nextRegister(peer)
+          _     <- answer(peer, again, 200, granted = Some(600))
+        } yield {
+          val verdict = DigestVerifier
+            .verify(again, "secret")
+            .getOrElse(fail("no Authorization"))
+          assert(verdict.valid)
+          assertEquals((verdict.nonce, verdict.nc), ("n-new", Some("00000001")))
         }
       }
     )

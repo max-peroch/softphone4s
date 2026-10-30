@@ -14,11 +14,15 @@ final case class RegistrationContext(
     cseq: CSeqNumber,
     contact: SipUri,
     requested: Expires,
-    authAttempts: Map[AuthKind, Int] = Map.empty
+    authAttempts: Map[AuthKind, Int] = Map.empty,
+    cached: Option[(AuthKind, DigestChallenge)] = None
 ) {
 
   /** The context for a new REGISTER: the next CSeq, and no challenge answered
-    * yet (RFC 3261 §10.2: one Call-ID, a rising CSeq).
+    * yet (RFC 3261 §10.2: one Call-ID, a rising CSeq). The credentials that
+    * last worked are kept, so the REGISTER can carry them at once instead of
+    * waiting for a 401 (RFC 7616 §3.3: a nonce may be reused with a higher
+    * `nc`).
     */
   def next: RegistrationContext =
     copy(cseq = cseq.next, authAttempts = Map.empty)
@@ -139,7 +143,7 @@ object RegistrationFsm {
           val next = context.next
           go(
             Registering(next, 1, RegistrationPhase.Refreshing),
-            List(SendRegister(next, next.requested, None))
+            List(SendRegister(next, next.requested, next.cached))
           )
 
         // ---- Waiting to retry -----------------------------------------------
@@ -149,7 +153,7 @@ object RegistrationFsm {
             Registering(next, attempt + 1, RegistrationPhase.Establishing),
             List(
               Notify(RegistrationState.Registering),
-              SendRegister(next, next.requested, None)
+              SendRegister(next, next.requested, next.cached)
             )
           )
 
@@ -215,7 +219,7 @@ object RegistrationFsm {
             val next = context.next.copy(requested = minimum)
             go(
               Registering(next, attempt, phase),
-              List(SendRegister(next, minimum, None))
+              List(SendRegister(next, minimum, next.cached))
             )
           case None =>
             fail(
@@ -277,16 +281,23 @@ object RegistrationFsm {
       .filter(c =>
         made == 0 || (made < MaxAuthAttempts && c.staleness == Staleness.Stale)
       )
-      .fold(fail(context, attempt, RegistrationFailure.AuthenticationFailed)) {
-        challenge =>
-          val next = context.copy(
-            cseq = context.cseq.next,
-            authAttempts = context.authAttempts.updated(kind, made + 1)
-          )
-          go(
-            Registering(next, attempt, phase),
-            List(SendRegister(next, lifetime, Some((kind, challenge))))
-          )
+      .fold(
+        // The credentials did not work: forget them rather than send them again.
+        fail(
+          context.copy(cached = None),
+          attempt,
+          RegistrationFailure.AuthenticationFailed
+        )
+      ) { challenge =>
+        val next = context.copy(
+          cseq = context.cseq.next,
+          authAttempts = context.authAttempts.updated(kind, made + 1),
+          cached = Some((kind, challenge))
+        )
+        go(
+          Registering(next, attempt, phase),
+          List(SendRegister(next, lifetime, Some((kind, challenge))))
+        )
       }
   }
 
@@ -325,7 +336,7 @@ object RegistrationFsm {
       Unregistering(next),
       stopTimers ::: List(
         Notify(RegistrationState.Unregistering),
-        SendRegister(next, Expires.Zero, None)
+        SendRegister(next, Expires.Zero, next.cached)
       )
     )
   }
@@ -369,7 +380,8 @@ object RegistrationFsm {
       .fold(giveUp) { challenge =>
         val next = context.copy(
           cseq = context.cseq.next,
-          authAttempts = context.authAttempts.updated(kind, made + 1)
+          authAttempts = context.authAttempts.updated(kind, made + 1),
+          cached = Some((kind, challenge))
         )
         go(
           Unregistering(next),

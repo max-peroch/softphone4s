@@ -34,7 +34,11 @@ Scala, Cats Effect, and fs2 versions this release was built against.
 softphone4s handles outbound SIP calls end-to-end:
 
 - **SIP** (RFC 3261) over UDP — INVITE / ACK / BYE / CANCEL
-- **Digest authentication** (RFC 2617)
+- **Digest authentication** (RFC 2617, RFC 7616, RFC 8760): MD5, MD5-sess,
+  SHA-256 and SHA-256-sess, with `qop=auth` or `auth-int`. When a server offers
+  several challenges the strongest supported algorithm is used. A registration
+  keeps the credentials that last worked and sends them on the next REGISTER
+  with a higher `nc`, so a refresh needs no 401 round trip.
 - **RTP audio** with G.711 μ-law codec
 - **DTMF** reception and transmission
 - Automatic DNS resolution for SIP destinations

@@ -63,7 +63,13 @@ class RegistrationFsmSuite extends FunSuite {
     NameAddr(contact).withExpires(expires(lifetimeSeconds))
 
   private val digest = """Digest realm="test.local", nonce="n1""""
-  private val stale  = """Digest realm="test.local", nonce="n2", stale=true"""
+
+  private def digestChallenge(header: String): DigestChallenge =
+    AuthChallenge.parse(header) match {
+      case AuthChallenge.Digest(c) => c
+      case other                   => fail(s"not a Digest challenge: $other")
+    }
+  private val stale = """Digest realm="test.local", nonce="n2", stale=true"""
 
   private val registering = step(Idle, Start(context))._1
   private def attemptOf(s: RegistrationFsmState): Int = s match {
@@ -158,7 +164,8 @@ class RegistrationFsmSuite extends FunSuite {
     val (state, actions) = step(registering, resp(401, www = List(digest)))
     val next             = context.copy(
       cseq = cseqNumber(2),
-      authAttempts = Map(AuthKind.Origin -> 1)
+      authAttempts = Map(AuthKind.Origin -> 1),
+      cached = Some((AuthKind.Origin, digestChallenge(digest)))
     )
     assertEquals(state, Registering(next, 1, RegistrationPhase.Establishing))
     assert(actions.exists {
@@ -202,6 +209,97 @@ class RegistrationFsmSuite extends FunSuite {
   test("a 401 with nothing we can answer is a failure") {
     val (state, _) = step(registering, resp(401, www = List("Negotiate abc")))
     assert(state.isInstanceOf[Backoff])
+  }
+
+  // ---- The credential cache ----------------------------------------------------
+
+  private def cachedAfterSuccess = {
+    val challenged = step(registering, resp(401, www = List(digest)))._1
+    step(challenged, resp(200, contacts = List(bound(600))))._1
+  }
+
+  private def authorizationOf(actions: List[RegistrationAction]) =
+    actions.collectFirst { case SendRegister(_, _, auth) => auth }.flatten
+
+  test(
+    "after an authenticated success the next refresh carries the credentials at once"
+  ) {
+    val (_, actions) =
+      step(cachedAfterSuccess, TimerFired(RegistrationTimer.Refresh))
+    assertEquals(
+      authorizationOf(actions).map((kind, c) => (kind, c.nonce.value)),
+      Some((AuthKind.Origin, "n1"))
+    )
+  }
+
+  test(
+    "a retry after a failure and the final unregistration also use the cache"
+  ) {
+    val ok = cachedAfterSuccess
+    assert(authorizationOf(step(ok, Stop)._2).isDefined)
+    val failed = step(
+      step(ok, TimerFired(RegistrationTimer.Refresh))._1,
+      resp(500)
+    )._1
+    assert(
+      authorizationOf(
+        step(failed, TimerFired(RegistrationTimer.Retry))._2
+      ).isDefined
+    )
+  }
+
+  test("a registration that never needed credentials sends none") {
+    val ok = step(registering, resp(200, contacts = List(bound(600))))._1
+    assertEquals(
+      authorizationOf(step(ok, TimerFired(RegistrationTimer.Refresh))._2),
+      None
+    )
+  }
+
+  test(
+    "a stale answer to the cached credentials is answered with the fresh nonce, which replaces the cache"
+  ) {
+    val (refreshing, _) =
+      step(cachedAfterSuccess, TimerFired(RegistrationTimer.Refresh))
+    val (state, actions) = step(refreshing, resp(401, www = List(stale)))
+    assertEquals(
+      authorizationOf(actions).map((_, c) => c.nonce.value),
+      Some("n2")
+    )
+    state match {
+      case Registering(c, _, _) =>
+        assertEquals(c.cached.map((_, ch) => ch.nonce.value), Some("n2"))
+      case other => fail(s"unexpected: $other")
+    }
+  }
+
+  test("credentials that are refused are forgotten, not sent again") {
+    val (refreshing, _) =
+      step(cachedAfterSuccess, TimerFired(RegistrationTimer.Refresh))
+    val (answered, _) =
+      step(refreshing, resp(401, www = List(digest))) // a new challenge
+    val (failed, _) =
+      step(answered, resp(401, www = List(digest))) // refused again
+    failed match {
+      case Backoff(c, _) => assertEquals(c.cached, None)
+      case other         => fail(s"unexpected: $other")
+    }
+    assertEquals(
+      authorizationOf(step(failed, TimerFired(RegistrationTimer.Retry))._2),
+      None
+    )
+  }
+
+  test("SHA-256 is chosen over MD5 when both are offered") {
+    val both = List(
+      """Digest realm="test.local", nonce="m", algorithm=MD5""",
+      """Digest realm="test.local", nonce="s", algorithm=SHA-256"""
+    )
+    val (_, actions) = step(registering, resp(401, www = both))
+    assertEquals(
+      authorizationOf(actions).map((_, c) => c.nonce.value),
+      Some("s")
+    )
   }
 
   // ---- 423 Interval Too Brief --------------------------------------------------
