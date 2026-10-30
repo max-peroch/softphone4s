@@ -72,7 +72,7 @@ class CallFsmSuite extends FunSuite {
       ResponseReceived(resp(200, "OK", to = "<sip:callee@host>;tag=rtag"))
     ) match {
       case (a: Active, _) => a
-      case (other, _) => throw AssertionError(s"expected Active, got $other")
+      case (other, _)     => fail(s"expected Active, got $other")
     }
 
   // ---- Inviting ---------------------------------------------------------------
@@ -260,7 +260,10 @@ class CallFsmSuite extends FunSuite {
       Closed(LocalHangup),
       ResponseReceived(resp(200, "OK", to = "<sip:callee@host>;tag=rtag"))
     )
-    val dialog = actions.collectFirst { case SendBye(d) => d }.get
+    val dialog = actions.collectFirst { case SendBye(d) => d } match {
+      case Some(d) => d
+      case None    => fail(s"no SendBye in $actions")
+    }
     assertEquals(dialog.localUri, uri("sip:user@realm"))
     assertEquals(dialog.localTag, tag("ltag"))
     assertEquals(dialog.remoteUri, uri("sip:callee@host"))

@@ -21,6 +21,7 @@ object Dependencies {
   // Testing
   val munit           = "org.scalameta" %% "munit"             % "1.3.6" % Test
   val munitCatsEffect = "org.typelevel" %% "munit-cats-effect" % "2.2.1" % Test
+  val munitScalaCheck = "org.scalameta" %% "munit-scalacheck" % "1.3.1" % Test
 
   // Config
   val pureconfigCore =

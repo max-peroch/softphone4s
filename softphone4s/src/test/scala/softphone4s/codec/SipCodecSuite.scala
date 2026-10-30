@@ -129,7 +129,7 @@ class SipCodecSuite extends FunSuite {
       "Content-Length: 0"
     )
     SipCodec.decode(raw) match {
-      case Left(err) => assert(err.contains("Call-ID"), err)
+      case Left(err) => assert(err.message.contains("Call-ID"), err)
       case Right(m)  => fail(s"expected a decode error, got: $m")
     }
   }
@@ -211,9 +211,9 @@ class SipCodecSuite extends FunSuite {
     )
     SipCodec.decode(raw) match {
       case Left(err) =>
-        assert(err.contains("Call-ID"), err)
-        assert(err.contains("Via"), err)
-        assert(err.contains("tel:"), err)
+        assert(err.message.contains("Call-ID"), err)
+        assert(err.message.contains("Via"), err)
+        assert(err.message.contains("tel:"), err)
       case Right(m) => fail(s"expected a decode error, got: $m")
     }
   }
@@ -246,11 +246,11 @@ class SipCodecSuite extends FunSuite {
         contacts =
           List(nameAddr("<sip:a@10.0.0.9>"), nameAddr("<sip:b@10.0.0.9>")),
         others = List(
-          ExtensionHeader(FieldName("X-Test").toOption.get, "yes")
+          ExtensionHeader(fieldName("X-Test"), "yes")
         )
       )
     )
-    val lines = SipCodec.encode(req).split("\r\n").toList
+    val lines = SipCodec.render(req).split("\r\n").toList
     assertEquals(lines.count(_.startsWith("Via: ")), 2)
     assertEquals(lines.count(_.startsWith("Contact: ")), 2)
     assertEquals(

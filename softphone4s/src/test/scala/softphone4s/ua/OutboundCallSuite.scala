@@ -24,7 +24,7 @@ class OutboundCallSuite extends CatsEffectSuite {
     SoftphoneConfig(user = "test", password = "test", realm = "test.local")
   private val endpoint = LocalEndpoint
     .from(testConfig, localIp, sipPort, rtpPort)
-    .fold(err => throw err, identity)
+    .fold(err => fail(err.getMessage), identity)
 
   private def mkHeaders(cseq: CSeq, to: String = "<sip:bob@test.local>") =
     SipHeaders(

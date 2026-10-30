@@ -36,6 +36,7 @@ final case class SipHeaders(
 
 sealed trait SipMessage {
   def headers: SipHeaders
+  def body: String
 }
 
 final case class SipRequest(

@@ -25,6 +25,7 @@ lazy val softphone4s = project
     libraryDependencies ++= Seq(
       munit,
       munitCatsEffect,
+      munitScalaCheck,
       catsEffect,
       fs2Core,
       fs2Io,

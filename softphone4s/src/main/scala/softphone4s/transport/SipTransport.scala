@@ -6,7 +6,7 @@ import com.comcast.ip4s.*
 import fs2.Stream
 import fs2.io.net.{Datagram, Network}
 import org.typelevel.log4cats.StructuredLogger
-import softphone4s.codec.SipCodec
+import softphone4s.codec.{ParseError, SipCodec}
 import softphone4s.model.SipMessage
 
 object SipTransport {
@@ -30,12 +30,15 @@ object SipTransport {
         val receive: Stream[F, SipMessage] =
           socket.reads
             .evalMap { datagram =>
-              val raw = new String(datagram.bytes.toArray, "UTF-8")
-              SipCodec.decode(raw) match {
+              SipCodec.decode(datagram.bytes) match {
                 case Right(msg) => Async[F].pure(Some(msg))
-                case Left(err)  =>
+                // A bare CRLF is a keep-alive (RFC 5626), not an error.
+                case Left(ParseError.Empty) => Async[F].pure(None)
+                case Left(err)              =>
                   logger
-                    .warn(Map("error" -> err))("Failed to decode SIP message")
+                    .warn(Map("error" -> err.message))(
+                      "Failed to decode SIP message"
+                    )
                     .as(None)
               }
             }
@@ -43,7 +46,7 @@ object SipTransport {
 
         val send: (SocketAddress[IpAddress], SipMessage) => F[Unit] = {
           (addr, msg) =>
-            val bytes = fs2.Chunk.array(SipCodec.encode(msg).getBytes("UTF-8"))
+            val bytes = SipCodec.encode(msg)
             socket.write(Datagram(addr, bytes))
         }
 
