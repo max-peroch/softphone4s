@@ -1,4 +1,4 @@
-ThisBuild / scalaVersion := "3.3.8"
+ThisBuild / scalaVersion := "3.9.0"
 ThisBuild / organization := "io.github.max-peroch"
 ThisBuild / homepage   := Some(uri("https://github.com/max-peroch/softphone4s"))
 ThisBuild / licenses   := List(License.Apache2)
@@ -13,7 +13,7 @@ ThisBuild / developers := List(
 ThisBuild / scalafmtOnCompile := true
 ThisBuild / scalacOptions     := Seq(
   "-Wunused:all",
-  "-Xfatal-warnings"
+  "-Werror"
 )
 
 import Dependencies._
@@ -22,7 +22,7 @@ lazy val softphone4s = project
   .in(file("softphone4s"))
   .settings(
     name                := "softphone4s",
-    libraryDependencies := Seq(
+    libraryDependencies ++= Seq(
       munit,
       munitCatsEffect,
       catsEffect,
@@ -39,7 +39,7 @@ lazy val softphone4sOtel4s = project
   .dependsOn(softphone4s)
   .settings(
     name                := "softphone4s-otel4s",
-    libraryDependencies := Seq(
+    libraryDependencies ++= Seq(
       otel4sCoreTrace,
       opentelemetryApi
     )
@@ -54,7 +54,7 @@ lazy val softphone4sDemo = project
     run / fork          := true,
     run / connectInput  := true,
     publish / skip      := true,
-    libraryDependencies := Seq(
+    libraryDependencies ++= Seq(
       sound4s,
       scribe,
       scribeSlf4j,
