@@ -330,7 +330,14 @@ class CallFsmSuite extends FunSuite {
   test("ByeSent + the BYE's 200 OK → Closed(LocalHangup), notifies hangup") {
     val (state, actions) = step(
       ByeSent(active.dialog),
-      ResponseReceived(resp(200, "OK", method = SipMethod.Bye))
+      ResponseReceived(
+        resp(
+          200,
+          "OK",
+          to = "<sip:callee@host>;tag=rtag",
+          method = SipMethod.Bye
+        )
+      )
     )
     assertEquals(state, Closed(LocalHangup))
     assert(actions.contains(NotifyHangup(LocalHangup)))
@@ -339,7 +346,14 @@ class CallFsmSuite extends FunSuite {
   test("ByeSent + a failure response to the BYE also ends the call") {
     val (state, _) = step(
       ByeSent(active.dialog),
-      ResponseReceived(resp(481, "Does Not Exist", method = SipMethod.Bye))
+      ResponseReceived(
+        resp(
+          481,
+          "Does Not Exist",
+          to = "<sip:callee@host>;tag=rtag",
+          method = SipMethod.Bye
+        )
+      )
     )
     assertEquals(state, Closed(LocalHangup))
   }
@@ -348,7 +362,10 @@ class CallFsmSuite extends FunSuite {
     "ByeSent + a retransmitted 200 to the INVITE is ACKed, not taken for the BYE's answer"
   ) {
     val (state, actions) =
-      step(ByeSent(active.dialog), ResponseReceived(resp(200, "OK")))
+      step(
+        ByeSent(active.dialog),
+        ResponseReceived(resp(200, "OK", to = "<sip:callee@host>;tag=rtag"))
+      )
     assertEquals(state, ByeSent(active.dialog))
     assertEquals(actions, List(SendAck(active.dialog, None)))
   }
@@ -884,5 +901,83 @@ class CallFsmSuite extends FunSuite {
       step(holding, SessionChangeRequested(SessionChange.Resume)),
       (holding, Nil)
     )
+  }
+
+  // ---- A forked call -----------------------------------------------------------
+
+  private def okFrom(
+      tagValue: String,
+      number: Int = 1,
+      method: SipMethod = SipMethod.Invite
+  ) = {
+    val r =
+      resp(200, "OK", to = s"<sip:callee@host>;tag=$tagValue", method = method)
+    r.copy(headers = r.headers.copy(cseq = cseq(number, method)))
+  }
+
+  test("the first branch to answer is the call, whichever branches rang") {
+    val ringing1 = step(
+      Inviting(baseCtx),
+      ResponseReceived(resp(180, "Ringing", to = "<sip:callee@host>;tag=a"))
+    )._1
+    val ringing2 = step(
+      ringing1,
+      ResponseReceived(resp(180, "Ringing", to = "<sip:callee@host>;tag=b"))
+    )._1
+    step(ringing2, ResponseReceived(okFrom("b"))) match {
+      case (Active(dialog), actions) =>
+        assertEquals(dialog.remoteTag, Some(tag("b")))
+        assert(actions.contains(SendAck(dialog, None)))
+      case (other, _) => fail(s"expected Active, got $other")
+    }
+  }
+
+  test(
+    "a 200 from another branch is ACKed and ended with a BYE, and the call stands"
+  ) {
+    List[CallState](active, ByeSent(active.dialog)).foreach { state =>
+      val (next, actions) = step(state, ResponseReceived(okFrom("other")))
+      assertEquals(next, state)
+      actions match {
+        case List(SendAck(ackDialog, None), SendBye(byeDialog)) =>
+          assertEquals(ackDialog.remoteTag, Some(tag("other")))
+          assertEquals(byeDialog, ackDialog)
+        case other => fail(s"unexpected $other")
+      }
+    }
+  }
+
+  test("another branch's 200 is also ended while our re-INVITE is pending") {
+    val (reinviting, _) =
+      step(active, SessionChangeRequested(SessionChange.Hold))
+    val (next, actions) = step(reinviting, ResponseReceived(okFrom("other")))
+    assertEquals(next, reinviting)
+    assert(actions.exists {
+      case SendBye(d) => d.remoteTag == Some(tag("other")); case _ => false
+    })
+  }
+
+  test(
+    "a repeated 200 from our branch is ACKed with the CSeq of the INVITE it answers"
+  ) {
+    val (held, _) = step(active, SessionChangeRequested(SessionChange.Hold))
+    val back      = step(held, ResponseReceived(okFrom("rtag", number = 2)))._1
+    // The initial INVITE's 200 again, after the re-INVITE finished.
+    val (state, actions) =
+      step(back, ResponseReceived(okFrom("rtag", number = 1)))
+    assertEquals(state, back)
+    actions match {
+      case List(SendAck(d, None)) => assertEquals(d.localCseq.value, 1)
+      case other                  => fail(s"unexpected $other")
+    }
+  }
+
+  test("the answer to a BYE sent to another branch does not end the call") {
+    val (state, actions) = step(
+      ByeSent(active.dialog),
+      ResponseReceived(okFrom("other", number = 2, method = SipMethod.Bye))
+    )
+    assertEquals(state, ByeSent(active.dialog))
+    assertEquals(actions, Nil)
   }
 }

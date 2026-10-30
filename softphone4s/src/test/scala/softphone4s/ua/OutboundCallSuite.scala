@@ -117,10 +117,11 @@ class OutboundCallSuite extends CatsEffectSuite {
       code: Int,
       reason: String,
       withContact: Boolean = false,
-      recordRoute: List[String] = Nil
+      recordRoute: List[String] = Nil,
+      toTag: String = "rtag"
   ): SipResponse = {
     val base =
-      TransactionMessages.responseTo(request, code, reason, Some(tag("rtag")))
+      TransactionMessages.responseTo(request, code, reason, Some(tag(toTag)))
     if withContact then
       base.copy(
         headers = base.headers.copy(
@@ -692,6 +693,44 @@ class OutboundCallSuite extends CatsEffectSuite {
         _       <- f.peer.send(us, theirs)
         refused <- statusOf(f.peer, SipMethod.Invite, _ >= 200)
       } yield assertEquals(refused, 491)
+    }
+  }
+
+  // ---- A forked call -----------------------------------------------------------
+
+  test(
+    "the first branch to answer is the call; a later branch's 200 is ACKed and ended"
+  ) {
+    fixture(port"19019").use { f =>
+      for {
+        invite <- nextOf(f.peer, SipMethod.Invite)
+        _      <- reply(f.peer, answerTo(invite, 180, "Ringing", toTag = "a"))
+        _      <- reply(f.peer, answerTo(invite, 180, "Ringing", toTag = "b"))
+        _      <- reply(
+          f.peer,
+          answerTo(invite, 200, "OK", withContact = true, toTag = "b")
+        )
+        _    <- f.call.awaitPickup
+        ackB <- nextOf(f.peer, SipMethod.Ack)
+        // Another branch answers too, after the call was taken.
+        _ <- reply(
+          f.peer,
+          answerTo(invite, 200, "OK", withContact = true, toTag = "c")
+        )
+        ackC  <- nextOf(f.peer, SipMethod.Ack)
+        byeC  <- nextOf(f.peer, SipMethod.Bye)
+        _     <- reply(f.peer, TransactionMessages.responseTo(byeC, 200, "OK"))
+        ended <- f.call.awaitHangup.timeout(300.millis).attempt
+        // Hanging up ends the call with branch b, not c.
+        _    <- f.call.hangup
+        byeB <- nextOf(f.peer, SipMethod.Bye)
+      } yield {
+        assertEquals(ackB.headers.to.tag, Some(tag("b")))
+        assertEquals(ackC.headers.to.tag, Some(tag("c")))
+        assertEquals(byeC.headers.to.tag, Some(tag("c")))
+        assert(ended.isLeft, "the call must not have ended")
+        assertEquals(byeB.headers.to.tag, Some(tag("b")))
+      }
     }
   }
 }

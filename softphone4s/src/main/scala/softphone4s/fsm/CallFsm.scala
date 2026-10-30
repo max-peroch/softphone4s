@@ -295,25 +295,27 @@ object CallFsm {
             List(NotifyHangup(RemoteBye), StopMedia, SendByeOk(request))
           )
 
-        // The BYE's own final response, not a retransmitted 200 to the INVITE.
-        case (ByeSent(_), ResponseReceived(response))
+        // The BYE's own final response, not a retransmitted 200 to the INVITE
+        // and not the answer to a BYE we sent a forked branch.
+        case (ByeSent(dialog), ResponseReceived(response))
             if response.statusCode >= FinalResponseMin &&
-              response.headers.cseq.method == SipMethod.Bye =>
+              response.headers.cseq.method == SipMethod.Bye &&
+              response.headers.to.tag == dialog.remoteTag =>
           go(Closed(LocalHangup), List(NotifyHangup(LocalHangup)))
 
         // The BYE got no answer (Timer F) or could not be sent.
         case (ByeSent(_), TransactionFailed(_)) =>
           go(Closed(LocalHangup), List(NotifyHangup(LocalHangup)))
 
-        // A retransmitted 200 to the INVITE means our ACK was lost: send it
-        // again (RFC 3261 §13.2.2.4), for as long as the dialog stands.
-        case (Active(dialog), ResponseReceived(response))
+        // Another 200 to an INVITE once the call stands: our ACK was lost, or
+        // another branch of a forked call answered as well.
+        case (Established(dialog), ResponseReceived(response))
             if isInviteOk(response) =>
-          State.pure(List(SendAck(dialog, None)))
+          lateOk(dialog, response)
 
         case (ByeSent(dialog), ResponseReceived(response))
             if isInviteOk(response) =>
-          State.pure(List(SendAck(dialog, None)))
+          lateOk(dialog, response)
 
         case (Established(dialog), RequestReceived(request))
             if request.method == SipMethod.Info =>
@@ -378,6 +380,27 @@ object CallFsm {
     val next = dialog.copy(localCseq = dialog.localCseq.next)
     go(Reinviting(next, change), List(SendReinvite(next, change)))
   }
+
+  /** A 200 to an INVITE that arrives after the call was answered. From the
+    * branch we are talking to, it is a retransmission: our ACK was lost, so
+    * send it again (RFC 3261 §13.2.2.4), numbered as the INVITE the 200
+    * answers. From any other branch of a forked call (§13.2.2.4, §19.3) there
+    * is no call to keep: ACK it so it stops, then end that dialog with a BYE.
+    */
+  private def lateOk(dialog: SipDialog, response: SipResponse): Transition =
+    if response.headers.to.tag == dialog.remoteTag then
+      State.pure(
+        List(
+          SendAck(dialog.copy(localCseq = response.headers.cseq.seq), None)
+        )
+      )
+    else
+      State.pure(
+        SipDialog
+          .fromLateOk(response)
+          .toList
+          .flatMap(fork => List(SendAck(fork, None), SendBye(fork)))
+      )
 
   private def go(next: CallState, actions: List[SipAction]): Transition =
     State.set(next).as(actions)
