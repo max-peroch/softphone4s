@@ -1,6 +1,8 @@
 package softphone4s.fsm
 
+import cats.data.NonEmptyList
 import munit.FunSuite
+import softphone4s.SipLiterals.*
 import softphone4s.model.*
 import softphone4s.fsm.SipAction.*
 import softphone4s.fsm.CallState.*
@@ -15,12 +17,9 @@ class CallFsmSuite extends FunSuite {
   ): (CallState, List[SipAction]) =
     CallFsm.transition(event).run(state).value
 
-  private def uri(s: String): SipUri =
-    SipUri.parse(s).fold(err => fail(err), identity)
-
   private val baseCtx = InviteCtx(
-    callId = "call@test",
-    localTag = "ltag",
+    callId = callId("call@test"),
+    localTag = tag("ltag"),
     cseq = 1,
     callee = uri("sip:callee@host"),
     localUri = uri("sip:user@realm"),
@@ -34,12 +33,13 @@ class CallFsmSuite extends FunSuite {
       proxyAuth: Option[String] = None,
       wwwAuth: Option[String] = None
   ) = SipHeaders(
-    callId = "call@test",
-    from = "<sip:user@realm>;tag=ltag",
-    to = to,
-    via = "SIP/2.0/UDP 192.168.1.1:5060;branch=z9hG4bK1",
+    callId = callId("call@test"),
+    from = nameAddr("<sip:user@realm>;tag=ltag"),
+    to = nameAddr(to),
+    vias =
+      NonEmptyList.one(via("SIP/2.0/UDP 192.168.1.1:5060;branch=z9hG4bK1")),
     cseq = cseq,
-    contact = contact,
+    contacts = List(nameAddr(contact)),
     proxyAuthenticate = proxyAuth,
     wwwAuthenticate = wwwAuth
   )
@@ -111,8 +111,9 @@ class CallFsmSuite extends FunSuite {
       case SendAckForNon2xx(_, _) => true; case _ => false
     })
     assert(actions.exists {
-      case RetryInviteWithAuth(_, "Proxy-Authorization", Some(_)) => true;
-      case _                                                      => false
+      case RetryInviteWithAuth(_, FieldName.ProxyAuthorization, Some(_)) =>
+        true;
+      case _ => false
     })
   }
 
@@ -124,8 +125,8 @@ class CallFsmSuite extends FunSuite {
     )
     assertEquals(state, Inviting(baseCtx.copy(cseq = 2)))
     assert(actions.exists {
-      case RetryInviteWithAuth(_, "Authorization", Some(_)) => true;
-      case _                                                => false
+      case RetryInviteWithAuth(_, FieldName.Authorization, Some(_)) => true;
+      case _                                                        => false
     })
   }
 
@@ -261,17 +262,9 @@ class CallFsmSuite extends FunSuite {
     )
     val dialog = actions.collectFirst { case SendBye(d) => d }.get
     assertEquals(dialog.localUri, uri("sip:user@realm"))
-    assertEquals(dialog.localTag, "ltag")
+    assertEquals(dialog.localTag, tag("ltag"))
     assertEquals(dialog.remoteUri, uri("sip:callee@host"))
-    assertEquals(dialog.remoteTag, "rtag")
-    assertEquals(dialog.callId, "call@test")
-  }
-
-  test("late 200 OK with an unparsable To header sends nothing") {
-    val (_, actions) = step(
-      Closed(LocalHangup),
-      ResponseReceived(resp(200, "OK", to = "<tel:+15551234567>;tag=rtag"))
-    )
-    assertEquals(actions, Nil)
+    assertEquals(dialog.remoteTag, Some(tag("rtag")))
+    assertEquals(dialog.callId, callId("call@test"))
   }
 }

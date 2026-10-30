@@ -95,17 +95,6 @@ class SipUriSuite extends FunSuite {
     ).foreach(s => assertEquals(parsed(s).render, s))
   }
 
-  test("fromHeaderValue reads angle-bracketed and bare header values") {
-    List(
-      "<sip:alice@example.com>;tag=1" -> "sip:alice@example.com",
-      "\"Alice\" <sip:alice@example.com;transport=tcp>" -> "sip:alice@example.com;transport=tcp",
-      "sip:alice@example.com;tag=1" -> "sip:alice@example.com"
-    ).foreach((header, expected) =>
-      assertEquals(ok(SipUri.fromHeaderValue(header)).render, expected)
-    )
-    assert(SipUri.fromHeaderValue("<tel:+1555>").isLeft)
-  }
-
   test("the password never appears in Show output") {
     val password =
       parsed("sip:alice:s3cr3t@example.com").userInfo.flatMap(_.password)

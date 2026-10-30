@@ -1,5 +1,6 @@
 package softphone4s.codec
 
+import cats.data.NonEmptyList
 import cats.syntax.all.*
 import softphone4s.model.*
 
@@ -32,24 +33,31 @@ object SipCodec {
 
   private def encodeHeaders(headers: SipHeaders, body: String): String = {
     val out = new StringBuilder
-    out.append(s"Via: SIP/2.0/UDP ${headers.via}$CRLF")
-    out.append(s"From: ${headers.from}$CRLF")
-    out.append(s"To: ${headers.to}$CRLF")
-    out.append(s"Call-ID: ${headers.callId}$CRLF")
+    headers.vias.toList.foreach(via => out.append(s"Via: ${via.render}$CRLF"))
+    out.append(s"From: ${headers.from.render}$CRLF")
+    out.append(s"To: ${headers.to.render}$CRLF")
+    out.append(s"Call-ID: ${headers.callId.value}$CRLF")
     out.append(
       s"CSeq: ${headers.cseq.seq} ${headers.cseq.method.toString.toUpperCase}$CRLF"
     )
-    out.append(s"Contact: ${headers.contact}$CRLF")
+    headers.contacts.foreach(c => out.append(s"Contact: ${c.render}$CRLF"))
     out.append(s"Max-Forwards: ${headers.maxForwards}$CRLF")
-    headers.route.foreach(route => out.append(s"Route: $route$CRLF"))
+    headers.routes.foreach(r => out.append(s"Route: ${r.render}$CRLF"))
+    headers.recordRoutes.foreach(r =>
+      out.append(s"Record-Route: ${r.render}$CRLF")
+    )
+    headers.wwwAuthenticate.foreach(v =>
+      out.append(s"WWW-Authenticate: $v$CRLF")
+    )
+    headers.proxyAuthenticate.foreach(v =>
+      out.append(s"Proxy-Authenticate: $v$CRLF")
+    )
     headers.contentType.foreach(contentType =>
       out.append(s"Content-Type: $contentType$CRLF")
     )
     val bodyLength = body.getBytes("UTF-8").length
     out.append(s"Content-Length: $bodyLength$CRLF")
-    headers.extraHeaders.foreach { case (name, values) =>
-      values.foreach(value => out.append(s"$name: $value$CRLF"))
-    }
+    headers.others.foreach(h => out.append(s"${h.name.value}: ${h.value}$CRLF"))
     out.toString
   }
 
@@ -73,7 +81,7 @@ object SipCodec {
   ): Either[String, SipMessage] =
     parseRequestLine(requestLine).flatMap { (method, uri) =>
       val (headerLines, bodyLines) = splitHeadersBody(rest)
-      parseHeaders(headerLines, CSeq(1, method))
+      parseHeaders(headerLines)
         .map(headers =>
           SipRequest(method, uri, headers, bodyLines.mkString(CRLF))
         )
@@ -94,7 +102,7 @@ object SipCodec {
   ): Either[String, SipMessage] =
     parseStatusLine(statusLine).flatMap { (code, reason) =>
       val (headerLines, bodyLines) = splitHeadersBody(rest)
-      parseHeaders(headerLines, CSeq(0, SipMethod.Invite))
+      parseHeaders(headerLines)
         .map(headers =>
           SipResponse(code, reason, headers, bodyLines.mkString(CRLF))
         )
@@ -117,10 +125,39 @@ object SipCodec {
     else (lines.take(emptyLineIndex), lines.drop(emptyLineIndex + 1))
   }
 
-  private def parseHeaders(
-      lines: List[String],
-      defaultCseq: CSeq
-  ): Either[String, SipHeaders] = {
+  // RFC 3261 §7.3.3 compact forms, plus the long names we model.
+  private val CompactForms = Map(
+    "v" -> "via",
+    "f" -> "from",
+    "t" -> "to",
+    "i" -> "call-id",
+    "m" -> "contact",
+    "c" -> "content-type",
+    "l" -> "content-length"
+  )
+
+  private val Modelled = Set(
+    "call-id",
+    "from",
+    "to",
+    "via",
+    "cseq",
+    "contact",
+    "max-forwards",
+    "content-type",
+    "content-length",
+    "route",
+    "record-route",
+    "www-authenticate",
+    "proxy-authenticate"
+  )
+
+  private def canonical(name: String): String = {
+    val lower = name.toLowerCase
+    CompactForms.getOrElse(lower, lower)
+  }
+
+  private def parseHeaders(lines: List[String]): Either[String, SipHeaders] = {
     // Unfold multi-line headers (continuation lines start with whitespace).
     // foldLeft so continuations are appended to the preceding line, not the following one.
     val unfolded = lines
@@ -131,61 +168,81 @@ object SipCodec {
       }
       .reverse
 
-    val pairs = unfolded.flatMap(parseHeaderLine)
+    val fields = unfolded.flatMap(parseHeaderLine)
+    val byName = fields.groupMap((name, _) => canonical(name))(_._2)
 
-    val headersByName = pairs.groupBy(_._1).view.mapValues(_.map(_._2)).toMap
+    def values(name: String): List[String] = byName.getOrElse(name, Nil)
+    // Via, Contact, Route and Record-Route may carry several comma-separated
+    // values in one line.
+    def listValues(name: String): List[String] =
+      values(name)
+        .flatMap(HeaderSyntax.split(_, ','))
+        .map(_.trim)
+        .filter(_.nonEmpty)
+    def required(name: String, label: String): Either[String, String] =
+      values(name).headOption.map(_.trim).toRight(s"missing $label header")
 
-    def firstValue(name: String) = headersByName.getOrElse(name, Nil).headOption
-    def allValues(name: String)  = headersByName.getOrElse(name, Nil)
+    val callId =
+      required("call-id", "Call-ID").flatMap(CallId(_)).toValidatedNel
+    val from = required("from", "From").flatMap(NameAddr.parse).toValidatedNel
+    val to   = required("to", "To").flatMap(NameAddr.parse).toValidatedNel
+    val vias = NonEmptyList
+      .fromList(listValues("via"))
+      .toRight("missing Via header")
+      .flatMap(_.traverse(Via.parse))
+      .toValidatedNel
+    val cseq = required("cseq", "CSeq")
+      .flatMap(v => parseCseq(v).toRight(s"bad CSeq: '$v'"))
+      .toValidatedNel
+    val contacts = listValues("contact").traverse(NameAddr.parse).toValidatedNel
+    val routes   = listValues("route").traverse(NameAddr.parse).toValidatedNel
+    val recordRoutes =
+      listValues("record-route").traverse(NameAddr.parse).toValidatedNel
+    val others = fields
+      .filterNot((name, _) => Modelled.contains(canonical(name)))
+      .traverse((name, value) => FieldName(name).map(ExtensionHeader(_, value)))
+      .toValidatedNel
 
-    val cseq = firstValue("cseq").flatMap(parseCseq).getOrElse(defaultCseq)
-
-    Right(
-      SipHeaders(
-        callId = firstValue("call-id").getOrElse(""),
-        from = firstValue("from").orElse(firstValue("f")).getOrElse(""),
-        to = firstValue("to").orElse(firstValue("t")).getOrElse(""),
-        via = firstValue("via").orElse(firstValue("v")).getOrElse(""),
-        cseq = cseq,
-        contact = firstValue("contact").orElse(firstValue("m")).getOrElse(""),
-        maxForwards = firstValue("max-forwards")
-          .flatMap(_.toIntOption)
-          .getOrElse(DefaultMaxForwards),
-        contentType = firstValue("content-type"),
-        contentLength =
-          firstValue("content-length").flatMap(_.toIntOption).getOrElse(0),
-        route = allValues("route"),
-        recordRoute = allValues("record-route"),
-        wwwAuthenticate = firstValue("www-authenticate"),
-        proxyAuthenticate = firstValue("proxy-authenticate"),
-        extraHeaders = headersByName -- Set(
-          "call-id",
-          "from",
-          "f",
-          "to",
-          "t",
-          "via",
-          "v",
-          "cseq",
-          "contact",
-          "m",
-          "max-forwards",
-          "content-type",
-          "content-length",
-          "route",
-          "record-route",
-          "www-authenticate",
-          "proxy-authenticate"
-        )
-      )
-    )
+    (callId, from, to, vias, cseq, contacts, routes, recordRoutes, others)
+      .mapN {
+        (
+            callId,
+            from,
+            to,
+            vias,
+            cseq,
+            contacts,
+            routes,
+            recordRoutes,
+            others
+        ) =>
+          SipHeaders(
+            callId = callId,
+            from = from,
+            to = to,
+            vias = vias,
+            cseq = cseq,
+            contacts = contacts,
+            maxForwards = values("max-forwards").headOption
+              .flatMap(_.trim.toIntOption)
+              .getOrElse(DefaultMaxForwards),
+            contentType = values("content-type").headOption,
+            routes = routes,
+            recordRoutes = recordRoutes,
+            wwwAuthenticate = values("www-authenticate").headOption,
+            proxyAuthenticate = values("proxy-authenticate").headOption,
+            others = others
+          )
+      }
+      .toEither
+      .left
+      .map(_.mkString_("; "))
   }
 
   private def parseHeaderLine(line: String): Option[(String, String)] =
     line.indexOf(':') match {
       case -1  => None
-      case idx =>
-        Some(line.take(idx).trim.toLowerCase -> line.drop(idx + 1).trim)
+      case idx => Some(line.take(idx).trim -> line.drop(idx + 1).trim)
     }
 
   private def parseCseq(value: String): Option[CSeq] =

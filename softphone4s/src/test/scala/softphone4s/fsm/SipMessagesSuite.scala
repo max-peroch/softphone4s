@@ -2,6 +2,7 @@ package softphone4s.fsm
 
 import com.comcast.ip4s.*
 import munit.FunSuite
+import softphone4s.SipLiterals.*
 import softphone4s.config.SoftphoneConfig
 import softphone4s.fsm.SipMessages.*
 import softphone4s.model.*
@@ -58,15 +59,25 @@ class SipMessagesSuite extends FunSuite {
     assertEquals(endpoint.accountUri.render, "sip:alice@sip.example.com")
     val invite = endpoint.buildInvite(
       ok(callee("1234").toSipUri("sip.example.com")),
-      "cid",
-      "ltag",
+      callId("cid"),
+      tag("ltag"),
       1,
-      "z9hG4bKx"
+      branch("z9hG4bKx")
     )
     assertEquals(invite.requestUri.render, "sip:1234@sip.example.com")
-    assertEquals(invite.headers.contact, "<sip:alice@192.168.1.5:5060>")
-    assertEquals(invite.headers.from, "<sip:alice@sip.example.com>;tag=ltag")
-    assertEquals(invite.headers.to, "<sip:1234@sip.example.com>")
+    assertEquals(
+      invite.headers.contacts.map(_.render),
+      List("<sip:alice@192.168.1.5:5060>")
+    )
+    assertEquals(
+      invite.headers.from.render,
+      "<sip:alice@sip.example.com>;tag=ltag"
+    )
+    assertEquals(invite.headers.to.render, "<sip:1234@sip.example.com>")
+    assertEquals(
+      invite.headers.topVia.render,
+      "SIP/2.0/UDP 192.168.1.5:5060;branch=z9hG4bKx"
+    )
   }
 
   test("LocalEndpoint.from fails on an unusable user or realm") {

@@ -15,6 +15,12 @@ object ParamName {
   private[model] val Transport: ParamName = "transport"
   private[model] val Lr: ParamName        = "lr"
 
+  /** Header parameters that Via and NameAddr model as typed fields. */
+  private[model] val Branch: ParamName   = "branch"
+  private[model] val RPort: ParamName    = "rport"
+  private[model] val Received: ParamName = "received"
+  private[model] val TagParam: ParamName = "tag"
+
   extension (n: ParamName) def value: String = n
 
   given Eq[ParamName]   = Eq.fromUniversalEquals

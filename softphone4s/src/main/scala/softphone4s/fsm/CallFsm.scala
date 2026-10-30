@@ -48,14 +48,14 @@ object SipAction {
   // Requests the interpreter must build (need random Via branches)
   case class SendInvite(
       callee: SipUri,
-      callId: String,
-      localTag: String,
+      callId: CallId,
+      localTag: Tag,
       cseq: Int,
-      authHeader: Option[(String, String)] = None
+      authHeader: Option[ExtensionHeader] = None
   ) extends SipAction
   case class RetryInviteWithAuth(
       ctx: InviteCtx,
-      headerName: String,
+      headerName: FieldName,
       challengeValue: Option[String]
   ) extends SipAction
   case class SendAck(
@@ -126,7 +126,7 @@ object CallFsm {
               SendAckForNon2xx(ctx, response),
               RetryInviteWithAuth(
                 newCtx,
-                "Authorization",
+                FieldName.Authorization,
                 response.headers.wwwAuthenticate
               )
             )
@@ -141,7 +141,7 @@ object CallFsm {
               SendAckForNon2xx(ctx, response),
               RetryInviteWithAuth(
                 newCtx,
-                "Proxy-Authorization",
+                FieldName.ProxyAuthorization,
                 response.headers.proxyAuthenticate
               )
             )

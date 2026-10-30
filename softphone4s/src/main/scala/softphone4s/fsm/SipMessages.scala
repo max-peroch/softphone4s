@@ -1,5 +1,6 @@
 package softphone4s.fsm
 
+import cats.data.NonEmptyList
 import softphone4s.codec.{DigestAuth, SdpCodec}
 import softphone4s.model.*
 
@@ -9,154 +10,144 @@ import softphone4s.model.*
   */
 object SipMessages {
 
-  private def contactHeader(e: LocalEndpoint): String = s"<${e.contact.render}>"
-  private def viaHost(e: LocalEndpoint): String       = s"${e.ip}:${e.sipPort}"
+  private def vias(e: LocalEndpoint, branch: Branch): NonEmptyList[Via] =
+    NonEmptyList.one(Via.request(Transport.Udp, e.ip, e.sipPort, branch))
 
-  private def authHeaderMap(
-      authHeader: Option[(String, String)]
-  ): Map[String, List[String]] =
-    authHeader.fold(Map.empty) { case (name, value) =>
-      Map(name -> List(value))
-    }
+  private def contacts(e: LocalEndpoint): List[NameAddr] =
+    List(NameAddr(e.contact))
 
   extension (e: LocalEndpoint) {
 
-    // -------------------------------------------------------------------------
+    // -----------------------------------------------------------------------
     // INVITE
-    // -------------------------------------------------------------------------
+    // -----------------------------------------------------------------------
 
     def buildInvite(
         callee: SipUri,
-        callId: String,
-        localTag: String,
+        callId: CallId,
+        localTag: Tag,
         cseq: Int,
-        branch: String,
-        authHeader: Option[(String, String)] = None,
-        extraHeaders: Map[String, List[String]] = Map.empty
-    ): SipRequest = {
-      val sessionDescription = SdpCodec.buildOffer(e.ip, e.rtpPort)
+        branch: Branch,
+        authHeader: Option[ExtensionHeader] = None,
+        extraHeaders: List[ExtensionHeader] = Nil
+    ): SipRequest =
       SipRequest(
         method = SipMethod.Invite,
         requestUri = callee,
         headers = SipHeaders(
           callId = callId,
-          from = s"<${e.accountUri.render}>;tag=$localTag",
-          to = s"<${callee.render}>",
-          via = s"${viaHost(e)};branch=$branch",
+          from = NameAddr.withTag(e.accountUri, localTag),
+          to = NameAddr(callee),
+          vias = vias(e, branch),
           cseq = CSeq(cseq, SipMethod.Invite),
-          contact = contactHeader(e),
+          contacts = contacts(e),
           contentType = Some("application/sdp"),
-          extraHeaders = authHeaderMap(authHeader) ++ extraHeaders
+          others = authHeader.toList ++ extraHeaders
         ),
-        body = sessionDescription
+        body = SdpCodec.buildOffer(e.ip, e.rtpPort)
       )
-    }
 
     def computeAuthHeader(
         callee: SipUri,
-        headerName: String,
+        headerName: FieldName,
         challengeValue: Option[String],
         cnonce: String,
         nonceCount: Int = 1
-    ): Option[(String, String)] =
+    ): Option[ExtensionHeader] =
       challengeValue.map { challengeHeaderValue =>
-        val authValue = DigestAuth.compute(
-          "INVITE",
-          callee.render,
-          e.credentials.username,
-          e.credentials.password,
-          challengeHeaderValue,
-          cnonce,
-          nonceCount
+        ExtensionHeader(
+          headerName,
+          DigestAuth.compute(
+            "INVITE",
+            callee.render,
+            e.credentials.username,
+            e.credentials.password,
+            challengeHeaderValue,
+            cnonce,
+            nonceCount
+          )
         )
-        headerName -> authValue
       }
 
-    // -------------------------------------------------------------------------
+    // -----------------------------------------------------------------------
     // ACK
-    // -------------------------------------------------------------------------
+    // -----------------------------------------------------------------------
 
     def buildAck(
         dialog: SipDialog,
-        branch: String,
+        branch: Branch,
         sdpAnswer: Option[String]
-    ): SipRequest = {
-      val (body, contentType) = sdpAnswer match {
-        case Some(sessionDescription) =>
-          (sessionDescription, Some("application/sdp"))
-        case None => ("", None)
-      }
+    ): SipRequest =
       SipRequest(
         method = SipMethod.Ack,
         requestUri = dialog.remoteTarget,
         headers = SipHeaders(
           callId = dialog.callId,
-          from = s"<${dialog.localUri.render}>;tag=${dialog.localTag}",
-          to = s"<${dialog.remoteUri.render}>;tag=${dialog.remoteTag}",
-          via = s"${viaHost(e)};branch=$branch",
+          from = NameAddr.withTag(dialog.localUri, dialog.localTag),
+          to = remoteParty(dialog),
+          vias = vias(e, branch),
           cseq = CSeq(dialog.localCseq, SipMethod.Ack),
-          contact = contactHeader(e),
-          route = dialog.routeHeader,
-          contentType = contentType
+          contacts = contacts(e),
+          routes = dialog.routeHeader,
+          contentType = sdpAnswer.map(_ => "application/sdp")
         ),
-        body = body
+        body = sdpAnswer.getOrElse("")
       )
-    }
 
     // RFC 3261 §17.1.1.3: transaction-layer ACK for non-2xx INVITE responses.
     // Uses the same Via branch as the original INVITE (same transaction).
     def buildAckForNon2xx(
         ctx: InviteCtx,
         response: SipResponse,
-        branch: String
+        branch: Branch
     ): SipRequest =
       SipRequest(
         method = SipMethod.Ack,
         requestUri = ctx.callee,
         headers = SipHeaders(
           callId = ctx.callId,
-          from = s"<${e.accountUri.render}>;tag=${ctx.localTag}",
+          from = NameAddr.withTag(e.accountUri, ctx.localTag),
           to = response.headers.to,
-          via = s"${viaHost(e)};branch=$branch",
+          vias = vias(e, branch),
           cseq = CSeq(ctx.cseq, SipMethod.Ack),
-          contact = contactHeader(e)
+          contacts = contacts(e)
         )
       )
 
-    // -------------------------------------------------------------------------
+    // -----------------------------------------------------------------------
     // CANCEL
-    // -------------------------------------------------------------------------
+    // -----------------------------------------------------------------------
 
-    def buildCancel(ctx: InviteCtx, branch: String): SipRequest =
+    def buildCancel(ctx: InviteCtx, branch: Branch): SipRequest =
       SipRequest(
         method = SipMethod.Cancel,
         requestUri = ctx.callee,
         headers = SipHeaders(
           callId = ctx.callId,
-          from = s"<${e.accountUri.render}>;tag=${ctx.localTag}",
-          to = s"<${ctx.callee.render}>",
-          via = s"${viaHost(e)};branch=$branch",
+          from = NameAddr.withTag(e.accountUri, ctx.localTag),
+          to = NameAddr(ctx.callee),
+          vias = vias(e, branch),
           cseq = CSeq(ctx.cseq, SipMethod.Cancel),
-          contact = contactHeader(e)
+          contacts = contacts(e)
         )
       )
 
-    // -------------------------------------------------------------------------
+    // -----------------------------------------------------------------------
     // BYE
-    // -------------------------------------------------------------------------
+    // -----------------------------------------------------------------------
 
-    def buildBye(dialog: SipDialog, branch: String): SipRequest =
+    def buildBye(dialog: SipDialog, branch: Branch): SipRequest =
       SipRequest(
         method = SipMethod.Bye,
         requestUri = dialog.remoteTarget,
         headers = SipHeaders(
           callId = dialog.callId,
-          from = s"<${dialog.localUri.render}>;tag=${dialog.localTag}",
-          to = s"<${dialog.remoteUri.render}>;tag=${dialog.remoteTag}",
-          via = s"${viaHost(e)};branch=$branch",
+          from = NameAddr.withTag(dialog.localUri, dialog.localTag),
+          to = remoteParty(dialog),
+          vias = vias(e, branch),
           cseq = CSeq(dialog.localCseq + 1, SipMethod.Bye),
-          contact = contactHeader(e),
-          route = dialog.routeHeader
+          contacts = contacts(e),
+          routes = dialog.routeHeader
         )
       )
 
@@ -164,30 +155,33 @@ object SipMessages {
       SipResponse(
         statusCode = 200,
         reason = "OK",
-        headers = req.headers.copy(contact = contactHeader(e))
+        headers = req.headers.copy(contacts = contacts(e))
       )
 
-    // -------------------------------------------------------------------------
+    // -----------------------------------------------------------------------
     // INFO 200 OK
-    // -------------------------------------------------------------------------
+    // -----------------------------------------------------------------------
 
     def buildInfoOk(req: SipRequest): SipResponse =
       SipResponse(
         200,
         "OK",
-        req.headers
-          .copy(
-            contact = contactHeader(e),
-            contentType = None,
-            contentLength = 0
-          )
+        req.headers.copy(contacts = contacts(e), contentType = None)
       )
 
-    // -------------------------------------------------------------------------
+    // -----------------------------------------------------------------------
     // SDP answer (Mode B — offer was in 200, answer goes in ACK)
-    // -------------------------------------------------------------------------
+    // -----------------------------------------------------------------------
 
     def buildSdpAnswer: String =
       SdpCodec.buildAnswer(e.ip, e.rtpPort)
   }
+
+  private def remoteParty(dialog: SipDialog): NameAddr =
+    NameAddr(
+      None,
+      dialog.remoteUri,
+      dialog.remoteTag,
+      scala.collection.immutable.ListMap.empty
+    )
 }

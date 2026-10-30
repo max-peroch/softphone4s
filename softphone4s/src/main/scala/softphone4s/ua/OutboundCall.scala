@@ -25,7 +25,7 @@ private[softphone4s] class OutboundCall[F[_]: Async] private (
     sendSip: SipMessage => F[Unit],
     endpoint: LocalEndpoint,
     supervisor: Supervisor[F],
-    inviteBranch: Ref[F, String],
+    inviteBranch: Ref[F, Branch],
     nonceCounts: Ref[F, Map[String, Int]],
     random: Random[F],
     media: MediaSession[F],
@@ -35,7 +35,7 @@ private[softphone4s] class OutboundCall[F[_]: Async] private (
 
   private def newHex(byteCount: Int): F[String] =
     random.nextBytes(byteCount).map(_.map("%02x".format(_)).mkString)
-  private def newBranch(): F[String] = newHex(8).map("z9hG4bK" + _)
+  private def newBranch(): F[Branch] = random.nextBytes(8).map(Branch.fromBytes)
 
   private def hangupInterrupt: F[Either[Throwable, Unit]] =
     callEnded.get.map(Left(_))
@@ -88,12 +88,15 @@ private[softphone4s] class OutboundCall[F[_]: Async] private (
   private def logIncoming(event: SipEvent): F[Unit] = event match {
     case SipEvent.RequestReceived(req) =>
       logger.debug(
-        Map("callId" -> req.headers.callId, "method" -> req.method.toString)
+        Map(
+          "callId" -> req.headers.callId.value,
+          "method" -> req.method.toString
+        )
       )("Received SIP request")
     case SipEvent.ResponseReceived(res) =>
       logger.debug(
         Map(
-          "callId"     -> res.headers.callId,
+          "callId"     -> res.headers.callId.value,
           "cseq"       -> res.headers.cseq.method.toString,
           "statusCode" -> res.statusCode.toString,
           "reason"     -> res.reason
@@ -108,7 +111,7 @@ private[softphone4s] class OutboundCall[F[_]: Async] private (
         newBranch().flatMap { branch =>
           inviteBranch.set(branch) >>
             logger.debug(
-              Map("callee" -> callee.render, "callId" -> callId)
+              Map("callee" -> callee.render, "callId" -> callId.value)
             )("Sending INVITE") >>
             sendSip(
               endpoint.buildInvite(
@@ -144,7 +147,7 @@ private[softphone4s] class OutboundCall[F[_]: Async] private (
           _      <- inviteBranch.set(branch)
           _      <- logger.debug(
             Map(
-              "callId"     -> ctx.callId,
+              "callId"     -> ctx.callId.value,
               "cseq"       -> ctx.cseq.toString,
               "nonceCount" -> nonceCount.toString
             )
@@ -243,7 +246,7 @@ private[softphone4s] class OutboundCall[F[_]: Async] private (
 
 private[softphone4s] object OutboundCall {
   def create[F[_]: Async](
-      callId: String,
+      callId: CallId,
       callee: SipUri,
       sendSip: SipMessage => F[Unit],
       endpoint: LocalEndpoint,
@@ -252,14 +255,11 @@ private[softphone4s] object OutboundCall {
       media: MediaSession[F],
       inviteTimeout: FiniteDuration,
       logger: StructuredLogger[F],
-      extraHeaders: Map[String, List[String]] = Map.empty
+      extraHeaders: List[ExtensionHeader] = Nil
   ): F[OutboundCall[F]] =
     for {
-      localTag <- random.nextBytes(4).map(_.map("%02x".format(_)).mkString)
-      branch   <- random
-        .nextBytes(8)
-        .map(_.map("%02x".format(_)).mkString)
-        .map("z9hG4bK" + _)
+      localTag     <- random.nextBytes(4).map(Tag.fromBytes)
+      branch       <- random.nextBytes(8).map(Branch.fromBytes)
       inviteBranch <- Ref[F].of(branch)
       ctx = InviteCtx(
         callId = callId,
@@ -292,7 +292,7 @@ private[softphone4s] object OutboundCall {
         logger
       )
       _ <- logger.debug(
-        Map("callee" -> callee.render, "callId" -> callId)
+        Map("callee" -> callee.render, "callId" -> callId.value)
       )("Sending INVITE")
       _ <- sendSip(
         endpoint.buildInvite(

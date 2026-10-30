@@ -67,11 +67,7 @@ final case class SipUri private (
     val userText = userInfo.fold("") { ui =>
       ui.user.value + ui.password.fold("")(":" + _.value) + "@"
     }
-    val hostText = host.toString match {
-      case h if h.contains(':') => s"[$h]"
-      case h                    => h
-    }
-    val portText   = port.fold("")(p => s":${p.value}")
+    val hostText   = HostPort.render(host, port)
     val paramTexts =
       transport.map(t => s";transport=${t.token}").toList ++
         Option.when(isLooseRouting)(";lr") ++
@@ -85,7 +81,7 @@ final case class SipUri private (
         headers
           .map(h => s"${h.name.value}=${h.value.value}")
           .mkString("?", "&", "")
-    s"${scheme.value}:$userText$hostText$portText${paramTexts.mkString}$headerText"
+    s"${scheme.value}:$userText$hostText${paramTexts.mkString}$headerText"
   }
 
   override def toString: String = render
@@ -133,18 +129,6 @@ object SipUri {
   given Eq[SipUri]   = Eq.fromUniversalEquals
   given Show[SipUri] = Show.show(_.render)
 
-  /** The URI of a `From`, `To` or `Contact` header value: the text inside
-    * `<...>` (after an optional display name), or for a bare addr-spec the text
-    * before the first `;`, since parameters there belong to the header.
-    */
-  def fromHeaderValue(value: String): Either[String, SipUri] = {
-    val v = value.trim
-    parse(
-      if v.contains('<') then v.dropWhile(_ != '<').drop(1).takeWhile(_ != '>')
-      else v.takeWhile(_ != ';')
-    )
-  }
-
   def parse(input: String): Either[String, SipUri] = {
     val s = input.trim
     s.indexOf(':') match {
@@ -177,7 +161,7 @@ object SipUri {
     val (hostPort, paramText) = splitOnce(afterUser, ';')
     for {
       userInfo <- userText.traverse(parseUserInfo)
-      hp       <- parseHostPort(hostPort, input)
+      hp       <- HostPort.parse(hostPort).left.map(err => s"$err: $input")
       params   <- paramText.fold(Right(Nil))(parseParams)
       typed    <- extractTyped(params)
       hdrs     <- headerText.fold(Right(Nil))(parseHeaders)
@@ -197,33 +181,6 @@ object SipUri {
   private def parseUserInfo(text: String): Either[String, UserInfo] = {
     val (user, password) = splitOnce(text, ':')
     (User(user), password.traverse(Password(_))).mapN(UserInfo(_, _))
-  }
-
-  private def parseHostPort(
-      text: String,
-      input: String
-  ): Either[String, (Host, Option[Port])] = {
-    val (hostText, portText) =
-      if text.startsWith("[") then
-        text.indexOf(']') match {
-          case -1  => (text, None)
-          case end =>
-            (text.slice(1, end), Some(text.drop(end + 1)).filter(_.nonEmpty))
-        }
-      else
-        text.lastIndexOf(':') match {
-          case -1  => (text, None)
-          case idx => (text.take(idx), Some(text.drop(idx)))
-        }
-    for {
-      host <- Host.fromString(hostText).toRight(s"invalid host: $input")
-      port <- portText.traverse(p =>
-        p.stripPrefix(":")
-          .toIntOption
-          .flatMap(Port.fromInt)
-          .toRight(s"invalid port: $input")
-      )
-    } yield (host, port)
   }
 
   private def parseParams(

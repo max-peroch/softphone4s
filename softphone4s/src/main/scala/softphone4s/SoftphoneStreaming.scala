@@ -23,18 +23,24 @@ import javax.sound.sampled.AudioFormat
 class SoftphoneStreaming[F[_]: Async: Network] private (
     config: SoftphoneConfig,
     sendRaw: (SocketAddress[IpAddress], SipMessage) => F[Unit],
-    routes: Ref[F, Map[String, Channel[F, SipMessage]]],
+    routes: Ref[F, Map[CallId, Channel[F, SipMessage]]],
     nextCallIndex: Ref[F, Int],
     random: Random[F],
     pcmFrameBytes: Int,
     logger: StructuredLogger[F]
 ) extends Softphone[F] {
 
-  private def newCallId(localIp: IpAddress): F[String] =
-    random
-      .nextBytes(10)
-      .map(_.map("%02x".format(_)).mkString)
-      .map(_ + "@" + localIp.toString)
+  private def newCallId(localIp: IpAddress): F[CallId] =
+    random.nextBytes(10).map(CallId.fromBytes(_, localIp))
+
+  private def toExtensionHeaders(
+      headers: Map[String, List[String]]
+  ): Either[SoftphoneError, List[ExtensionHeader]] =
+    headers.toList.flatTraverse { (name, values) =>
+      FieldName(name)
+        .leftMap(SoftphoneError.InvalidHeader(name, _))
+        .map(n => values.map(ExtensionHeader(n, _)))
+    }
 
   private def resolveHost(host: Host): F[IpAddress] =
     host.resolve[F](using Dns.forAsync[F], Async[F]).adaptError { case _ =>
@@ -46,6 +52,9 @@ class SoftphoneStreaming[F[_]: Async: Network] private (
       extraHeaders: Map[String, List[String]] = Map.empty
   ): Resource[F, Call[F]] =
     for {
+      extra <- Resource.eval(
+        Async[F].fromEither(toExtensionHeaders(extraHeaders))
+      )
       target <- Resource.eval(
         Async[F].fromEither(callee.toSipUri(config.realm))
       )
@@ -70,7 +79,7 @@ class SoftphoneStreaming[F[_]: Async: Network] private (
         sipIn,
         sendSip,
         endpoint,
-        extraHeaders
+        extra
       )
     } yield call
 
@@ -121,12 +130,12 @@ class SoftphoneStreaming[F[_]: Async: Network] private (
     }
 
   private def buildCall(
-      callId: String,
+      callId: CallId,
       callee: SipUri,
       sipIn: Stream[F, SipMessage],
       sendSip: SipMessage => F[Unit],
       endpoint: LocalEndpoint,
-      extraHeaders: Map[String, List[String]]
+      extraHeaders: List[ExtensionHeader]
   ): Resource[F, OutboundCall[F]] =
     for {
       supervisor <- Supervisor[F](await = false)
@@ -176,7 +185,7 @@ object SoftphoneStreaming {
       )
       (sipIn, sendRaw) = sipTransport
       routes <- Resource.eval(
-        Ref[F].of(Map.empty[String, Channel[F, SipMessage]])
+        Ref[F].of(Map.empty[CallId, Channel[F, SipMessage]])
       )
       _ <- Resource.make(
         sipIn
@@ -185,7 +194,7 @@ object SoftphoneStreaming {
               _.get(msg.headers.callId) match {
                 case Some(ch) => ch.send(msg).void
                 case None     =>
-                  logger.warn(Map("callId" -> msg.headers.callId))(
+                  logger.warn(Map("callId" -> msg.headers.callId.value))(
                     "Dropping SIP message: no active call for this Call-ID"
                   )
               }

@@ -1,11 +1,13 @@
 package softphone4s.ua
 
+import cats.data.NonEmptyList
 import cats.effect.*
 import cats.effect.std.{Queue, Random, Supervisor}
 import com.comcast.ip4s.*
 import fs2.Stream
 import fs2.io.net.Network
 import munit.CatsEffectSuite
+import softphone4s.SipLiterals.*
 import org.typelevel.log4cats.noop.NoOpLogger
 import softphone4s.config.SoftphoneConfig
 import softphone4s.model.*
@@ -24,17 +26,15 @@ class OutboundCallSuite extends CatsEffectSuite {
     .from(testConfig, localIp, sipPort, rtpPort)
     .fold(err => throw err, identity)
 
-  private def uri(s: String): SipUri =
-    SipUri.parse(s).fold(err => throw new AssertionError(err), identity)
-
   private def mkHeaders(cseq: CSeq, to: String = "<sip:bob@test.local>") =
     SipHeaders(
-      callId = "test@call",
-      from = "<sip:test@test.local>;tag=ltag",
-      to = to,
-      via = "SIP/2.0/UDP 127.0.0.1:19060;branch=z9hG4bKtest",
+      callId = callId("test@call"),
+      from = nameAddr("<sip:test@test.local>;tag=ltag"),
+      to = nameAddr(to),
+      vias =
+        NonEmptyList.one(via("SIP/2.0/UDP 127.0.0.1:19060;branch=z9hG4bKtest")),
       cseq = cseq,
-      contact = "<sip:bob@test.local:5060>"
+      contacts = List(nameAddr("<sip:bob@test.local:5060>"))
     )
 
   private val ok200 = SipResponse(
@@ -59,7 +59,7 @@ class OutboundCallSuite extends CatsEffectSuite {
       media <- Resource.eval(MediaSession.create[IO](160, localIp, rtpPort))
       call  <- Resource.eval(
         OutboundCall.create(
-          "test@call",
+          callId("test@call"),
           uri("sip:bob@test.local"),
           _ => IO.unit,
           endpoint,
