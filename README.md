@@ -151,6 +151,13 @@ Any missing or malformed field throws at startup — fail fast.
 
 ### Making a call
 
+A callee is `1234`, `alice` or `alice@sip.example.com` (dialled at your realm
+when no host is given), or a whole SIP URI. A URI is how you ask for a
+transport: `sips:alice@example.com` for TLS, or
+`sip:alice@example.com;transport=tcp`; without one the account's `transport`
+and the domain's DNS records decide.
+
+
 ```scala
 import cats.effect.*
 import fs2.Stream
