@@ -152,7 +152,7 @@ object SipMessages {
     ): SipRequest =
       SipRequest(
         method = SipMethod.Ack,
-        requestUri = dialog.remoteTarget,
+        requestUri = dialog.route.requestUri,
         headers = SipHeaders(
           callId = dialog.callId,
           from = NameAddr.withTag(dialog.localUri, dialog.localTag),
@@ -160,7 +160,7 @@ object SipMessages {
           vias = vias(e, branch),
           cseq = CSeq(dialog.localCseq, SipMethod.Ack),
           contacts = contacts(e),
-          routes = dialog.routeHeader,
+          routes = dialog.route.routes,
           contentType = sdpAnswer.map(_ => MediaType.Sdp)
         ),
         body = sdpAnswer.getOrElse("")
@@ -191,7 +191,7 @@ object SipMessages {
     def buildBye(dialog: SipDialog, branch: Branch): SipRequest =
       SipRequest(
         method = SipMethod.Bye,
-        requestUri = dialog.remoteTarget,
+        requestUri = dialog.route.requestUri,
         headers = SipHeaders(
           callId = dialog.callId,
           from = NameAddr.withTag(dialog.localUri, dialog.localTag),
@@ -199,7 +199,7 @@ object SipMessages {
           vias = vias(e, branch),
           cseq = CSeq(dialog.localCseq.next, SipMethod.Bye),
           contacts = contacts(e),
-          routes = dialog.routeHeader
+          routes = dialog.route.routes
         )
       )
 

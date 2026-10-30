@@ -67,11 +67,21 @@ class CallFsmSuite extends FunSuite {
     body
   )
 
-  private def req(method: SipMethod, body: String = "") =
+  /** A request from the remote party within the dialog `active` stands for:
+    * their tag in From, ours in To.
+    */
+  private def req(
+      method: SipMethod,
+      body: String = "",
+      number: Int = 2,
+      to: String = "<sip:user@realm>;tag=ltag",
+      from: String = "<sip:callee@host>;tag=rtag"
+  ) =
     SipRequest(
       method,
       uri("sip:user@realm"),
-      mkHeaders(cseq = cseq(1, method)),
+      mkHeaders(cseq = cseq(number, method))
+        .copy(from = nameAddr(from), to = nameAddr(to)),
       body
     )
 
@@ -591,5 +601,79 @@ class CallFsmSuite extends FunSuite {
     assertEquals(dialog.remoteUri, uri("sip:callee@host"))
     assertEquals(dialog.remoteTag, Some(tag("rtag")))
     assertEquals(dialog.callId, callId("call@test"))
+  }
+
+  // ---- Requests within the dialog --------------------------------------------
+
+  private def replyOf(actions: List[SipAction]): List[Int] =
+    actions.collect { case SendReply(_, status) => status.value }
+
+  test("a request with the wrong tags is answered 481 and changes nothing") {
+    List(
+      req(SipMethod.Bye, to = "<sip:user@realm>;tag=other"),
+      req(SipMethod.Bye, from = "<sip:callee@host>;tag=other"),
+      req(SipMethod.Bye, to = "<sip:user@realm>")
+    ).foreach { bad =>
+      val (state, actions) = step(active, RequestReceived(bad))
+      assertEquals(state, active)
+      assertEquals(replyOf(actions), List(481))
+    }
+  }
+
+  test(
+    "a BYE that is not newer than the dialog's last request is answered 500"
+  ) {
+    val advanced =
+      step(active, RequestReceived(req(SipMethod.Info, "5", number = 7)))._1
+    List(7, 3, 1).foreach { n =>
+      val (state, actions) =
+        step(advanced, RequestReceived(req(SipMethod.Bye, number = n)))
+      assertEquals(state, advanced)
+      assertEquals(replyOf(actions), List(500))
+    }
+  }
+
+  test(
+    "an INFO advances the remote CSeq, so the same number again is refused"
+  ) {
+    val info             = req(SipMethod.Info, "5", number = 4)
+    val (state, actions) = step(active, RequestReceived(info))
+    assert(actions.contains(SendInfoOk(info)))
+    assertEquals(replyOf(step(state, RequestReceived(info))._2), List(500))
+    assertEquals(
+      replyOf(
+        step(state, RequestReceived(req(SipMethod.Info, "5", number = 5)))._2
+      ),
+      Nil
+    )
+  }
+
+  test("any CSeq is acceptable for the first request, whatever its number") {
+    assertEquals(
+      replyOf(
+        step(active, RequestReceived(req(SipMethod.Info, "5", number = 1)))._2
+      ),
+      Nil
+    )
+    assertEquals(
+      replyOf(
+        step(active, RequestReceived(req(SipMethod.Info, "5", number = 900)))._2
+      ),
+      Nil
+    )
+  }
+
+  test(
+    "a re-INVITE or UPDATE is answered 501 for now, and still advances the CSeq"
+  ) {
+    val reinvite         = req(SipMethod.Invite, number = 3)
+    val (state, actions) = step(active, RequestReceived(reinvite))
+    assertEquals(replyOf(actions), List(501))
+    assertEquals(
+      replyOf(
+        step(state, RequestReceived(req(SipMethod.Invite, number = 3)))._2
+      ),
+      List(500)
+    )
   }
 }

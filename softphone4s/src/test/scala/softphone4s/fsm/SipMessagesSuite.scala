@@ -194,4 +194,53 @@ class SipMessagesSuite extends FunSuite {
     assertEquals(busy.headers.to.tag.map(_.value), Some("lt"))
     assertEquals(busy.body, "")
   }
+
+  private def routedDialog(routes: String*): SipDialog =
+    SipDialog(
+      callId = callId("rt@host"),
+      localTag = tag("lt"),
+      remoteTag = Some(tag("rt")),
+      localUri = uri("sip:alice@sip.example.com"),
+      remoteUri = uri("sip:bob@example.com"),
+      remoteTarget = uri("sip:bob@192.0.2.5:5070"),
+      localCseq = cseqNumber(1),
+      routeSet = routes.toList.map(nameAddr),
+      role = DialogRole.Uas
+    )
+
+  test(
+    "a BYE and an ACK follow a loose route set: target as request-URI, routes as Route headers"
+  ) {
+    val d = routedDialog("<sip:p1.example.com;lr>")
+    List(
+      endpoint.buildBye(d, branch("z9hG4bKb")),
+      endpoint.buildAck(d, branch("z9hG4bKa"), None)
+    ).foreach { request =>
+      assertEquals(request.requestUri, uri("sip:bob@192.0.2.5:5070"))
+      assertEquals(
+        request.headers.routes.map(_.render),
+        List("<sip:p1.example.com;lr>")
+      )
+    }
+  }
+
+  test(
+    "a BYE follows a strict route: the router's URI is the request-URI and the target is last"
+  ) {
+    val bye = endpoint.buildBye(
+      routedDialog("<sip:strict.example.com>"),
+      branch("z9hG4bKb")
+    )
+    assertEquals(bye.requestUri, uri("sip:strict.example.com"))
+    assertEquals(
+      bye.headers.routes.map(_.render),
+      List("<sip:bob@192.0.2.5:5070>")
+    )
+  }
+
+  test("without a route set a BYE carries no Route") {
+    val bye = endpoint.buildBye(routedDialog(), branch("z9hG4bKb"))
+    assertEquals(bye.requestUri, uri("sip:bob@192.0.2.5:5070"))
+    assertEquals(bye.headers.routes, Nil)
+  }
 }

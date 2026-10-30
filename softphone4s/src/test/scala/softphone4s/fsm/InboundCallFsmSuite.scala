@@ -398,4 +398,29 @@ class InboundCallFsmSuite extends FunSuite {
       TimerFired(CallTimer.RetransmitOk)
     ).foreach(e => assertEquals(step(Closed, e), (Closed, Nil)))
   }
+
+  test("a request with the wrong tags is answered 481 and changes nothing") {
+    def withTags(to: String, from: String) = {
+      val r = request(SipMethod.Bye, 11)
+      r.copy(headers = r.headers.copy(to = nameAddr(to), from = nameAddr(from)))
+    }
+    List(
+      withTags(
+        "<sip:test@example.com>;tag=other",
+        "<sip:alice@example.com>;tag=ft"
+      ),
+      withTags(
+        "<sip:test@example.com>;tag=lt",
+        "<sip:alice@example.com>;tag=other"
+      ),
+      withTags("<sip:test@example.com>", "<sip:alice@example.com>;tag=ft")
+    ).foreach { bad =>
+      val (state, actions) = step(active, RequestReceived(bad))
+      assertEquals(state, active)
+      assertEquals(
+        actions,
+        List(Reply(bad, 481, "Call/Transaction Does Not Exist"))
+      )
+    }
+  }
 }

@@ -335,6 +335,16 @@ object InboundCallFsm {
     val cseq = request.headers.cseq.seq
     if request.method == SipMethod.Cancel then
       State.pure(List(Reply(request, 200, "OK")))
+    else if !dialog.matches(request) then
+      State.pure(
+        List(
+          Reply(
+            request,
+            FailureStatus.CallDoesNotExist.value,
+            FailureStatus.CallDoesNotExist.reason
+          )
+        )
+      )
     else if !dialog.accepts(cseq) then
       State.pure(
         List(

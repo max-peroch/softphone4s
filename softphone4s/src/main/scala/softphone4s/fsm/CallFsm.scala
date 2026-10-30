@@ -77,6 +77,10 @@ object SipAction {
   // Responses the interpreter builds deterministically
   case class SendByeOk(request: SipRequest)  extends SipAction
   case class SendInfoOk(request: SipRequest) extends SipAction
+
+  /** A final failure response to a request within the dialog. */
+  case class SendReply(request: SipRequest, status: FailureStatus)
+      extends SipAction
   // Media
   case class StartMedia(sdpBody: String) extends SipAction
   case object StopMedia                  extends SipAction
@@ -192,6 +196,18 @@ object CallFsm {
         case (Active(dialog), HangupRequested) =>
           go(ByeSent(dialog), List(StopMedia, SendBye(dialog)))
 
+        // A request that is not part of this dialog (RFC 3261 §12.2.2), or not
+        // newer than the last one, is refused.
+        case (Active(dialog), RequestReceived(request))
+            if !dialog.matches(request) =>
+          State.pure(List(SendReply(request, FailureStatus.CallDoesNotExist)))
+
+        case (Active(dialog), RequestReceived(request))
+            if !dialog.accepts(request.headers.cseq.seq) =>
+          State.pure(
+            List(SendReply(request, FailureStatus.ServerInternalError))
+          )
+
         case (Active(dialog), RequestReceived(request))
             if request.method == SipMethod.Bye =>
           go(
@@ -219,10 +235,20 @@ object CallFsm {
             if isInviteOk(response) =>
           State.pure(List(SendAck(dialog, None)))
 
-        case (Active(_), RequestReceived(request))
+        case (Active(dialog), RequestReceived(request))
             if request.method == SipMethod.Info =>
           val notify = parseDtmf(request.body).map(NotifyDtmf(_)).toList
-          State.pure(SendInfoOk(request) :: notify)
+          go(
+            Active(dialog.seen(request.headers.cseq.seq)),
+            SendInfoOk(request) :: notify
+          )
+
+        // A re-INVITE, UPDATE or anything else we do not handle yet.
+        case (Active(dialog), RequestReceived(request)) =>
+          go(
+            Active(dialog.seen(request.headers.cseq.seq)),
+            List(SendReply(request, FailureStatus.NotImplemented))
+          )
 
         // 200 OK after CANCEL (RFC 3261 §9 race) — must ACK then BYE immediately
         case (Closed(LocalHangup), ResponseReceived(response))

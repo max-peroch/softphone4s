@@ -51,6 +51,28 @@ final case class SipDialog(
     case DialogRole.Uas => routeSet
   }
 
+  /** Where a request within the dialog goes, and how it is addressed (RFC 3261
+    * §12.2.1.1). With no route set it goes to the remote target. With a loose
+    * router first (`lr`) the Request-URI stays the remote target, the whole
+    * route set becomes Route headers, and the first route is the next hop. With
+    * a strict router first, its URI becomes the Request-URI and the remote
+    * target is appended to the routes.
+    */
+  def route: RequestRoute = routeHeader match {
+    case Nil => RequestRoute(remoteTarget, Nil, remoteTarget)
+    case routes @ (first :: _) if first.uri.isLooseRouting =>
+      RequestRoute(remoteTarget, routes, first.uri)
+    case first :: rest =>
+      RequestRoute(first.uri, rest :+ NameAddr(remoteTarget), first.uri)
+  }
+
+  /** Whether a request from the remote party belongs to this dialog: our tag in
+    * its To and theirs in its From (RFC 3261 §12.2.2: otherwise `481`).
+    */
+  def matches(request: SipRequest): Boolean =
+    request.headers.to.tag.contains(localTag) &&
+      remoteTag.forall(t => request.headers.from.tag.contains(t))
+
   /** Whether a request with this CSeq is newer than every one seen so far (RFC
     * 3261 §12.2.2); a first request always is.
     */

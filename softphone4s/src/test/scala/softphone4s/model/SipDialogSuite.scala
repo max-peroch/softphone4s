@@ -73,4 +73,103 @@ class SipDialogSuite extends FunSuite {
     assert(!d.seen(cseqNumber(8)).accepts(cseqNumber(8)))
     assert(d.copy(remoteCseq = None).accepts(cseqNumber(1)))
   }
+
+  // ---- Routing a request within the dialog (RFC 3261 §12.2.1.1) -------------
+
+  private def withRoute(routes: String*): SipDialog =
+    dialog.copy(
+      routeSet = routes.toList.map(nameAddr),
+      remoteTarget = uri("sip:bob@192.0.2.5:5070"),
+      role = DialogRole.Uas
+    )
+
+  test("with no route set a request goes to the remote target") {
+    val r = withRoute().route
+    assertEquals(r.requestUri, uri("sip:bob@192.0.2.5:5070"))
+    assertEquals(r.routes, Nil)
+    assertEquals(r.nextHop, uri("sip:bob@192.0.2.5:5070"))
+  }
+
+  test(
+    "with a loose router first the request-URI stays the target and the first route is the hop"
+  ) {
+    val r =
+      withRoute("<sip:p1.example.com;lr>", "<sip:p2.example.com;lr>").route
+    assertEquals(r.requestUri, uri("sip:bob@192.0.2.5:5070"))
+    assertEquals(
+      r.routes.map(_.render),
+      List("<sip:p1.example.com;lr>", "<sip:p2.example.com;lr>")
+    )
+    assertEquals(r.nextHop, uri("sip:p1.example.com;lr"))
+  }
+
+  test(
+    "with a strict router first its URI becomes the request-URI and the target joins the routes"
+  ) {
+    val r =
+      withRoute("<sip:strict.example.com>", "<sip:p2.example.com;lr>").route
+    assertEquals(r.requestUri, uri("sip:strict.example.com"))
+    assertEquals(
+      r.routes.map(_.render),
+      List("<sip:p2.example.com;lr>", "<sip:bob@192.0.2.5:5070>")
+    )
+    assertEquals(r.nextHop, uri("sip:strict.example.com"))
+  }
+
+  test("the caller reverses the Record-Route set before routing") {
+    val d = withRoute("<sip:p1.example.com;lr>", "<sip:p2.example.com;lr>")
+      .copy(role = DialogRole.Uac)
+    assertEquals(d.route.nextHop, uri("sip:p2.example.com;lr"))
+    assertEquals(
+      d.route.routes.map(_.render),
+      List("<sip:p2.example.com;lr>", "<sip:p1.example.com;lr>")
+    )
+  }
+
+  // ---- Which dialog a request belongs to ------------------------------------
+
+  private def request(to: String, from: String) =
+    invite().copy(headers =
+      invite().headers.copy(to = nameAddr(to), from = nameAddr(from))
+    )
+
+  test(
+    "a request belongs to the dialog if it carries our tag in To and theirs in From"
+  ) {
+    val d = dialog
+    assert(
+      d.matches(
+        request(
+          "<sip:alice@example.com>;tag=lt",
+          "<sip:bob@example.com>;tag=ft"
+        )
+      )
+    )
+    assert(
+      !d.matches(
+        request(
+          "<sip:alice@example.com>;tag=other",
+          "<sip:bob@example.com>;tag=ft"
+        )
+      )
+    )
+    assert(
+      !d.matches(
+        request(
+          "<sip:alice@example.com>;tag=lt",
+          "<sip:bob@example.com>;tag=other"
+        )
+      )
+    )
+    assert(
+      !d.matches(
+        request("<sip:alice@example.com>", "<sip:bob@example.com>;tag=ft")
+      )
+    )
+    assert(
+      !d.matches(
+        request("<sip:alice@example.com>;tag=lt", "<sip:bob@example.com>")
+      )
+    )
+  }
 }

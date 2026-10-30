@@ -17,7 +17,8 @@ import softphone4s.transaction.{
   ClientNotice,
   ClientTransaction,
   ServerTransaction,
-  TransactionLayer
+  TransactionLayer,
+  TransactionMessages
 }
 import SipAction.*
 import TerminationReason.*
@@ -301,6 +302,12 @@ private[softphone4s] class OutboundCall[F[_]: Async] private (
             endpoint.buildBye(dialog, branch)
           )
         }
+
+      case SendReply(request, status) =>
+        respondTo(
+          request,
+          TransactionMessages.responseTo(request, status.value, status.reason)
+        )
 
       case SendByeOk(request) =>
         logger.debug("Acknowledging BYE") >>
