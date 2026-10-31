@@ -11,6 +11,9 @@ import softphone4s.model.{MediaDirection, PayloadType}
   *   receive, which is a hold.
   * @param direction
   *   ours.
+  * @param comfortNoiseType
+  *   the payload type the other side may send comfort noise on, if we agreed to
+  *   receive it.
   */
 final case class MediaPlan(
     remote: SocketAddress[IpAddress],
@@ -18,7 +21,8 @@ final case class MediaPlan(
     payloadType: PayloadType,
     telephoneEventType: Option[PayloadType],
     remoteDirection: MediaDirection,
-    direction: MediaDirection
+    direction: MediaDirection,
+    comfortNoiseType: Option[PayloadType] = None
 ) {
 
   /** Whether the other side has put the call on hold: it will not receive. */

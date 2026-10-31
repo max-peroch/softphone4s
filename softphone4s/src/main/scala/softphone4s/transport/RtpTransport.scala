@@ -12,8 +12,10 @@ object RtpTransport {
 
   /** The payloads of the audio packets arriving on `socket`, a chunk for each
     * packet: those of payload type `audioType`, and the telephone events (RFC
-    * 4733) on `eventType`, if there are any. `heardFrom` is told where each of
-    * them came from, and its SSRC.
+    * 4733) on `eventType` and the comfort noise (RFC 3389) on `comfortType`, if
+    * there are any. `heardFrom` is told where each of them came from, and its
+    * SSRC; `onNoise` is given the payload of each comfort noise packet, which
+    * makes no audio of its own.
     *
     * DTMF end-bit packets are deduped by (timestamp, event) and delivered via
     * `onDtmf`; they produce no payload in the returned stream.
@@ -24,7 +26,9 @@ object RtpTransport {
       onDtmf: DtmfDigit => F[Unit],
       heardFrom: (SocketAddress[IpAddress], Long) => F[Unit],
       audioType: PayloadType,
-      eventType: Option[PayloadType]
+      eventType: Option[PayloadType],
+      comfortType: Option[PayloadType],
+      onNoise: Chunk[Byte] => F[Unit]
   ): Stream[F, Chunk[Byte]] =
     socket.reads.flatMap { datagram =>
       RtpCodec.decode(datagram.bytes) match {
@@ -41,6 +45,9 @@ object RtpTransport {
                   handleSoftphoneEvent(header, payload, lastDtmfKey, onDtmf)
                 )
                 .drain
+          else if comfortType.contains(pt) then
+            Stream.exec(heardFrom(datagram.remote, header.ssrc)) ++
+              Stream.exec(onNoise(payload))
           else Stream.empty
       }
     }

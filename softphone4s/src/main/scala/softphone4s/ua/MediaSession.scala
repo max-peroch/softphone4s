@@ -9,11 +9,11 @@ import fs2.concurrent.Channel
 import fs2.{Chunk, Pipe, Stream}
 import fs2.io.net.Network
 import softphone4s.config.RtpLatching
-import softphone4s.media.AudioCodecs
+import softphone4s.media.{AudioCodecs, ComfortNoise}
 import softphone4s.model.{DtmfDigit, MediaDirection, SoftphoneError}
 import softphone4s.sdp.{Capabilities, Codec, MediaPlan}
 
-import scala.concurrent.duration.FiniteDuration
+import scala.concurrent.duration.*
 import softphone4s.transport.{RtpLatch, RtpSender, RtpTransport}
 
 private[softphone4s] class MediaSession[F[_]: Async: Network] private (
@@ -27,7 +27,9 @@ private[softphone4s] class MediaSession[F[_]: Async: Network] private (
     target: Ref[F, Option[SocketAddress[IpAddress]]],
     agreed: Ref[F, Option[MediaPlan]],
     latching: RtpLatching,
-    latch: Ref[F, RtpLatch]
+    latch: Ref[F, RtpLatch],
+    comfort: Ref[F, Option[ComfortNoise.Noise]],
+    remoteSends: Ref[F, Boolean]
 ) {
 
   val source: Stream[F, Byte] =
@@ -59,6 +61,9 @@ private[softphone4s] class MediaSession[F[_]: Async: Network] private (
       direction: MediaDirection
   ): F[Unit] =
     latch.set(RtpLatch.empty) >>
+      remoteSends.set(direction.sends) >>
+      // A party that sends nothing makes no noise either.
+      comfort.set(None).whenA(!direction.sends) >>
       target.set(
         Option.when(direction.receives)(SocketAddress(remoteIp, remotePort))
       )
@@ -79,6 +84,36 @@ private[softphone4s] class MediaSession[F[_]: Async: Network] private (
           )
       }
     )
+
+  /** News of the other side's background noise: its level (RFC 3389), from now
+    * on until speech comes or it is stale.
+    */
+  private def noiseHeard(payload: Chunk[Byte]): F[Unit] =
+    ComfortNoise.Level
+      .parse(payload)
+      .traverse_(level =>
+        Async[F].monotonic.flatMap(now =>
+          comfort.update(before =>
+            Some(ComfortNoise.Noise.heard(level, now, before))
+          )
+        )
+      )
+
+  /** A frame of noise of `samples` samples to play now, if some is wanted: the
+    * other side told us the level, has not spoken since, is still sending and
+    * the news is not stale.
+    */
+  private def playNoise(samples: Int): F[Unit] =
+    (Async[F].monotonic, remoteSends.get).flatMapN { (now, sends) =>
+      comfort
+        .modify {
+          case Some(noise) if sends && noise.isCurrent(now) =>
+            val (next, frame) = noise.frame(samples)
+            (Some(next), Some(frame))
+          case _ => (None, None)
+        }
+        .flatMap(_.traverse_(audioChannel.send(_).void))
+    }
 
   /** Starts media as `plan` says, sending only if the other side will receive.
     * Fails with [[SoftphoneError.CodecUnavailable]] if the codec it settled on
@@ -146,11 +181,24 @@ private[softphone4s] class MediaSession[F[_]: Async: Network] private (
                     onDtmf,
                     heardFrom,
                     plan.payloadType,
-                    plan.telephoneEventType
+                    plan.telephoneEventType,
+                    plan.comfortNoiseType,
+                    noiseHeard
                   )
+                  // Speech again: the noise that stood in for it ends.
+                  .evalTap(_ => comfort.set(None))
                   .through(codec.decoder[F])
                   .chunks
                   .evalMap(audioChannel.send(_).void)
+                  .compile
+                  .drain
+
+              // While the other side is quiet and has told us how, a frame of
+              // noise for every 20 ms.
+              val noiseF =
+                Stream
+                  .awakeEvery[F](MediaSession.FramePeriod)
+                  .evalMap(_ => playNoise(codec.pcmPacketBytes / 2))
                   .compile
                   .drain
 
@@ -167,7 +215,7 @@ private[softphone4s] class MediaSession[F[_]: Async: Network] private (
                     _.through(codec.encoder[F]).through(rtp.audio)
                   sender.complete(rtp) >>
                     sendPipeReady.complete(pcmToRtp) >>
-                    receiveF.race(mediaStop.get.void).void
+                    receiveF.both(noiseF).void.race(mediaStop.get.void).void
                 }
             } >> audioChannel.close.void
         }
@@ -187,6 +235,10 @@ private[softphone4s] class MediaSession[F[_]: Async: Network] private (
 }
 
 private[softphone4s] object MediaSession {
+
+  /** The time one frame of audio stands for. */
+  private val FramePeriod: FiniteDuration = 20.millis
+
   def create[F[_]: Async: Network](
       bindAddress: IpAddress,
       localRtpPort: Port,
@@ -201,6 +253,8 @@ private[softphone4s] object MediaSession {
       target        <- Ref[F].of(Option.empty[SocketAddress[IpAddress]])
       agreed        <- Ref[F].of(Option.empty[MediaPlan])
       latch         <- Ref[F].of(RtpLatch.empty)
+      comfort       <- Ref[F].of(Option.empty[ComfortNoise.Noise])
+      remoteSends   <- Ref[F].of(true)
     } yield new MediaSession(
       bindAddress,
       localRtpPort,
@@ -212,6 +266,8 @@ private[softphone4s] object MediaSession {
       target,
       agreed,
       latching,
-      latch
+      latch,
+      comfort,
+      remoteSends
     )
 }

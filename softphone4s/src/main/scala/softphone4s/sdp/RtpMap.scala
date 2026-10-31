@@ -59,6 +59,7 @@ object RtpMap {
     RtpMap(PayloadType.G723, "G723", 8000, None),
     RtpMap(PayloadType.Pcma, "PCMA", 8000, None),
     RtpMap(PayloadType.G722, "G722", 8000, None),
-    RtpMap(PayloadType.G729, "G729", 8000, None)
+    RtpMap(PayloadType.G729, "G729", 8000, None),
+    RtpMap(PayloadType.ComfortNoise, "CN", 8000, None)
   ).map(m => m.payloadType -> m).toMap
 }

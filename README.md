@@ -158,6 +158,15 @@ softphone4s handles outbound SIP calls end-to-end:
   shows one, checked against `tls.trust-store`; a request for any other host
   gets a connection of its own, verified for that host. A connection that cannot
   be framed is dropped without affecting others.
+- **Comfort noise** (RFC 3389), received: we offer `CN/8000` (payload type 13)
+  beside the codecs, and answer it when it is offered (on the number it was
+  offered on; other rates are not taken). A party that stops sending speech to
+  save bandwidth sends the level of its background noise instead, and we play
+  white noise of that level into `call.source` so that the pauses do not sound
+  like a dead line. The noise ends when speech comes, when the other side stops
+  sending (a hold), or thirty seconds after the last news of it. The spectrum a
+  packet may carry is ignored, and we do not send comfort noise ourselves: we
+  do not suppress silence yet.
 - **Early media** (RFC 3960): a `180`, `183` or other provisional response
   that carries an SDP answer to our offer starts the media before the call is
   answered, so ringback or an announcement the other side plays comes out of

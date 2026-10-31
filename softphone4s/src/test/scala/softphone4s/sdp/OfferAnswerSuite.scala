@@ -36,7 +36,9 @@ class OfferAnswerSuite extends FunSuite {
   ) =
     OfferAnswer.answer(offer, local, caps).fold(r => fail(r.message), identity)
 
-  test("our offer lists our codecs and telephone events, with the direction") {
+  test(
+    "our offer lists our codecs, telephone events and comfort noise, with the direction"
+  ) {
     val sdp =
       OfferAnswer.offer(local, Capabilities.Default, MediaDirection.SendRecv)
     assertEquals(
@@ -47,11 +49,12 @@ class OfferAnswerSuite extends FunSuite {
         "s=-",
         "c=IN IP4 192.0.2.10",
         "t=0 0",
-        "m=audio 20000 RTP/AVP 0 8 101",
+        "m=audio 20000 RTP/AVP 0 8 101 13",
         "a=rtpmap:0 PCMU/8000",
         "a=rtpmap:8 PCMA/8000",
         "a=rtpmap:101 telephone-event/8000",
         "a=fmtp:101 0-16",
+        "a=rtpmap:13 CN/8000",
         "a=sendrecv"
       )
     )
@@ -331,5 +334,79 @@ class OfferAnswerSuite extends FunSuite {
       )
     )
     assertEquals(offered.map(_._1).distinct.size, offered.size)
+  }
+
+  // ---- Comfort noise (RFC 3389) --------------------------------------------------------
+
+  test(
+    "comfort noise offered by its number alone, or under another number, is answered on the number it was offered on"
+  ) {
+    val plain = answered(offerOf("m=audio 4000 RTP/AVP 0 13"))
+    assertEquals(plain.plan.comfortNoiseType, Some(pt(13)))
+    assertEquals(plain.description.media.head.formats, List("0", "13"))
+    assert(
+      plain.description.render.contains("a=rtpmap:13 CN/8000"),
+      plain.description.render
+    )
+    val moved =
+      answered(offerOf("m=audio 4000 RTP/AVP 0 105", "a=rtpmap:105 CN/8000"))
+    assertEquals(moved.plan.comfortNoiseType, Some(pt(105)))
+    assert(
+      moved.description.render.contains("a=rtpmap:105 CN/8000"),
+      moved.description.render
+    )
+  }
+
+  test("comfort noise at another rate than 8 000 is not taken") {
+    val result =
+      answered(offerOf("m=audio 4000 RTP/AVP 0 96", "a=rtpmap:96 CN/16000"))
+    assertEquals(result.plan.comfortNoiseType, None)
+    assertEquals(result.description.media.head.formats, List("0"))
+  }
+
+  test(
+    "it is not answered when it was not offered, nor when we do not take it"
+  ) {
+    assertEquals(
+      answered(offerOf("m=audio 4000 RTP/AVP 0")).plan.comfortNoiseType,
+      None
+    )
+    val without = Capabilities(NonEmptyList.one(Codec.Pcmu), None)
+    val result  = answered(offerOf("m=audio 4000 RTP/AVP 0 13"), without)
+    assertEquals(result.plan.comfortNoiseType, None)
+    assertEquals(result.description.media.head.formats, List("0"))
+  }
+
+  test("comfort noise is never taken for a codec") {
+    val onlyNoise = OfferAnswer.answer(
+      offerOf("m=audio 4000 RTP/AVP 13"),
+      local,
+      Capabilities.Default
+    )
+    assertEquals(onlyNoise.left.toOption, Some(Reject.NoCommonCodec))
+  }
+
+  test(
+    "an answer that has comfort noise in it, to an offer that had it, gives it in the plan"
+  ) {
+    val plan = OfferAnswer
+      .accept(
+        offerOf(
+          "m=audio 4000 RTP/AVP 0 101 13",
+          "a=rtpmap:101 telephone-event/8000"
+        ),
+        Capabilities.Default,
+        MediaDirection.SendRecv
+      )
+      .fold(r => fail(r.message), identity)
+    assertEquals(plan.comfortNoiseType, Some(pt(13)))
+    val noneOffered = OfferAnswer
+      .accept(
+        offerOf("m=audio 4000 RTP/AVP 0 13"),
+        Capabilities(NonEmptyList.one(Codec.Pcmu), None),
+        MediaDirection.SendRecv
+      )
+      .fold(r => fail(r.message), identity)
+    assertEquals(noneOffered.comfortNoiseType, None)
   }
 }

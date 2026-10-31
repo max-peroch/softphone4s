@@ -49,6 +49,14 @@ final case class MediaDescription(
           m.encoding.equalsIgnoreCase("telephone-event") && m.clockRate == 8000
       )
 
+  /** The payload type comfort noise (RFC 3389) is offered on, at 8 000 a
+    * second: 13 if listed, or any number an `rtpmap` says is `CN/8000`.
+    */
+  def comfortNoiseType: Option[PayloadType] =
+    meanings
+      .find(m => m.encoding.equalsIgnoreCase("CN") && m.clockRate == 8000)
+      .map(_.payloadType)
+
   /** The direction this section states, if it does. */
   def direction: Option[MediaDirection] =
     MediaDescription.directionIn(attributes)

@@ -3,12 +3,14 @@ package softphone4s.sdp
 import cats.data.NonEmptyList
 import softphone4s.model.PayloadType
 
-/** What we can do with an audio stream: the codecs, most wanted first, and the
-  * payload type we receive telephone events on (RFC 4733), if we do.
+/** What we can do with an audio stream: the codecs, most wanted first, the
+  * payload type we receive telephone events on (RFC 4733), if we do, and the
+  * one we receive comfort noise on (RFC 3389), if we do.
   */
 final case class Capabilities(
     codecs: NonEmptyList[Codec],
-    telephoneEventType: Option[PayloadType]
+    telephoneEventType: Option[PayloadType],
+    comfortNoiseType: Option[PayloadType] = None
 ) {
 
   /** The same, with `codec` first if we have it: the one a call is already in
@@ -59,6 +61,7 @@ object Capabilities {
   val Default: Capabilities =
     Capabilities(
       NonEmptyList.of(Codec.Pcmu, Codec.Pcma),
-      Some(PayloadType.TelephoneEvent)
+      Some(PayloadType.TelephoneEvent),
+      Some(PayloadType.ComfortNoise)
     )
 }

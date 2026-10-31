@@ -30,11 +30,12 @@ object OfferAnswer {
           MediaKind.Audio,
           local.port,
           MediaProtocol.RtpAvp,
-          (codecs.map(_._1) ++ capabilities.telephoneEventType)
-            .map(_.toString),
+          (codecs.map(_._1) ++ capabilities.telephoneEventType ++
+            capabilities.comfortNoiseType).map(_.toString),
           None,
           codecs.flatMap((pt, codec) => describe(pt, codec)) :::
             capabilities.telephoneEventType.toList.flatMap(telephoneEvents) :::
+            capabilities.comfortNoiseType.toList.map(comfortNoise) :::
             List(Attribute.flag(direction.sdpAttribute))
         )
       )
@@ -63,6 +64,9 @@ object OfferAnswer {
       events = capabilities.telephoneEventType.filter(
         section.offersTelephoneEvents
       )
+      comfort = capabilities.comfortNoiseType.flatMap(_ =>
+        section.comfortNoiseType
+      )
       theirs = offered.directionOf(section)
       ours   = theirs.answer
     } yield {
@@ -70,10 +74,12 @@ object OfferAnswer {
         MediaKind.Audio,
         local.port,
         MediaProtocol.RtpAvp,
-        (meaning.payloadType :: events.toList).map(_.toString),
+        (meaning.payloadType :: events.toList ::: comfort.toList)
+          .map(_.toString),
         None,
         describe(meaning.payloadType, codec) :::
           events.toList.flatMap(telephoneEvents) :::
+          comfort.toList.map(comfortNoise) :::
           List(Attribute.flag(ours.sdpAttribute))
       )
       val sections = offered.media.map(m =>
@@ -94,7 +100,8 @@ object OfferAnswer {
           meaning.payloadType,
           events,
           theirs,
-          ours
+          ours,
+          comfort
         )
       )
     }
@@ -127,7 +134,8 @@ object OfferAnswer {
       payloadType,
       capabilities.telephoneEventType.filter(section.offersTelephoneEvents),
       answered.directionOf(section),
-      direction
+      direction,
+      capabilities.comfortNoiseType.flatMap(_ => section.comfortNoiseType)
     )
 
   /** An audio stream that is not declined and is plain RTP. */
@@ -146,6 +154,9 @@ object OfferAnswer {
       Option.when(codec.channels != 1)(codec.channels)
     ).attribute ::
       codec.fmtp.toList.map(f => Attribute.valued("fmtp", s"$payloadType $f"))
+
+  private def comfortNoise(payloadType: PayloadType): Attribute =
+    RtpMap(payloadType, "CN", 8000, None).attribute
 
   private def telephoneEvents(payloadType: PayloadType): List[Attribute] =
     List(

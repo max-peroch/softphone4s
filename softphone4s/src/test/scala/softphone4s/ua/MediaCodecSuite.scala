@@ -11,7 +11,12 @@ import munit.CatsEffectSuite
 import softphone4s.codec.{G711Codec, RtpCodec}
 import softphone4s.config.RtpLatching
 import softphone4s.media.{AudioCodecs, HalfByteCodec}
-import softphone4s.model.{DtmfDigit, MediaDirection, SoftphoneEvent}
+import softphone4s.model.{
+  DtmfDigit,
+  MediaDirection,
+  PayloadType,
+  SoftphoneEvent
+}
 import softphone4s.sdp.{Capabilities, Codec, MediaPlan}
 import softphone4s.transport.RawPeer
 
@@ -592,6 +597,160 @@ class MediaCodecSuite extends CatsEffectSuite {
           assertEquals(silent, Nil)
           assertEquals(heard.size, 2)
         }
+    }
+  }
+
+  // ---- Comfort noise ---------------------------------------------------------------------
+
+  /** A session started on the plan `make` gives for the peer's address. */
+  private def startedOn[A](make: SocketAddress[IpAddress] => MediaPlan)(
+      use: (
+          MediaSession[IO],
+          SocketAddress[IpAddress],
+          DatagramSocket[IO]
+      ) => IO[A]
+  ): IO[A] =
+    bound.use { (peer, peerAddress) =>
+      session(AudioCodecs.Default).use { (media, ours, supervisor) =>
+        media.start(make(peerAddress), supervisor, _ => IO.unit) >>
+          IO.sleep(500.millis) >>
+          use(media, ours, peer) <* media.stop()
+      }
+    }
+
+  private def noisePlan(
+      direction: MediaDirection = MediaDirection.SendRecv,
+      comfort: Option[PayloadType] = Some(pt(13))
+  )(address: SocketAddress[IpAddress]) =
+    MediaPlan(
+      address,
+      Codec.Pcmu,
+      pt(0),
+      None,
+      direction,
+      MediaDirection.SendRecv,
+      comfort
+    )
+
+  /** The level 40 -dBov, as a comfort noise packet. */
+  private def noisePacket(ours: SocketAddress[IpAddress], sequence: Int) =
+    Datagram(
+      ours,
+      RtpCodec.encode(
+        pt(13),
+        sequence,
+        sequence * 160L,
+        7L,
+        Chunk.array(Array[Byte](40)),
+        marker = false
+      )
+    )
+
+  private def speech(ours: SocketAddress[IpAddress], sequence: Int) =
+    Datagram(
+      ours,
+      RtpCodec.encode(
+        pt(0),
+        sequence,
+        sequence * 160L,
+        7L,
+        Chunk.array(Array.fill[Byte](160)(0xff.toByte)),
+        marker = false
+      )
+    )
+
+  private def heardWithin(media: MediaSession[IO], wait: FiniteDuration) =
+    media.source.interruptAfter(wait).compile.to(Chunk)
+
+  private def loudness(pcm: Chunk[Byte]): Double = {
+    val xs = pcm.toArray
+      .grouped(2)
+      .map(b => ((b(1) << 8) | (b(0) & 0xff)).toShort.toDouble)
+      .toVector
+    math.sqrt(xs.map(x => x * x).sum / xs.size)
+  }
+
+  test(
+    "comfort noise from the other side is played, at its level, while it is quiet"
+  ) {
+    startedOn(noisePlan()) { (media, ours, peer) =>
+      for {
+        _     <- peer.write(noisePacket(ours, 1))
+        heard <- media.source.take(320 * 5).compile.to(Chunk).timeout(5.seconds)
+      } yield {
+        assertEquals(heard.size, 320 * 5)
+        // Level 40 -dBov: a root mean square of about 328.
+        val rms = loudness(heard)
+        assert(rms > 200 && rms < 500, s"rms $rms")
+      }
+    }
+  }
+
+  test("the noise ends when speech comes") {
+    startedOn(noisePlan()) { (media, ours, peer) =>
+      for {
+        _     <- peer.write(noisePacket(ours, 1))
+        _     <- media.source.take(320).compile.drain.timeout(5.seconds)
+        _     <- peer.write(speech(ours, 2))
+        _     <- IO.sleep(150.millis)
+        _     <- heardWithin(media, 100.millis) // what was queued
+        later <- heardWithin(media, 400.millis)
+      } yield assertEquals(later.size, 0)
+    }
+  }
+
+  test("the noise ends when the other side stops sending, as in a hold") {
+    startedOn(noisePlan()) { (media, ours, peer) =>
+      for {
+        _     <- peer.write(noisePacket(ours, 1))
+        _     <- media.source.take(320).compile.drain.timeout(5.seconds)
+        _     <- media.retarget(ours.host, ours.port, MediaDirection.RecvOnly)
+        _     <- IO.sleep(150.millis)
+        _     <- heardWithin(media, 100.millis)
+        later <- heardWithin(media, 400.millis)
+      } yield assertEquals(later.size, 0)
+    }
+  }
+
+  test("a party that sends nothing makes no noise") {
+    startedOn(noisePlan(direction = MediaDirection.RecvOnly)) {
+      (media, ours, peer) =>
+        for {
+          _     <- peer.write(noisePacket(ours, 1))
+          heard <- heardWithin(media, 500.millis)
+        } yield assertEquals(heard.size, 0)
+    }
+  }
+
+  test("comfort noise that was not agreed to is not played") {
+    startedOn(noisePlan(comfort = None)) { (media, ours, peer) =>
+      for {
+        _     <- peer.write(noisePacket(ours, 1))
+        heard <- heardWithin(media, 500.millis)
+      } yield assertEquals(heard.size, 0)
+    }
+  }
+
+  test(
+    "a packet that is no news of the noise, with no level in it, plays nothing"
+  ) {
+    startedOn(noisePlan()) { (media, ours, peer) =>
+      for {
+        _ <- peer.write(
+          Datagram(
+            ours,
+            RtpCodec.encode(
+              pt(13),
+              1,
+              160L,
+              7L,
+              Chunk.empty[Byte],
+              marker = false
+            )
+          )
+        )
+        heard <- heardWithin(media, 500.millis)
+      } yield assertEquals(heard.size, 0)
     }
   }
 }

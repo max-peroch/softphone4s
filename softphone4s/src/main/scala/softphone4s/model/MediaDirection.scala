@@ -10,6 +10,12 @@ enum MediaDirection {
     case SendOnly | Inactive => false
   }
 
+  /** Whether the party that stated this direction is willing to send. */
+  def sends: Boolean = this match {
+    case SendRecv | SendOnly => true
+    case RecvOnly | Inactive => false
+  }
+
   /** The direction to answer an offer of this direction with (RFC 3264 §6.1):
     * what they send we receive, and the other way round.
     */

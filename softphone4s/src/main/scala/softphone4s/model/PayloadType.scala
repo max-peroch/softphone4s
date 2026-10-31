@@ -37,6 +37,9 @@ object PayloadType {
   val G723: PayloadType = 4
   val G729: PayloadType = 18
 
+  /** Comfort noise at 8 000 a second (RFC 3389, RFC 3551). */
+  val ComfortNoise: PayloadType = 13
+
   /** The number we receive telephone events on (RFC 4733), the one nearly every
     * phone uses.
     */

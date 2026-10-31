@@ -10,12 +10,17 @@ import softphone4s.sdp.{Capabilities, Codec}
   */
 final case class AudioCodecs(
     codecs: NonEmptyList[AudioCodec],
-    telephoneEventType: Option[PayloadType]
+    telephoneEventType: Option[PayloadType],
+    comfortNoiseType: Option[PayloadType] = None
 ) {
 
   /** What offers and answers are made from. */
   def capabilities: Capabilities =
-    Capabilities(codecs.map(_.description), telephoneEventType)
+    Capabilities(
+      codecs.map(_.description),
+      telephoneEventType,
+      comfortNoiseType
+    )
 
   /** The implementation of what a negotiation settled on. */
   def implementing(codec: Codec): Option[AudioCodec] =
@@ -53,13 +58,18 @@ object AudioCodecs {
           .find(_.token == choice.token)
           .toRight(SoftphoneError.UnknownCodec(choice.token))
       )
-    } yield AudioCodecs(found, Some(PayloadType.TelephoneEvent))
+    } yield AudioCodecs(
+      found,
+      Some(PayloadType.TelephoneEvent),
+      Some(PayloadType.ComfortNoise)
+    )
   }
 
-  /** μ-law and A-law, with telephone events on 101. */
+  /** μ-law and A-law, with telephone events on 101 and comfort noise on 13. */
   val Default: AudioCodecs =
     AudioCodecs(
       NonEmptyList.of(G711.Pcmu, G711.Pcma),
-      Some(PayloadType.TelephoneEvent)
+      Some(PayloadType.TelephoneEvent),
+      Some(PayloadType.ComfortNoise)
     )
 }
