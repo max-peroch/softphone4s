@@ -123,17 +123,21 @@ private[softphone4s] class MediaSession[F[_]: Async: Network] private (
                     plan.payloadType,
                     plan.telephoneEventType
                   )
-                  .through(codec.decoder)
+                  .through(codec.decoder[F])
                   .chunks
                   .evalMap(audioChannel.send(_).void)
                   .compile
                   .drain
 
               val pcmToRtp: Pipe[F, Byte, Unit] =
-                _.through(codec.encoder)
+                _.through(codec.encoder[F])
                   .through(
-                    RtpTransport
-                      .sendPipe(socket, target.get, codec, plan.payloadType)
+                    RtpTransport.sendPipe(
+                      socket,
+                      target.get,
+                      codec.timestampStep,
+                      plan.payloadType
+                    )
                   )
 
               sendPipeReady.complete(pcmToRtp) >>

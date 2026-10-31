@@ -1,7 +1,7 @@
 package softphone4s.media
 
 import cats.data.NonEmptyList
-import cats.effect.IO
+import cats.effect.{IO, Sync}
 import cats.syntax.all.*
 import fs2.{Chunk, Stream}
 import munit.CatsEffectSuite
@@ -51,10 +51,11 @@ class AudioCodecsSuite extends CatsEffectSuite {
     assertEquals(AudioCodecs.Default.pcmRate, Some(8000))
   }
 
-  test("a packet is 20 ms: 320 bytes of PCM and 160 of payload for G.711") {
+  test(
+    "a packet is 20 ms: 320 bytes of PCM for G.711, and a timestamp step of 160"
+  ) {
     List(G711.Pcmu, G711.Pcma).foreach { codec =>
       assertEquals(codec.pcmPacketBytes, 320)
-      assertEquals(codec.payloadPacketBytes, 160)
       assertEquals(codec.timestampStep, 160)
     }
   }
@@ -87,12 +88,11 @@ class AudioCodecsSuite extends CatsEffectSuite {
   }
 
   test(
-    "G.722 works at 16 kHz: 640 bytes of PCM, 160 of payload, a timestamp step of 160"
+    "G.722 works at 16 kHz: 640 bytes of PCM, a timestamp step of 160"
   ) {
     val codec = G722.Wideband
     assertEquals(codec.pcmRate, 16000)
     assertEquals(codec.pcmPacketBytes, 640)
-    assertEquals(codec.payloadPacketBytes, 160)
     assertEquals(codec.timestampStep, 160)
     assertEquals(codec.description, Codec.G722)
   }
@@ -118,15 +118,15 @@ class AudioCodecsSuite extends CatsEffectSuite {
         .chunk(in)
         .through(G722.Wideband.encoder[IO])
         .compile
-        .to(Chunk)
+        .toList
     for {
       whole <- run(pcm)
       again <- run(pcm)
       first <- run(pcm.take(640))
     } yield {
-      assertEquals(whole.size, 640)
+      assertEquals(whole.map(_.size), List(160, 160, 160, 160))
       assertEquals(again, whole)
-      assertEquals(first, whole.take(160))
+      assertEquals(first, whole.take(1))
     }
   }
 
@@ -178,12 +178,11 @@ class AudioCodecsSuite extends CatsEffectSuite {
 
   test("a codec called what another is called is an error") {
     val twin = new AudioCodec {
-      val token: String           = "pcmu"
-      val description: Codec      = Codec("PCMU2", 8000, 1, None, None)
-      val pcmRate: Int            = 8000
-      val payloadPacketBytes: Int = 160
-      def encoder[F[_]]           = G711.Pcmu.encoder
-      def decoder[F[_]]           = G711.Pcmu.decoder
+      val token: String       = "pcmu"
+      val description: Codec  = Codec("PCMU2", 8000, 1, None, None)
+      val pcmRate: Int        = 8000
+      def encoder[F[_]: Sync] = G711.Pcmu.encoder
+      def decoder[F[_]: Sync] = G711.Pcmu.decoder
     }
     assertEquals(
       AudioCodecs
@@ -194,13 +193,15 @@ class AudioCodecsSuite extends CatsEffectSuite {
     )
   }
 
-  test("the added codec's pipes work like any other") {
+  test(
+    "the added codec's pipes work like any other: a payload for each packet"
+  ) {
     val pcm = Chunk.array(Array.tabulate[Byte](640)(i => (i % 100).toByte))
     Stream
       .chunk(pcm)
       .through(HalfByteCodec.encoder[IO])
       .compile
-      .to(Chunk)
-      .map(payload => assertEquals(payload.size, 320))
+      .toList
+      .map(packets => assertEquals(packets.map(_.size), List(160, 160)))
   }
 }

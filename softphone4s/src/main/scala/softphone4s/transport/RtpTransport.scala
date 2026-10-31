@@ -4,20 +4,19 @@ import cats.effect.{Async, Ref}
 import cats.syntax.all.*
 import com.comcast.ip4s.*
 import fs2.io.net.{Datagram, DatagramSocket}
-import fs2.{Pipe, Stream}
+import fs2.{Chunk, Pipe, Stream}
 import softphone4s.codec.RtpCodec
-import softphone4s.media.AudioCodec
 import softphone4s.model.{DtmfDigit, SoftphoneEvent}
 
 object RtpTransport {
 
-  /** The payload of the audio packets arriving on `socket`: those of payload
-    * type `audioType`, and the telephone events (RFC 4733) on `eventType`, if
-    * there are any. `heardFrom` is told where each of them came from, and its
-    * SSRC.
+  /** The payloads of the audio packets arriving on `socket`, a chunk for each
+    * packet: those of payload type `audioType`, and the telephone events (RFC
+    * 4733) on `eventType`, if there are any. `heardFrom` is told where each of
+    * them came from, and its SSRC.
     *
     * DTMF end-bit packets are deduped by (timestamp, event) and delivered via
-    * `onDtmf`; they produce no bytes in the returned stream.
+    * `onDtmf`; they produce no payload in the returned stream.
     */
   def receiveBytes[F[_]: Async](
       socket: DatagramSocket[F],
@@ -26,7 +25,7 @@ object RtpTransport {
       heardFrom: (SocketAddress[IpAddress], Long) => F[Unit],
       audioType: Int,
       eventType: Option[Int]
-  ): Stream[F, Byte] =
+  ): Stream[F, Chunk[Byte]] =
     socket.reads.flatMap { datagram =>
       RtpCodec.decode(datagram.bytes) match {
         case None                    => Stream.empty
@@ -34,7 +33,7 @@ object RtpTransport {
           val pt = header.payloadType
           if pt == audioType then
             Stream.exec(heardFrom(datagram.remote, header.ssrc)) ++
-              Stream.chunk(payload)
+              Stream.emit(payload)
           else if eventType.contains(pt) then
             Stream.exec(heardFrom(datagram.remote, header.ssrc)) ++
               Stream
@@ -46,24 +45,23 @@ object RtpTransport {
       }
     }
 
-  /** Packs payload bytes into RTP packets of payload type `payloadType`,
-    * `codec` a packet at a time, and writes them to `socket`, to wherever
-    * `target` says at the time: it changes when the remote party moves its
-    * media, and is `None` while the call is on hold, when packets are dropped
-    * (their sequence numbers are skipped, as for silence).
+  /** Packs payloads into RTP packets of payload type `payloadType`, one payload
+    * to a packet, each `timestampStep` after the one before, and writes them to
+    * `socket`, to wherever `target` says at the time: it changes when the
+    * remote party moves its media, and is `None` while the call is on hold,
+    * when packets are dropped (their sequence numbers are skipped, as for
+    * silence).
     */
   def sendPipe[F[_]: Async](
       socket: DatagramSocket[F],
       target: F[Option[SocketAddress[IpAddress]]],
-      codec: AudioCodec,
+      timestampStep: Int,
       payloadType: Int
-  ): Pipe[F, Byte, Unit] = upstream =>
+  ): Pipe[F, Chunk[Byte], Unit] = upstream =>
     Stream
       .eval(Async[F].delay(scala.util.Random.nextLong() & 0xffffffffL))
       .flatMap { ssrc =>
-        upstream
-          .chunkN(codec.payloadPacketBytes, allowFewer = false)
-          .zipWithIndex
+        upstream.zipWithIndex
           .evalMap { case (chunk, packetIndex) =>
             target.map(_.map { remoteAddr =>
               Datagram(
@@ -71,7 +69,7 @@ object RtpTransport {
                 RtpCodec.encode(
                   payloadType = payloadType,
                   sequenceNumber = (packetIndex & 0xffff).toInt,
-                  timestamp = (packetIndex * codec.timestampStep) & 0xffffffffL,
+                  timestamp = (packetIndex * timestampStep) & 0xffffffffL,
                   ssrc = ssrc,
                   payload = chunk,
                   marker = packetIndex == 0
