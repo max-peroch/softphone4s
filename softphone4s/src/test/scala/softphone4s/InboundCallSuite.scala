@@ -293,12 +293,28 @@ class InboundCallSuite extends CatsEffectSuite {
     }
   }
 
+  test("an offer of PCMA alone is answered with PCMA") {
+    scenario().use { (phone, peer) =>
+      for {
+        _ <- send(peer, invite(offer.replace("RTP/AVP 0 101", "RTP/AVP 8 101")))
+        call <- phone.incoming.head.compile.lastOrError.timeout(5.seconds)
+        ok   <- call.accept.allocated.flatMap { case (_, release) =>
+          response(peer, status(200)).flatTap(_ => release.start.void)
+        }
+      } yield {
+        assert(ok.body.contains("RTP/AVP 8 101"), ok.body)
+        assert(ok.body.contains("a=rtpmap:8 PCMA/8000"), ok.body)
+        assert(!ok.body.contains("PCMU"), ok.body)
+      }
+    }
+  }
+
   test(
     "an INVITE we cannot answer is refused with 488 and never reaches the application"
   ) {
     scenario().use { (phone, peer) =>
       for {
-        _ <- send(peer, invite(offer.replace("RTP/AVP 0 101", "RTP/AVP 8")))
+        _ <- send(peer, invite(offer.replace("RTP/AVP 0 101", "RTP/AVP 18")))
         refused   <- response(peer, status(488))
         announced <- phone.incoming.head.compile.last
           .timeoutTo(500.millis, IO.pure(None))

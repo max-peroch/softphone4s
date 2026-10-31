@@ -11,6 +11,7 @@ import softphone4s.DigestVerifier
 import softphone4s.SipLiterals.*
 import softphone4s.config.{RtpLatching, SoftphoneConfig}
 import softphone4s.fsm.CallTimer
+import softphone4s.media.AudioCodecs
 import softphone4s.model.*
 import softphone4s.runtime.{Entropy, Timers}
 import softphone4s.transaction.*
@@ -74,7 +75,12 @@ class OutboundCallSuite extends CatsEffectSuite {
       random     <- Resource.eval(Random.scalaUtilRandom[IO])
       timers     <- Timers.resource[IO, CallTimer]
       media      <- Resource.eval(
-        MediaSession.create[IO](160, localIp, rtp, RtpLatching.Follow)
+        MediaSession.create[IO](
+          localIp,
+          rtp,
+          AudioCodecs.Default,
+          RtpLatching.Follow
+        )
       )
       input <- Resource.eval(Queue.unbounded[IO, DialogInput[IO]])
       call  <- Resource.eval(

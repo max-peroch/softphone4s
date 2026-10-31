@@ -10,6 +10,20 @@ final case class Capabilities(
     telephoneEventType: Option[Int]
 ) {
 
+  /** The same, with `codec` first if we have it: the one a call is already in
+    * is answered before any other, so that a change of session does not change
+    * the codec.
+    */
+  def preferring(codec: Codec): Capabilities =
+    if codecs.exists(_ == codec) then
+      copy(codecs = NonEmptyList(codec, codecs.filterNot(_ == codec)))
+    else this
+
+  /** The same, but with `codec` as the only one, if we have it. */
+  def only(codec: Codec): Capabilities =
+    if codecs.exists(_ == codec) then copy(codecs = NonEmptyList.one(codec))
+    else this
+
   /** The payload types an offer of ours uses: a codec with a static one keeps
     * it, the others are given 96 and up, skipping the one telephone events
     * have.
@@ -26,7 +40,7 @@ final case class Capabilities(
 
 object Capabilities {
 
-  /** PCMU, with telephone events on 101. */
+  /** PCMU and PCMA, with telephone events on 101. */
   val Default: Capabilities =
-    Capabilities(NonEmptyList.one(Codec.Pcmu), Some(101))
+    Capabilities(NonEmptyList.of(Codec.Pcmu, Codec.Pcma), Some(101))
 }

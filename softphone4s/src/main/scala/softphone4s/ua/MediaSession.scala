@@ -8,19 +8,21 @@ import com.comcast.ip4s.*
 import fs2.concurrent.Channel
 import fs2.{Chunk, Pipe, Stream}
 import fs2.io.net.Network
-import softphone4s.codec.G711Codec
 import softphone4s.config.RtpLatching
-import softphone4s.model.{DtmfDigit, MediaDirection}
+import softphone4s.media.AudioCodecs
+import softphone4s.model.{DtmfDigit, MediaDirection, SoftphoneError}
+import softphone4s.sdp.{Capabilities, Codec, MediaPlan}
 import softphone4s.transport.{RtpLatch, RtpTransport}
 
 private[softphone4s] class MediaSession[F[_]: Async: Network] private (
-    pcmFrameBytes: Int,
     bindAddress: IpAddress,
     localRtpPort: Port,
+    codecs: AudioCodecs,
     audioChannel: Channel[F, Chunk[Byte]],
     sendPipeReady: Deferred[F, Pipe[F, Byte, Unit]],
     mediaStop: Deferred[F, Unit],
     target: Ref[F, Option[SocketAddress[IpAddress]]],
+    agreed: Ref[F, Option[MediaPlan]],
     latching: RtpLatching,
     latch: Ref[F, RtpLatch]
 ) {
@@ -32,6 +34,18 @@ private[softphone4s] class MediaSession[F[_]: Async: Network] private (
     Stream.eval(sendPipeReady.get).flatMap { pipe =>
       upstream.through(pipe).interruptWhen(mediaStop.get.attempt)
     }
+
+  /** The codec media is running in, once it has started. A change of session
+    * keeps to it.
+    */
+  def codecInUse: F[Option[Codec]] = agreed.get.map(_.map(_.codec))
+
+  /** `base` as a change of session is to see it: once media is running, only
+    * the codec in use, since switching codec in mid-call is not supported and a
+    * session change without it is refused.
+    */
+  def restrict(base: Capabilities): F[Capabilities] =
+    agreed.get.map(_.fold(base)(plan => base.only(plan.codec)))
 
   /** Points outgoing media at the remote party's (possibly new) address, or
     * stops it while `direction` says they will not receive (call on hold).
@@ -63,19 +77,34 @@ private[softphone4s] class MediaSession[F[_]: Async: Network] private (
       }
     )
 
+  /** Starts media as `plan` says. Fails with
+    * [[SoftphoneError.CodecUnavailable]] if the codec it settled on is not one
+    * we have, which a plan made from our own capabilities cannot be.
+    */
   def start(
-      remoteIp: IpAddress,
-      remotePort: Port,
+      plan: MediaPlan,
       supervisor: Supervisor[F],
       onDtmf: DtmfDigit => F[Unit]
   ): F[Unit] =
-    retarget(remoteIp, remotePort, MediaDirection.SendRecv) >>
-      run(supervisor, onDtmf)
+    codecs
+      .implementing(plan.codec)
+      .liftTo[F](SoftphoneError.CodecUnavailable(plan.codec.encoding))
+      .flatMap { codec =>
+        agreed.set(Some(plan)) >>
+          retarget(
+            plan.remote.host,
+            plan.remote.port,
+            MediaDirection.SendRecv
+          ) >>
+          run(codec, plan, supervisor, onDtmf)
+      }
 
   private def run(
+      codec: softphone4s.media.AudioCodec,
+      plan: MediaPlan,
       supervisor: Supervisor[F],
       onDtmf: DtmfDigit => F[Unit]
-  ): F[Unit] = {
+  ): F[Unit] =
     supervisor
       .supervise(
         Ref[F].of((-1L, -1)).flatMap { lastDtmfKey =>
@@ -86,16 +115,26 @@ private[softphone4s] class MediaSession[F[_]: Async: Network] private (
             .use { socket =>
               val receiveF =
                 RtpTransport
-                  .receiveBytes(socket, lastDtmfKey, onDtmf, heardFrom)
-                  .through(G711Codec.mulawToPcmPipe)
+                  .receiveBytes(
+                    socket,
+                    lastDtmfKey,
+                    onDtmf,
+                    heardFrom,
+                    plan.payloadType,
+                    plan.telephoneEventType
+                  )
+                  .through(codec.decoder)
                   .chunks
                   .evalMap(audioChannel.send(_).void)
                   .compile
                   .drain
 
               val pcmToRtp: Pipe[F, Byte, Unit] =
-                _.through(G711Codec.pcmToMulawPipe(pcmFrameBytes))
-                  .through(RtpTransport.sendPipe(socket, target.get))
+                _.through(codec.encoder)
+                  .through(
+                    RtpTransport
+                      .sendPipe(socket, target.get, codec, plan.payloadType)
+                  )
 
               sendPipeReady.complete(pcmToRtp) >>
                 receiveF.race(mediaStop.get.void).void
@@ -103,16 +142,15 @@ private[softphone4s] class MediaSession[F[_]: Async: Network] private (
         }
       )
       .void
-  }
 
   def stop(): F[Unit] = mediaStop.complete(()).void
 }
 
 private[softphone4s] object MediaSession {
   def create[F[_]: Async: Network](
-      pcmFrameBytes: Int,
       bindAddress: IpAddress,
       localRtpPort: Port,
+      codecs: AudioCodecs,
       latching: RtpLatching
   ): F[MediaSession[F]] =
     for {
@@ -120,15 +158,17 @@ private[softphone4s] object MediaSession {
       sendPipeReady <- Deferred[F, Pipe[F, Byte, Unit]]
       mediaStop     <- Deferred[F, Unit]
       target        <- Ref[F].of(Option.empty[SocketAddress[IpAddress]])
+      agreed        <- Ref[F].of(Option.empty[MediaPlan])
       latch         <- Ref[F].of(RtpLatch.empty)
     } yield new MediaSession(
-      pcmFrameBytes,
       bindAddress,
       localRtpPort,
+      codecs,
       audioChannel,
       sendPipeReady,
       mediaStop,
       target,
+      agreed,
       latching,
       latch
     )

@@ -185,4 +185,31 @@ class SoftphoneStreamingSuite extends CatsEffectSuite {
       }
     }
   }
+
+  test("no codec configured is an error before anything is bound") {
+    SoftphoneStreaming
+      .resource[IO](config.copy(codecs = Nil), audio, NoOpLogger.impl[IO])
+      .use_
+      .attempt
+      .map(r =>
+        assertEquals(r.left.toOption, Some(SoftphoneError.NoCodecsConfigured))
+      )
+  }
+
+  test("codecs that work at another rate than the audio format are refused") {
+    SoftphoneStreaming
+      .resource[IO](
+        config,
+        new AudioFormat(16000f, 16, 1, true, false),
+        NoOpLogger.impl[IO]
+      )
+      .use_
+      .attempt
+      .map(r =>
+        assertEquals(
+          r.left.toOption,
+          Some(SoftphoneError.AudioFormatMismatch(8000, 16000))
+        )
+      )
+  }
 }

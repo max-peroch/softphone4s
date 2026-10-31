@@ -9,6 +9,7 @@ import fs2.{Pipe, Stream}
 import org.typelevel.log4cats.StructuredLogger
 import softphone4s.Call
 import softphone4s.codec.{SdpCodec, SipCodec}
+import softphone4s.sdp.Capabilities
 import softphone4s.fsm.*
 import softphone4s.fsm.SipMessages.*
 import softphone4s.model.*
@@ -58,6 +59,13 @@ private[softphone4s] class OutboundCall[F[_]: Async] private (
 ) extends Call[F] {
 
   private def newBranch(): F[Branch] = entropy.branch
+
+  /** What a session change is made from: the codecs of the call's endpoint, or
+    * just the one in use once media is running. They are the same over every
+    * uplink.
+    */
+  private def inUse: F[Capabilities] =
+    uplink.get.flatMap(u => media.restrict(u.endpoint.capabilities))
 
   private def hangupInterrupt: F[Either[Throwable, Unit]] =
     callEnded.get.map(Left(_))
@@ -121,20 +129,22 @@ private[softphone4s] class OutboundCall[F[_]: Async] private (
     */
   private def processEvent(event: SipEvent): F[Boolean] =
     logIncoming(event) >>
-      stateRef
-        .modify(state => CallFsm.transition(event).run(state).value)
-        .flatMap { actions =>
-          for {
-            _             <- actions.traverse_(interpretAction)
-            _             <- cancelled.set(true).whenA(actions.exists(isCancel))
-            awaitingFinal <- cancelled.get
-          } yield {
-            val ended = actions.exists {
-              case NotifyHangup(_) => true; case _ => false
+      inUse.flatMap { caps =>
+        stateRef
+          .modify(state => CallFsm.transition(event, caps).run(state).value)
+          .flatMap { actions =>
+            for {
+              _ <- actions.traverse_(interpretAction)
+              _ <- cancelled.set(true).whenA(actions.exists(isCancel))
+              awaitingFinal <- cancelled.get
+            } yield {
+              val ended = actions.exists {
+                case NotifyHangup(_) => true; case _ => false
+              }
+              if awaitingFinal then !endsCancelledCall(event) else !ended
             }
-            if awaitingFinal then !endsCancelledCall(event) else !ended
           }
-        }
+      }
 
   private def isCancel(action: SipAction): Boolean = action match {
     case SendCancel(_) => true
@@ -276,10 +286,12 @@ private[softphone4s] class OutboundCall[F[_]: Async] private (
     * remote party will not receive.
     */
   private def applyAnswer(response: SipResponse): F[Unit] =
-    SdpCodec
-      .parseOffer(response.body)
-      .filter(_.isAcceptable)
-      .traverse_(o => media.retarget(o.ip, o.port, o.direction))
+    inUse
+      .flatMap(caps =>
+        SdpCodec
+          .parseOffer(response.body, caps)
+          .traverse_(o => media.retarget(o.ip, o.port, o.direction))
+      )
 
   def changeSession(change: SessionChange): F[Unit] =
     events.send(SipEvent.SessionChangeRequested(change)).void
@@ -525,7 +537,7 @@ private[softphone4s] class OutboundCall[F[_]: Async] private (
               endpoint.buildAck(
                 dialog,
                 branch,
-                remoteSdpForAnswer.map(_ => endpoint.buildSdpAnswer)
+                remoteSdpForAnswer.map(endpoint.buildSdpAnswer)
               ),
               dialog,
               to
@@ -564,16 +576,23 @@ private[softphone4s] class OutboundCall[F[_]: Async] private (
           respondTo(request, endpoint.buildInfoOk(request))
 
       case SendReinvite(dialog, change) =>
-        (newBranch(), destinationFor(dialog)).flatMapN { (branch, to) =>
-          logger.debug(Map("change" -> change.toString))(
-            "Sending a session change"
-          ) >>
-            startInDialog(
-              endpoint.buildSessionRequest(dialog, branch, change),
-              dialog,
-              to
-            )
-        }
+        (
+          newBranch(),
+          destinationFor(dialog),
+          media.restrict(endpoint.capabilities)
+        )
+          .flatMapN { (branch, to, caps) =>
+            logger.debug(Map("change" -> change.toString))(
+              "Sending a session change"
+            ) >>
+              startInDialog(
+                endpoint
+                  .withCapabilities(caps)
+                  .buildSessionRequest(dialog, branch, change),
+                dialog,
+                to
+              )
+          }
 
       case ApplyAnswer(response) => applyAnswer(response)
 
@@ -587,35 +606,46 @@ private[softphone4s] class OutboundCall[F[_]: Async] private (
           respondTo(request, endpoint.buildOptionsOk(request))
 
       case SendSessionOk(request, offer) =>
-        val ok = endpoint.buildSessionOk(
-          request,
-          offer.fold("")(
-            SdpCodec.buildAnswerTo(_, endpoint.mediaIp, endpoint.rtpPort)
+        media.restrict(endpoint.capabilities).flatMap { caps =>
+          val ok = endpoint.buildSessionOk(
+            request,
+            offer.fold("")(
+              SdpCodec
+                .buildAnswerTo(_, endpoint.mediaIp, endpoint.rtpPort, caps)
+            )
           )
-        )
-        logger.debug("Answering a session change") >>
-          answerSession(request, ok, AckContent.Empty) >>
-          offer.traverse_(o => media.retarget(o.ip, o.port, o.direction))
+          logger.debug("Answering a session change") >>
+            answerSession(request, ok, AckContent.Empty) >>
+            offer.traverse_(o => media.retarget(o.ip, o.port, o.direction))
+        }
 
       case SendOfferOk(request) =>
-        logger.debug("Answering a re-INVITE with an offer") >>
-          answerSession(
-            request,
-            endpoint.buildSessionOk(
+        media.restrict(endpoint.capabilities).flatMap { caps =>
+          logger.debug("Answering a re-INVITE with an offer") >>
+            answerSession(
               request,
-              SdpCodec.buildOffer(endpoint.mediaIp, endpoint.rtpPort)
-            ),
-            AckContent.Answer
-          )
+              endpoint.buildSessionOk(
+                request,
+                SdpCodec.buildOffer(endpoint.mediaIp, endpoint.rtpPort, caps)
+              ),
+              AckContent.Answer
+            )
+        }
 
       case StartMedia(sdpBody) =>
-        val (remoteIp, remotePort) =
-          SdpCodec.parseAudioEndpoint(
-            sdpBody,
-            endpoint.bindAddress,
-            endpoint.rtpPort
-          )
-        media.start(remoteIp, remotePort, supervisor, dtmfChannel.send(_).void)
+        SdpCodec.planFromAnswer(
+          sdpBody,
+          endpoint.capabilities,
+          MediaDirection.SendRecv
+        ) match {
+          case Right(plan) =>
+            media.start(plan, supervisor, dtmfChannel.send(_).void)
+          case Left(reject) =>
+            // An answer we cannot use: no media can flow, so the call goes.
+            logger.warn(Map("reason" -> reject.message))(
+              "The answer cannot be used; hanging up"
+            ) >> hangup
+        }
 
       case StopMedia =>
         media.stop()
@@ -709,6 +739,7 @@ private[softphone4s] object OutboundCall {
         TransactionConfig(),
         (response, to) => layer.transmit(response, to),
         offer => media.retarget(offer.ip, offer.port, offer.direction),
+        media.restrict(first.endpoint.capabilities),
         logger
       )
       call = new OutboundCall(

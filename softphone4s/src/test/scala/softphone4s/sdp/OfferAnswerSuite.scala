@@ -46,8 +46,9 @@ class OfferAnswerSuite extends FunSuite {
         "s=-",
         "c=IN IP4 192.0.2.10",
         "t=0 0",
-        "m=audio 20000 RTP/AVP 0 101",
+        "m=audio 20000 RTP/AVP 0 8 101",
         "a=rtpmap:0 PCMU/8000",
+        "a=rtpmap:8 PCMA/8000",
         "a=rtpmap:101 telephone-event/8000",
         "a=fmtp:101 0-16",
         "a=sendrecv"
@@ -212,7 +213,7 @@ class OfferAnswerSuite extends FunSuite {
   test("no codec in common, and no address, are refused") {
     assertEquals(
       OfferAnswer
-        .answer(offerOf("m=audio 4000 RTP/AVP 8"), local, Capabilities.Default)
+        .answer(offerOf("m=audio 4000 RTP/AVP 18"), local, Capabilities.Default)
         .left
         .toOption,
       Some(Reject.NoCommonCodec)
@@ -256,7 +257,7 @@ class OfferAnswerSuite extends FunSuite {
     assertEquals(
       OfferAnswer
         .accept(
-          offerOf("m=audio 4000 RTP/AVP 8"),
+          offerOf("m=audio 4000 RTP/AVP 18"),
           caps,
           MediaDirection.SendRecv
         )

@@ -28,6 +28,14 @@ object SoftphoneError {
       extends SoftphoneError(s"Timed out connecting to $address")
   final case class TransportUnavailable(transport: String)
       extends SoftphoneError(s"No $transport transport is available")
+  case object NoCodecsConfigured
+      extends SoftphoneError("No codec is configured")
+  final case class AudioFormatMismatch(codecRate: Int, deviceRate: Int)
+      extends SoftphoneError(
+        s"The codecs work at $codecRate Hz but the audio format is $deviceRate Hz"
+      )
+  final case class CodecUnavailable(codec: String)
+      extends SoftphoneError(s"No implementation of the codec $codec")
   final case class TlsConfigurationInvalid(reason: String)
       extends SoftphoneError(s"Cannot set up TLS: $reason")
   final case class UnknownAccount(account: String)

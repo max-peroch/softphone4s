@@ -313,6 +313,41 @@ class MultiAccountSuite extends CatsEffectSuite {
     )
   }
 
+  test("the codecs are read from configuration, in order") {
+    val parsed = ConfigSource
+      .string(
+        """user = alice
+          |password = pw
+          |realm = example.com
+          |codecs = ["pcma", "pcmu"]""".stripMargin
+      )
+      .load[SoftphoneConfig]
+      .fold(failures => fail(failures.prettyPrint()), identity)
+    assertEquals(
+      parsed.codecs,
+      List(
+        softphone4s.config.CodecChoice.Pcma,
+        softphone4s.config.CodecChoice.Pcmu
+      )
+    )
+    assertEquals(
+      parsed.capabilities.codecs.map(_.encoding).toList,
+      List("PCMA", "PCMU")
+    )
+  }
+
+  test("a codec nobody knows is a configuration error") {
+    val parsed = ConfigSource
+      .string(
+        """user = alice
+          |password = pw
+          |realm = example.com
+          |codecs = ["speex"]""".stripMargin
+      )
+      .load[SoftphoneConfig]
+    assert(parsed.isLeft)
+  }
+
   test("a STUN server is read from configuration") {
     val parsed = ConfigSource
       .string(

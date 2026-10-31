@@ -6,15 +6,16 @@ import softphone4s.sdp.{
   Capabilities,
   LocalMedia,
   MediaKind,
+  MediaPlan,
   MediaProtocol,
   OfferAnswer,
+  Reject,
   SessionDescription
 }
 
-/** The SDP the call code deals in: one audio stream, PCMU and telephone events
-  * on 101. It reads and writes through [[softphone4s.sdp]], which does the
-  * parsing and the offer/answer; this is the shape the dialogs were written
-  * against, until they take a negotiated plan instead.
+/** The SDP the call code deals in: one audio stream, in the codecs we have. It
+  * reads and writes through [[softphone4s.sdp]], which does the parsing and the
+  * offer/answer; this is the shape the dialogs were written against.
   */
 object SdpCodec {
 
@@ -25,21 +26,7 @@ object SdpCodec {
     */
   private val probe = LocalMedia(ip"0.0.0.0", port"0", 0, 0)
 
-  /** Extract the remote RTP endpoint from an SDP body. */
-  def parseAudioEndpoint(
-      sdp: String,
-      defaultIp: IpAddress,
-      defaultPort: Port
-  ): (IpAddress, Port) =
-    SessionDescription
-      .parse(sdp)
-      .toOption
-      .flatMap(d => d.media.find(_.kind == MediaKind.Audio).map(m => (d, m)))
-      .fold((defaultIp, defaultPort))((d, m) =>
-        (d.addressOf(m).getOrElse(defaultIp), m.port)
-      )
-
-  /** What a caller's SDP offers for audio. */
+  /** What a caller's SDP offers for audio, and that we can answer. */
   final case class AudioOffer(
       ip: IpAddress,
       port: Port,
@@ -53,18 +40,16 @@ object SdpCodec {
       * sender (`sendonly`, `inactive`, or the old connection address 0.0.0.0).
       */
     def isHold: Boolean = !direction.receives
-
-    /** Whether we can answer it: a codec of ours is in it. */
-    def isAcceptable: Boolean =
-      OfferAnswer.answer(description, probe, Capabilities.Default).isRight
   }
 
-  /** The audio an SDP body offers, or `None` if it has no audio stream we can
-    * address: one that is not declined, is plain RTP and has an address.
-    * Telephone-event counts only on payload type 101, the one the RTP code
-    * receives.
+  /** The audio an SDP body offers, if it has a stream we can address and answer
+    * with `capabilities`: one that is not declined, is plain RTP, has an
+    * address and a codec of ours.
     */
-  def parseOffer(sdp: String): Option[AudioOffer] =
+  def parseOffer(
+      sdp: String,
+      capabilities: Capabilities
+  ): Option[AudioOffer] =
     for {
       description <- SessionDescription.parse(sdp).toOption
       section     <- description.media.find(m =>
@@ -72,6 +57,7 @@ object SdpCodec {
           m.protocol == MediaProtocol.RtpAvp
       )
       ip <- description.addressOf(section)
+      _  <- OfferAnswer.answer(description, probe, capabilities).toOption
     } yield AudioOffer(
       ip,
       section.port,
@@ -81,40 +67,84 @@ object SdpCodec {
       description
     )
 
-  /** An answer to `offer`: PCMU, and telephone-event only if it was offered, so
-    * the answer stays within what the caller proposed (RFC 3264 §6).
+  /** What answering `offer` settles. */
+  def planFor(
+      offer: AudioOffer,
+      capabilities: Capabilities
+  ): Either[Reject, MediaPlan] =
+    OfferAnswer.answer(offer.description, probe, capabilities).map(_.plan)
+
+  /** What an answer to the offer we made settles. A body that is not SDP has no
+    * audio in it.
+    */
+  def planFromAnswer(
+      sdp: String,
+      capabilities: Capabilities,
+      direction: MediaDirection
+  ): Either[Reject, MediaPlan] =
+    SessionDescription
+      .parse(sdp)
+      .left
+      .map(_ => Reject.NoAudio)
+      .flatMap(OfferAnswer.accept(_, capabilities, direction))
+
+  /** An answer to `offer`: our first codec among those offered, and
+    * telephone-event only if it was offered, so the answer stays within what
+    * the caller proposed (RFC 3264 §6).
     */
   def buildAnswerTo(
       offer: AudioOffer,
       localIp: IpAddress,
-      localRtpPort: Port
-  ): String = {
-    val local = LocalMedia(localIp, localRtpPort, 0, 0)
-    OfferAnswer
-      .answer(offer.description, local, Capabilities.Default)
+      localRtpPort: Port,
+      capabilities: Capabilities
+  ): String =
+    answerText(offer.description, localIp, localRtpPort, capabilities)
+
+  /** The answer to the offer in `sdp`, which was in a 200: it goes in our ACK
+    * (RFC 3261 §14.2). If it cannot be answered, an offer of our own stands in.
+    */
+  def buildAnswerToBody(
+      sdp: String,
+      localIp: IpAddress,
+      localRtpPort: Port,
+      capabilities: Capabilities
+  ): String =
+    SessionDescription
+      .parse(sdp)
       .fold(
-        _ => buildAnswer(localIp, localRtpPort),
+        _ => buildOffer(localIp, localRtpPort, capabilities),
+        answerText(_, localIp, localRtpPort, capabilities)
+      )
+
+  private def answerText(
+      offered: SessionDescription,
+      localIp: IpAddress,
+      localRtpPort: Port,
+      capabilities: Capabilities
+  ): String =
+    OfferAnswer
+      .answer(
+        offered,
+        LocalMedia(localIp, localRtpPort, 0, 0),
+        capabilities
+      )
+      .fold(
+        _ => buildOffer(localIp, localRtpPort, capabilities),
         _.description.render
       )
-  }
 
-  /** Build a minimal SDP offer. */
+  /** An SDP offer of everything in `capabilities`. */
   def buildOffer(
       localIp: IpAddress,
       localRtpPort: Port,
+      capabilities: Capabilities,
       direction: MediaDirection = MediaDirection.SendRecv
   ): String =
     OfferAnswer
       .offer(
         LocalMedia(localIp, localRtpPort, 0, 0),
-        Capabilities.Default,
+        capabilities,
         direction
       )
       .render
-
-  /** Build a minimal SDP answer, offering the same fixed codec set as
-    * `buildOffer`.
-    */
-  def buildAnswer(localIp: IpAddress, localRtpPort: Port): String =
-    buildOffer(localIp, localRtpPort)
 }

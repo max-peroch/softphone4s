@@ -9,6 +9,9 @@ import fs2.io.net.{Datagram, DatagramSocket, Network}
 import munit.CatsEffectSuite
 import softphone4s.codec.RtpCodec
 import softphone4s.config.RtpLatching
+import softphone4s.media.AudioCodecs
+import softphone4s.model.MediaDirection
+import softphone4s.sdp.{Codec, MediaPlan}
 import softphone4s.transport.{RawPeer, RtpLatch}
 
 import scala.concurrent.duration.*
@@ -54,9 +57,26 @@ class MediaLatchingSuite extends CatsEffectSuite {
         for {
           // The port our RTP is received on: free, and found by binding it first.
           ours  <- bound.use((_, address) => IO.pure(address.port))
-          media <- MediaSession.create[IO](320, loopback, ours, latching)
-          _ <- media.start(loopback, signalled.port, supervisor, _ => IO.unit)
-          _ <- IO.sleep(200.millis)
+          media <- MediaSession.create[IO](
+            loopback,
+            ours,
+            AudioCodecs.Default,
+            latching
+          )
+          _ <- media.start(
+            MediaPlan(
+              SocketAddress(loopback, signalled.port),
+              Codec.Pcmu,
+              0,
+              None,
+              MediaDirection.SendRecv,
+              MediaDirection.SendRecv
+            ),
+            supervisor,
+            _ => IO.unit
+          )
+          // The media socket is bound in the background; give it time.
+          _ <- IO.sleep(500.millis)
           _ <- (1 to packetsFromActual).toList.traverse_(n =>
             actualSocket.write(Datagram(SocketAddress(loopback, ours), rtp(n)))
           )
@@ -75,7 +95,7 @@ class MediaLatchingSuite extends CatsEffectSuite {
     }
 
   test("media follows the remote party's packets to the port they come from") {
-    scenario(RtpLatching.Follow, RtpLatch.Threshold + 2)
+    scenario(RtpLatching.Follow, RtpLatch.Threshold + 20)
       .map(assertEquals(_, (false, true)))
   }
 

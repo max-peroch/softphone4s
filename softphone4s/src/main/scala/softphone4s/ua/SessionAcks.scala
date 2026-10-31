@@ -7,6 +7,7 @@ import cats.syntax.all.*
 import com.comcast.ip4s.{IpAddress, SocketAddress}
 import org.typelevel.log4cats.StructuredLogger
 import softphone4s.codec.SdpCodec
+import softphone4s.sdp.Capabilities
 import softphone4s.codec.SdpCodec.AudioOffer
 import softphone4s.fsm.OkRetransmission
 import softphone4s.model.{CSeqNumber, SipRequest, SipResponse}
@@ -22,6 +23,7 @@ private[softphone4s] final class SessionAcks[F[_]: Async] private (
     config: TransactionConfig,
     transmit: (SipResponse, SocketAddress[IpAddress]) => F[Unit],
     retarget: AudioOffer => F[Unit],
+    capabilities: F[Capabilities],
     logger: StructuredLogger[F]
 ) {
 
@@ -74,11 +76,12 @@ private[softphone4s] final class SessionAcks[F[_]: Async] private (
       .flatMap(
         _.traverse_ { entry =>
           entry.acked.complete(()) >>
-            SdpCodec
-              .parseOffer(ack.body)
-              .filter(_.isAcceptable)
-              .filter(_ => entry.ack == AckContent.Answer)
-              .traverse_(retarget)
+            capabilities.flatMap(caps =>
+              SdpCodec
+                .parseOffer(ack.body, caps)
+                .filter(_ => entry.ack == AckContent.Answer)
+                .traverse_(retarget)
+            )
         }
       )
 }
@@ -95,9 +98,20 @@ private[softphone4s] object SessionAcks {
       config: TransactionConfig,
       transmit: (SipResponse, SocketAddress[IpAddress]) => F[Unit],
       retarget: AudioOffer => F[Unit],
+      capabilities: F[Capabilities],
       logger: StructuredLogger[F]
   ): F[SessionAcks[F]] =
     Ref
       .of[F, Map[CSeqNumber, Pending[F]]](Map.empty)
-      .map(new SessionAcks(_, supervisor, config, transmit, retarget, logger))
+      .map(
+        new SessionAcks(
+          _,
+          supervisor,
+          config,
+          transmit,
+          retarget,
+          capabilities,
+          logger
+        )
+      )
 }

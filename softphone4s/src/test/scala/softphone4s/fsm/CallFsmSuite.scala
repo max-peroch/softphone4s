@@ -750,7 +750,7 @@ class CallFsmSuite extends FunSuite {
   }
 
   test("a re-INVITE whose SDP we cannot answer is refused 488") {
-    val noPcmu = sdpBody().replace("RTP/AVP 0 101", "RTP/AVP 8")
+    val noPcmu = sdpBody().replace("RTP/AVP 0 101", "RTP/AVP 18")
     assertEquals(
       replyOf(
         step(

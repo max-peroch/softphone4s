@@ -20,6 +20,7 @@ import softphone4s.dns.{
 import softphone4s.fsm.CallTimer
 import softphone4s.model.*
 import softphone4s.registration.Registration
+import softphone4s.media.AudioCodecs
 import softphone4s.runtime.{Entropy, Timers}
 import softphone4s.stun.StunClient
 import softphone4s.transaction.{
@@ -32,7 +33,6 @@ import softphone4s.transaction.{
 import softphone4s.transport.{
   Inbound,
   RoutedTransport,
-  RtpTransport,
   SipTransport,
   TcpTransport,
   TlsTransport
@@ -54,7 +54,7 @@ class SoftphoneStreaming[F[_]: Async: Network] private (
     routes: Ref[F, Map[CallId, Channel[F, DialogInput[F]]]],
     nextCallIndex: Ref[F, Int],
     entropy: Entropy[F],
-    pcmFrameBytes: Int,
+    codecs: AudioCodecs,
     supervisor: Supervisor[F],
     incomingCalls: Queue[F, IncomingCall[F]],
     logger: StructuredLogger[F]
@@ -166,7 +166,8 @@ class SoftphoneStreaming[F[_]: Async: Network] private (
             localIp,
             sipPortFor(protocol),
             config.baseRtpPort,
-            protocol
+            protocol,
+            config.capabilities
           )
         )
       )
@@ -366,7 +367,8 @@ class SoftphoneStreaming[F[_]: Async: Network] private (
             localIp,
             sipPortFor(transport),
             rtpPort,
-            transport
+            transport,
+            config.capabilities
           )
         )
       } yield endpoint
@@ -386,9 +388,9 @@ class SoftphoneStreaming[F[_]: Async: Network] private (
       timers     <- Timers.resource[F, CallTimer]
       media      <- Resource.eval(
         MediaSession.create(
-          pcmFrameBytes,
           first.endpoint.bindAddress,
           first.endpoint.rtpPort,
+          codecs,
           config.nat.rtpLatching
         )
       )
@@ -544,9 +546,9 @@ class SoftphoneStreaming[F[_]: Async: Network] private (
       media <- Resource.eval(
         MediaSession
           .create(
-            pcmFrameBytes,
             endpoint.bindAddress,
             endpoint.rtpPort,
+            codecs,
             config.nat.rtpLatching
           )
       )
@@ -605,6 +607,9 @@ object SoftphoneStreaming {
       dns: F[DnsRecords[F]]
   ): Resource[F, SoftphoneStreaming[F]] =
     for {
+      codecs <- Resource.eval(
+        Async[F].fromEither(audioCodecs(config, audioFormat))
+      )
       udp <- SipTransport.udp[F](
         SocketAddress(config.bindAddress, config.localSipPort),
         logger
@@ -667,7 +672,7 @@ object SoftphoneStreaming {
         routes,
         callIndex,
         entropy,
-        pcmFrameBytes = audioFormat.getFrameSize * RtpTransport.PacketSamples,
+        codecs = codecs,
         supervisor,
         incomingCalls,
         logger
@@ -684,6 +689,30 @@ object SoftphoneStreaming {
           )
         )
     } yield softphone
+
+  /** The codecs configured, if there are some and they work at the sample rate
+    * of the audio format: a different rate would have to be converted, which is
+    * not done.
+    */
+  private def audioCodecs(
+      config: SoftphoneConfig,
+      audioFormat: AudioFormat
+  ): Either[SoftphoneError, AudioCodecs] =
+    for {
+      chosen <- NonEmptyList
+        .fromList(config.codecs)
+        .toRight(SoftphoneError.NoCodecsConfigured)
+      codecs = AudioCodecs.of(chosen)
+      rate   = audioFormat.getSampleRate.toInt
+      _ <- Either.cond(
+        codecs.pcmRate.contains(rate),
+        (),
+        SoftphoneError.AudioFormatMismatch(
+          codecs.pcmRate.getOrElse(0),
+          rate
+        )
+      )
+    } yield codecs
 
   /** Asks the STUN server how we look from outside, and again every `refresh`;
     * a round that fails is logged and tried again at the next.

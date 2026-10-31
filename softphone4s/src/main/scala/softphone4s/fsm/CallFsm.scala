@@ -3,6 +3,7 @@ package softphone4s.fsm
 import cats.data.State
 import cats.syntax.all.*
 import softphone4s.model.*
+import softphone4s.sdp.Capabilities
 
 // ---------------------------------------------------------------------------
 // Pure state machine
@@ -30,7 +31,10 @@ object CallFsm {
 
   type Transition = State[CallState, List[SipAction]]
 
-  def transition(event: SipEvent): Transition =
+  def transition(
+      event: SipEvent,
+      capabilities: Capabilities = Capabilities.Default
+  ): Transition =
     State.get[CallState].flatMap { state =>
       (state, event) match {
 
@@ -217,7 +221,7 @@ object CallFsm {
         case (Established(dialog), RequestReceived(request)) =>
           go(
             withDialog(state, dialog.seen(request.headers.cseq.seq)),
-            DialogRequest.of(request) match {
+            DialogRequest.of(request, capabilities) match {
               case DialogRequest.Query   => List(SendOptionsOk(request))
               case DialogRequest.Refresh => List(SendSessionOk(request, None))
               case DialogRequest.DelayedOffer => List(SendOfferOk(request))

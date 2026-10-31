@@ -4,6 +4,7 @@ import cats.data.State
 import cats.syntax.all.*
 import softphone4s.codec.SdpCodec
 import softphone4s.model.*
+import softphone4s.sdp.Capabilities
 import softphone4s.transaction.TransactionConfig
 import scala.concurrent.duration.*
 
@@ -35,7 +36,8 @@ object InboundCallFsm {
       invite: SipRequest,
       localTag: Tag,
       config: TransactionConfig,
-      answerTimeout: FiniteDuration
+      answerTimeout: FiniteDuration,
+      capabilities: Capabilities
   ): (InboundState, List[InboundAction]) = {
     def turnAway(status: FailureStatus) =
       (
@@ -54,7 +56,7 @@ object InboundCallFsm {
       case _ if insecureSips => turnAway(FailureStatus.Forbidden)
       case None              => turnAway(FailureStatus.BadRequest)
       case Some(dialog)      =>
-        SdpCodec.parseOffer(invite.body).filter(_.isAcceptable) match {
+        SdpCodec.parseOffer(invite.body, capabilities) match {
           case None        => turnAway(FailureStatus.NotAcceptableHere)
           case Some(offer) =>
             (
@@ -67,7 +69,10 @@ object InboundCallFsm {
     }
   }
 
-  def transition(event: InboundEvent): Transition =
+  def transition(
+      event: InboundEvent,
+      capabilities: Capabilities = Capabilities.Default
+  ): Transition =
     State.get[InboundState].flatMap { state =>
       (state, event) match {
 
@@ -188,6 +193,7 @@ object InboundCallFsm {
 
         case (Answered(ctx, _), RequestReceived(request)) =>
           inDialog(
+            capabilities,
             ctx.dialog,
             request,
             stopRetransmits,
@@ -195,9 +201,17 @@ object InboundCallFsm {
             Active(_)
           )
         case (Active(dialog), RequestReceived(request)) =>
-          inDialog(dialog, request, Nil, answeredWithoutAck = false, Active(_))
+          inDialog(
+            capabilities,
+            dialog,
+            request,
+            Nil,
+            answeredWithoutAck = false,
+            Active(_)
+          )
         case (Reinviting(dialog, change), RequestReceived(request)) =>
           inDialog(
+            capabilities,
             dialog,
             request,
             Nil,
@@ -207,6 +221,7 @@ object InboundCallFsm {
           )
         case (Retrying(dialog, change), RequestReceived(request)) =>
           inDialog(
+            capabilities,
             dialog,
             request,
             Nil,
@@ -303,6 +318,7 @@ object InboundCallFsm {
     * than the last (§12.2.2).
     */
   private def inDialog(
+      capabilities: Capabilities,
       dialog: SipDialog,
       request: SipRequest,
       before: List[InboundAction],
@@ -371,7 +387,7 @@ object InboundCallFsm {
         case _ =>
           go(
             rebuild(seen),
-            DialogRequest.of(request) match {
+            DialogRequest.of(request, capabilities) match {
               case DialogRequest.Query   => List(SendOptionsOk(request))
               case DialogRequest.Refresh => List(SendSessionOk(request, None))
               case DialogRequest.DelayedOffer => List(SendOfferOk(request))

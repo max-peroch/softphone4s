@@ -2,6 +2,7 @@ package softphone4s.model
 
 import com.comcast.ip4s.{Host, IpAddress, Port, SocketAddress}
 import softphone4s.config.{AccountConfig, SoftphoneConfig}
+import softphone4s.sdp.Capabilities
 
 /** Where and as whom we speak SIP: the address we advertise (`ip`, `sipPort`,
   * `rtpPort`), the socket address we bind (`bindAddress`), the account's
@@ -18,8 +19,15 @@ final case class LocalEndpoint private (
     credentials: Credentials,
     transport: TransportProtocol,
     scheme: SipScheme,
-    mapping: Option[SocketAddress[IpAddress]]
+    mapping: Option[SocketAddress[IpAddress]],
+    capabilities: Capabilities
 ) {
+
+  /** The same endpoint offering and answering with `other`: for a session
+    * change, which keeps to the codec the call is in.
+    */
+  def withCapabilities(other: Capabilities): LocalEndpoint =
+    copy(capabilities = other)
 
   /** The address media should be sent to: ours as the outside sees it when a
     * server has told us what that is, else our own.
@@ -99,7 +107,8 @@ object LocalEndpoint {
       ip,
       sipPort,
       rtpPort,
-      config.transport
+      config.transport,
+      config.capabilities
     )
 
   /** The endpoint for one of the accounts, speaking SIP over `transport`. */
@@ -109,7 +118,8 @@ object LocalEndpoint {
       ip: IpAddress,
       sipPort: Port,
       rtpPort: Port,
-      transport: TransportProtocol
+      transport: TransportProtocol,
+      capabilities: Capabilities = Capabilities.Default
   ): Either[SoftphoneError, LocalEndpoint] =
     for {
       user    <- User(config.user).left.map(invalid(config.user, _))
@@ -131,7 +141,8 @@ object LocalEndpoint {
       Credentials(config.user, config.password),
       transport,
       SipScheme.Sip,
-      None
+      None,
+      capabilities
     )
 
   /** The Contact URI for reaching us at `ip`:`port`. A `sip:` one names the

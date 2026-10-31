@@ -148,16 +148,18 @@ private[softphone4s] final class InboundCall[F[_]: Async] private (
 
   /** Runs one event through the machine; false once the call is over. */
   private def process(event: InboundEvent): F[Boolean] =
-    stateRef
-      .modify(s => InboundCallFsm.transition(event).run(s).value)
-      .flatMap { actions =>
-        actions
-          .traverse_(interpret)
-          .as(!actions.exists {
-            case NotifyHangup(_) => true
-            case _               => false
-          })
-      }
+    media.restrict(endpoint.capabilities).flatMap { caps =>
+      stateRef
+        .modify(s => InboundCallFsm.transition(event, caps).run(s).value)
+        .flatMap { actions =>
+          actions
+            .traverse_(interpret)
+            .as(!actions.exists {
+              case NotifyHangup(_) => true
+              case _               => false
+            })
+        }
+    }
 
   // ---- Actions -------------------------------------------------------------------
 
@@ -188,7 +190,8 @@ private[softphone4s] final class InboundCall[F[_]: Async] private (
             SdpCodec.buildAnswerTo(
               ctx.offer,
               endpoint.mediaIp,
-              endpoint.rtpPort
+              endpoint.rtpPort,
+              endpoint.capabilities
             )
           )
         )
@@ -209,12 +212,18 @@ private[softphone4s] final class InboundCall[F[_]: Async] private (
         respondTo(request, endpoint.buildInfoOk(request))
 
       case SendReinvite(dialog, change) =>
-        (entropy.branch, destinationFor(dialog)).flatMapN { (branch, to) =>
+        (
+          entropy.branch,
+          destinationFor(dialog),
+          media.restrict(endpoint.capabilities)
+        ).flatMapN { (branch, to, caps) =>
           logger.debug(Map("change" -> change.toString))(
             "Sending a session change"
           ) >>
             startInDialog(
-              endpoint.buildSessionRequest(dialog, branch, change),
+              endpoint
+                .withCapabilities(caps)
+                .buildSessionRequest(dialog, branch, change),
               dialog,
               to
             )
@@ -242,26 +251,31 @@ private[softphone4s] final class InboundCall[F[_]: Async] private (
           respondTo(request, endpoint.buildOptionsOk(request))
 
       case SendSessionOk(request, offer) =>
-        val ok = endpoint.buildSessionOk(
-          request,
-          offer.fold("")(
-            SdpCodec.buildAnswerTo(_, endpoint.mediaIp, endpoint.rtpPort)
+        media.restrict(endpoint.capabilities).flatMap { caps =>
+          val ok = endpoint.buildSessionOk(
+            request,
+            offer.fold("")(
+              SdpCodec
+                .buildAnswerTo(_, endpoint.mediaIp, endpoint.rtpPort, caps)
+            )
           )
-        )
-        logger.debug("Answering a session change") >>
-          answerSession(request, ok, AckContent.Empty) >>
-          offer.traverse_(o => media.retarget(o.ip, o.port, o.direction))
+          logger.debug("Answering a session change") >>
+            answerSession(request, ok, AckContent.Empty) >>
+            offer.traverse_(o => media.retarget(o.ip, o.port, o.direction))
+        }
 
       case SendOfferOk(request) =>
-        logger.debug("Answering a re-INVITE with an offer") >>
-          answerSession(
-            request,
-            endpoint.buildSessionOk(
+        media.restrict(endpoint.capabilities).flatMap { caps =>
+          logger.debug("Answering a re-INVITE with an offer") >>
+            answerSession(
               request,
-              SdpCodec.buildOffer(endpoint.mediaIp, endpoint.rtpPort)
-            ),
-            AckContent.Answer
-          )
+              endpoint.buildSessionOk(
+                request,
+                SdpCodec.buildOffer(endpoint.mediaIp, endpoint.rtpPort, caps)
+              ),
+              AckContent.Answer
+            )
+        }
 
       case SendBye(dialog) =>
         (entropy.branch, destinationFor(dialog)).flatMapN { (branch, to) =>
@@ -273,7 +287,14 @@ private[softphone4s] final class InboundCall[F[_]: Async] private (
         }
 
       case StartMedia(offer) =>
-        media.start(offer.ip, offer.port, supervisor, dtmfChannel.send(_).void)
+        SdpCodec.planFor(offer, endpoint.capabilities) match {
+          case Right(plan) =>
+            media.start(plan, supervisor, dtmfChannel.send(_).void)
+          case Left(reject) =>
+            logger.error(Map("reason" -> reject.message))(
+              "The offer we accepted cannot be answered; no media"
+            )
+        }
 
       case StopMedia => media.stop()
 
@@ -360,10 +381,13 @@ private[softphone4s] final class InboundCall[F[_]: Async] private (
     * remote party will not receive.
     */
   private def applyAnswer(response: SipResponse): F[Unit] =
-    SdpCodec
-      .parseOffer(response.body)
-      .filter(_.isAcceptable)
-      .traverse_(o => media.retarget(o.ip, o.port, o.direction))
+    media
+      .restrict(endpoint.capabilities)
+      .flatMap(caps =>
+        SdpCodec
+          .parseOffer(response.body, caps)
+          .traverse_(o => media.retarget(o.ip, o.port, o.direction))
+      )
 
   /** Sends a request within `dialog` to `to`. One that would go over UDP but is
     * too big for a datagram goes over TCP instead (RFC 3261 §18.1.1): its Via
@@ -498,7 +522,8 @@ private[softphone4s] object InboundCall {
         invite.request,
         localTag,
         transactionConfig,
-        answerTimeout
+        answerTimeout,
+        endpoint.capabilities
       )
       stateRef           <- Ref[F].of(state)
       events             <- Channel.unbounded[F, InboundEvent]
@@ -516,6 +541,7 @@ private[softphone4s] object InboundCall {
         transactionConfig,
         (response, to) => layer.transmit(response, to),
         offer => media.retarget(offer.ip, offer.port, offer.direction),
+        media.restrict(endpoint.capabilities),
         logger
       )
       call = new InboundCall(

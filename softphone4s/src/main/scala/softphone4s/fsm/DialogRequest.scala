@@ -1,6 +1,7 @@
 package softphone4s.fsm
 
 import softphone4s.codec.SdpCodec
+import softphone4s.sdp.Capabilities
 import softphone4s.codec.SdpCodec.AudioOffer
 import softphone4s.model.{FailureStatus, SipMethod, SipRequest}
 
@@ -31,13 +32,16 @@ enum DialogRequest {
 
 object DialogRequest {
 
-  def of(request: SipRequest): DialogRequest = request.method match {
+  def of(
+      request: SipRequest,
+      capabilities: Capabilities
+  ): DialogRequest = request.method match {
     case SipMethod.Options                   => Query
     case SipMethod.Invite | SipMethod.Update =>
       if request.body.isEmpty then
         if request.method == SipMethod.Update then Refresh else DelayedOffer
       else
-        SdpCodec.parseOffer(request.body).filter(_.isAcceptable) match {
+        SdpCodec.parseOffer(request.body, capabilities) match {
           case Some(offer) => Offer(offer)
           case None        => Refused(FailureStatus.NotAcceptableHere)
         }

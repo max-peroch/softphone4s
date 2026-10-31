@@ -7,6 +7,7 @@ import softphone4s.fsm.InboundAction.*
 import softphone4s.fsm.InboundEvent.*
 import softphone4s.fsm.InboundState.*
 import softphone4s.model.*
+import softphone4s.sdp.Capabilities
 import softphone4s.transaction.TransactionConfig
 
 import scala.concurrent.duration.*
@@ -66,7 +67,13 @@ class InboundCallFsmSuite extends FunSuite {
     )
 
   private def start(i: SipRequest = invite) =
-    InboundCallFsm.start(i, tag("lt"), config, 60.seconds)
+    InboundCallFsm.start(
+      i,
+      tag("lt"),
+      config,
+      60.seconds,
+      Capabilities.Default
+    )
 
   private def step(state: InboundState, event: InboundEvent) =
     InboundCallFsm.transition(event).run(state).value
@@ -98,7 +105,7 @@ class InboundCallFsmSuite extends FunSuite {
     List(
       "",
       "v=0\r\n",
-      sdp.replace("RTP/AVP 0 101", "RTP/AVP 8"),
+      sdp.replace("RTP/AVP 0 101", "RTP/AVP 18"),
       sdp.replace("c=IN IP4 192.0.2.5\r\n", "")
     )
       .foreach { body =>
@@ -400,7 +407,7 @@ class InboundCallFsmSuite extends FunSuite {
     val bad = request(
       SipMethod.Invite,
       11,
-      body = sdpBody().replace("RTP/AVP 0 101", "RTP/AVP 8")
+      body = sdpBody().replace("RTP/AVP 0 101", "RTP/AVP 18")
     )
     assertEquals(
       step(active, RequestReceived(bad))._2,
