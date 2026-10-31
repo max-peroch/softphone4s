@@ -13,6 +13,13 @@ import scala.collection.immutable.TreeMap
   * that is missing when later ones are held is a gap, reported as lost; and a
   * buffer that runs dry waits to fill again, as at the start of a talkspurt.
   *
+  * The cushion adapts. A packet that comes after its turn, or a pause in the
+  * packets that was no end of speech (the next packet does not carry the marker
+  * bit that begins a talkspurt), shows that the cushion was too small, and it
+  * grows by a frame, up to `maxDepth`; it takes effect when the buffer next
+  * fills. After [[ShrinkAfter]] frames in a row with nothing of the kind it
+  * shrinks by one, down to the configured depth.
+  *
   * It is a pure value: [[push]] and [[pull]] give the buffer that follows. The
   * sequence numbers are widened past their 16 bits so that the wrap is no
   * special case.
@@ -24,7 +31,10 @@ final case class JitterBuffer private (
     newest: Option[Long],
     phase: JitterBuffer.Phase,
     lastPlayed: Option[Long],
-    stats: JitterStats
+    stats: JitterStats,
+    depth: Int,
+    calm: Int,
+    starved: Boolean
 ) {
   import JitterBuffer.*
 
@@ -43,7 +53,7 @@ final case class JitterBuffer private (
     case Phase.Playing(_)        => play
     case Phase.Buffering(waited) =>
       if held.isEmpty then (copy(phase = Phase.Buffering(0)), Playout.Waiting)
-      else if held.size >= config.depth || waited + 1 >= config.depth then
+      else if held.size >= depth || waited + 1 >= depth then
         copy(phase = Phase.Playing(held.firstKey)).play
       else (copy(phase = Phase.Buffering(waited + 1)), Playout.Waiting)
   }
@@ -57,7 +67,10 @@ final case class JitterBuffer private (
       case _                       => false
     })
     if tooLate then
-      (copy(stats = stats.copy(late = stats.late + 1)), Arrival.Late)
+      (
+        copy(stats = stats.copy(late = stats.late + 1)).grown,
+        Arrival.Late
+      )
     else if held.contains(widened) then
       (
         copy(stats = stats.copy(duplicates = stats.duplicates + 1)),
@@ -74,9 +87,33 @@ final case class JitterBuffer private (
           reordered = stats.reordered + (if outOfOrder then 1 else 0)
         )
       )
-      (taken.withinCapacity, Arrival.Accepted)
+      // A pause that the next packet does not call the start of speech was the
+      // network's.
+      val settled =
+        if starved then
+          (if packet.marker then taken else taken.grown).copy(starved = false)
+        else taken
+      (settled.withinCapacity, Arrival.Accepted)
     }
   }
+
+  /** The cushion a frame larger, if it may be. Nothing has gone well since. */
+  private def grown: JitterBuffer =
+    if depth < config.maxDepth then
+      copy(
+        depth = depth + 1,
+        calm = 0,
+        stats = stats.copy(depth = depth + 1)
+      )
+    else copy(calm = 0)
+
+  /** A frame went by with nothing wrong; after enough, the cushion is a frame
+    * smaller, if it is larger than it need be.
+    */
+  private def calmer: JitterBuffer =
+    if calm + 1 >= ShrinkAfter && depth > config.depth then
+      copy(depth = depth - 1, calm = 0, stats = stats.copy(depth = depth - 1))
+    else copy(calm = calm + 1)
 
   /** One packet too many: the oldest goes, and playing carries on from the
     * oldest left. Packets come in one at a time, so there is never more than
@@ -107,13 +144,14 @@ final case class JitterBuffer private (
               phase = Phase.Playing(expected + 1),
               lastPlayed = Some(expected),
               stats = stats.copy(played = stats.played + 1)
-            ),
+            ).calmer,
             Playout.Frame(packet)
           )
         case None if held.nonEmpty =>
           (
             copy(
               phase = Phase.Playing(expected + 1),
+              calm = 0,
               stats = stats.copy(lost = stats.lost + 1)
             ),
             Playout.Lost
@@ -122,6 +160,8 @@ final case class JitterBuffer private (
           (
             copy(
               phase = Phase.Buffering(0),
+              calm = 0,
+              starved = true,
               stats = stats.copy(underruns = stats.underruns + 1)
             ),
             Playout.Waiting
@@ -134,7 +174,9 @@ final case class JitterBuffer private (
     * one. What was held belongs to the old one.
     */
   private def restarted(packet: JitterPacket): JitterBuffer =
-    JitterBuffer.empty(config).copy(ssrc = Some(packet.ssrc), stats = stats)
+    JitterBuffer
+      .empty(config)
+      .copy(ssrc = Some(packet.ssrc), stats = stats, depth = depth)
 }
 
 object JitterBuffer {
@@ -164,6 +206,11 @@ object JitterBuffer {
     case Duplicate
   }
 
+  /** The frames of smooth playing, 10 seconds' worth, after which a cushion
+    * grown beyond its depth gives a frame back.
+    */
+  val ShrinkAfter: Int = 500
+
   /** A sequence number further than this from the newest is a new stream, as
     * RFC 3550 §A.1 says of a jump of more than 3 000.
     */
@@ -177,7 +224,10 @@ object JitterBuffer {
       None,
       Phase.Buffering(0),
       None,
-      JitterStats()
+      JitterStats(depth = config.depth),
+      config.depth,
+      0,
+      starved = false
     )
 
   /** The 16-bit `sequence` as the number nearest `reference`, counting the

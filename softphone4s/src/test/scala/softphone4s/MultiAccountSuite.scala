@@ -381,6 +381,12 @@ class MultiAccountSuite extends CatsEffectSuite {
     val one = load("jitter-buffer { depth = 2 }")
       .fold(failures => fail(failures.prettyPrint()), identity)
     assertEquals((one.jitterBuffer.depth, one.jitterBuffer.capacity), (2, 12))
+    // The most the cushion grows to is twice it, if not said.
+    assertEquals(one.jitterBuffer.maxDepth, 4)
+    assertEquals(both.jitterBuffer.maxDepth, 10)
+    val fixed = load("jitter-buffer { depth = 4, max-depth = 4 }")
+      .fold(failures => fail(failures.prettyPrint()), identity)
+    assertEquals(fixed.jitterBuffer.maxDepth, 4)
     val none = load("").fold(failures => fail(failures.prettyPrint()), identity)
     assertEquals(none.jitterBuffer, softphone4s.media.JitterConfig.Default)
   }
@@ -409,6 +415,10 @@ class MultiAccountSuite extends CatsEffectSuite {
         .load[SoftphoneConfig]
     assert(load("jitter-buffer { depth = 0 }").isLeft)
     assert(load("jitter-buffer { depth = 8, capacity = 4 }").isLeft)
+    assert(load("jitter-buffer { depth = 4, max-depth = 3 }").isLeft)
+    assert(
+      load("jitter-buffer { depth = 3, max-depth = 20, capacity = 12 }").isLeft
+    )
   }
 
   test("a STUN server is read from configuration") {

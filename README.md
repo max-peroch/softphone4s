@@ -159,7 +159,7 @@ softphone4s handles outbound SIP calls end-to-end:
   gets a connection of its own, verified for that host. A connection that cannot
   be framed is dropped without affecting others.
 - **Jitter buffer**: what arrives is not played at once but put in order. A
-  fixed-size buffer holds `jitter-buffer.depth` frames of 20 ms (3 by default,
+  buffer holds `jitter-buffer.depth` frames of 20 ms (3 by default,
   so audio starts about 60 ms after the first packet) and room for `capacity`
   (12): packets that come in a different order are put right, a duplicate is
   dropped, and one that comes after its turn is dropped too. A packet that never
@@ -168,8 +168,14 @@ softphone4s handles outbound SIP calls end-to-end:
   fills again before playing on. Telephone events and comfort noise take their
   place in it too, so that they are neither taken for lost packets nor applied
   before the speech ahead of them; a digit is still reported the moment it
-  arrives. A depth of 1 is the least delay, 20 ms. The buffer does not adapt to
-  the network: the depth is the depth.
+  arrives. A depth of 1 is the least delay, 20 ms. The cushion adapts to the
+  network: a packet that comes after its turn, or a pause in the packets that
+  the next packet does not announce as the start of speech (no marker bit),
+  shows it was too small, and it grows by a frame, up to `max-depth` (twice the
+  depth, or as far as `capacity` allows, if not said), the next time the buffer
+  fills. After 10 seconds of smooth playing it gives a frame back, down to
+  `depth`. `max-depth = depth` keeps it fixed. `MediaSession.jitterStats`
+  tells the cushion held now.
 - **RTCP** (RFC 3550): a call sends a report every 5 seconds or so (each wait
   between half and one and a half times that, the first after half of it) to the
   port after the other side's RTP port, and reads theirs from the port after
@@ -442,7 +448,7 @@ account every call is taken. Two accounts cannot have the same user.
 | `tls.trust-store` / `tls.client-certificate` | `{ path, password, store-type }` | JVM trust / none | Key stores for the certificates we trust and the one we present (`store-type` is `PKCS12` or `JKS`) |
 | `nat.stun.host` / `port` / `retransmit` / `attempts` / `refresh` | name, `Port`, `Duration`, `Int`, `Duration` | none / 3478 / 500 ms / 5 / 5 minutes | A STUN server to ask what address we have outside a NAT |
 | `nat.rtp-latching` | `follow`/`ignore` | `follow` | Send media to where the remote party's media comes from, when that is not where its SDP said |
-| `jitter-buffer.depth` / `capacity` | `Int` / `Int` | 3 / 12 | Frames of 20 ms held before playing, and the most ever held |
+| `jitter-buffer.depth` / `max-depth` / `capacity` | `Int` | 3 / 6 / 12 | Frames of 20 ms held before playing, how far that grows when the network is bad (`max-depth = depth` for a fixed cushion), and the most ever held |
 | `codecs` | list of names: `pcmu`, `pcma`, `g722`, or one you add | `[pcmu, pcma]` | The audio codecs to offer and accept, most wanted first |
 | `nat.observed-address` | `use`/`ignore` | `use` | Advertise the address servers say they see us at (Contact, SDP) |
 | `max-udp-message`   | `Int`       | `1300`       | An INVITE longer than this many bytes goes over TCP instead of UDP |
