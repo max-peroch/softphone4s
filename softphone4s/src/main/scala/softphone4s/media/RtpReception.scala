@@ -62,7 +62,7 @@ final case class RtpReception private (
   }
 
   private def withJitter(timestamp: Long, at: FiniteDuration): RtpReception = {
-    val arrival = at.toNanos * clockRate / 1_000_000_000L
+    val arrival = ticks(at, clockRate)
     val now     = arrival - timestamp
     // The timestamp wraps at 32 bits, and so must the difference.
     val raw  = now - transit
@@ -114,6 +114,16 @@ object RtpReception {
     */
   final case class SenderHeard(middle: Long, at: FiniteDuration)
 
+  /** `at` on a clock of `rate` ticks a second. The seconds and the rest are
+    * scaled apart, because the local clock counts from an arbitrary origin, as
+    * the system's does from boot, and nanoseconds times a clock rate overflow a
+    * `Long` within days of that.
+    */
+  private[media] def ticks(at: FiniteDuration, rate: Int): Long = {
+    val nanos = at.toNanos
+    nanos / 1_000_000_000L * rate + nanos % 1_000_000_000L * rate / 1_000_000_000L
+  }
+
   private val Modulus     = 1 << 16
   private val MaxDropout  = 3000
   private val MaxMisorder = 100
@@ -138,7 +148,7 @@ object RtpReception {
       0L,
       0L,
       0.0,
-      at.toNanos * clockRate / 1_000_000_000L - timestamp,
+      ticks(at, clockRate) - timestamp,
       None
     )
 }

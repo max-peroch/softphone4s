@@ -107,4 +107,20 @@ class RtpReceptionSuite extends FunSuite {
     val (_, block) = begin().report(1.second)
     assertEquals((block.lastSender, block.delaySinceLastSender), (0L, 0L))
   }
+
+  test("a local clock that has run for weeks does not upset the jitter") {
+    // 30 days of uptime: nanoseconds times 8000 overflow a Long long before.
+    val uptime = 30.days
+    val r      = (0 to 99).foldLeft(
+      RtpReception.start(1L, Rate, 0, 0L, uptime)
+    )((r, n) =>
+      if n == 0 then r else r.hear(n, n * 160L, uptime + (n * 20).millis)
+    )
+    assertEquals(r.jitterUnits, 0L)
+  }
+
+  test("the clock in ticks counts the seconds and the rest apart") {
+    assertEquals(RtpReception.ticks(30.days, 48000), 30L * 86400 * 48000)
+    assertEquals(RtpReception.ticks(1500.millis, 8000), 12000L)
+  }
 }

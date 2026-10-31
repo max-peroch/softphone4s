@@ -250,8 +250,8 @@ private[softphone4s] class MediaSession[F[_]: Async: Network] private (
                         plan.telephoneEventType,
                         plan.comfortNoiseType
                       )
-                    ).evalMap((out, stats) =>
-                      this.stats.set(stats) >>
+                    ).evalMap((out, standing) =>
+                      stats.set(standing) >>
                         play(plan, decode, codec.pcmPacketBytes, out)
                     )
                   }

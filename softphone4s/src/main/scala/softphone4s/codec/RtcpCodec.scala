@@ -1,13 +1,12 @@
 package softphone4s.codec
 
 import fs2.Chunk
-import softphone4s.media.RtcpError
-import softphone4s.media.RtcpPacket
+import softphone4s.media.{RtcpError, RtcpPacket}
 import softphone4s.media.RtcpPacket.{ReportBlock, SenderInfo}
 
 import java.nio.ByteBuffer
 import java.nio.charset.StandardCharsets
-import scala.collection.mutable.ListBuffer
+import scala.annotation.tailrec
 
 /** RFC 3550 RTCP compound packets, encoded and decoded — pure. */
 object RtcpCodec {
@@ -60,7 +59,7 @@ object RtcpCodec {
     case RtcpPacket.SourceDescription(names) =>
       val kept = names.take(RtcpPacket.MaxCount)
       val body = kept.map { (ssrc, name) =>
-        val text  = name.getBytes(StandardCharsets.UTF_8).take(255)
+        val text  = clipped(name)
         val chunk = 4 + 2 + text.length + 1 // the item, and the end of items
         words(
           chunk,
@@ -75,7 +74,7 @@ object RtcpCodec {
       framed(kept.size, DescriptionType, body.flatten.toArray)
     case RtcpPacket.Goodbye(ssrcs, reason) =>
       val kept = ssrcs.take(RtcpPacket.MaxCount)
-      val text = reason.map(_.getBytes(StandardCharsets.UTF_8).take(255))
+      val text = reason.map(clipped)
       framed(
         kept.size,
         GoodbyeType,
@@ -91,6 +90,22 @@ object RtcpCodec {
         )
       )
     case RtcpPacket.Other(_) => Array.emptyByteArray
+  }
+
+  /** `text` as UTF-8 of at most 255 bytes, cut between characters and not in
+    * the middle of one.
+    */
+  private def clipped(text: String): Array[Byte] = {
+    val bytes = text.getBytes(StandardCharsets.UTF_8)
+    if bytes.length <= 255 then bytes
+    else {
+      // A continuation byte is 10xxxxxx: back up to the byte that begins one.
+      val cut = Iterator
+        .iterate(255)(_ - 1)
+        .find(i => i == 0 || (bytes(i) & 0xc0) != 0x80)
+        .getOrElse(0)
+      bytes.take(cut)
+    }
   }
 
   private def put(b: ByteBuffer, block: ReportBlock): Unit = {
@@ -135,40 +150,49 @@ object RtcpCodec {
   def decode(bytes: Chunk[Byte]): Either[RtcpError, List[RtcpPacket]] = {
     val data = bytes.toArray
 
+    @tailrec
     def go(
         offset: Int,
-        done: ListBuffer[RtcpPacket]
+        done: List[RtcpPacket]
     ): Either[RtcpError, List[RtcpPacket]] =
-      if offset == data.length then Right(done.toList)
-      else if data.length - offset < 4 then
-        Left(RtcpError.Truncated(4, data.length - offset))
-      else {
-        val first   = data(offset) & 0xff
-        val version = first >> 6
-        val padded  = (first & 0x20) != 0
-        val count   = first & 0x1f
-        val kind    = data(offset + 1) & 0xff
-        val length  =
-          (((data(offset + 2) & 0xff) << 8) | (data(offset + 3) & 0xff)) * 4
-        val end = offset + 4 + length
-        if version != 2 then Left(RtcpError.BadVersion(version))
-        else if end > data.length then
-          Left(RtcpError.Truncated(end - offset, data.length - offset))
-        else {
-          val pad = if padded && length > 0 then data(end - 1) & 0xff else 0
-          if padded && (pad == 0 || pad > length) then
-            Left(RtcpError.BadPadding(kind))
-          else
-            body(kind, count, ByteBuffer.wrap(data, offset + 4, length - pad))
-              .flatMap { packet =>
-                done += packet
-                go(end, done)
-              }
+      if offset == data.length then Right(done.reverse)
+      else
+        packetAt(data, offset) match {
+          case Left(error)            => Left(error)
+          case Right((packet, after)) => go(after, packet :: done)
         }
-      }
 
-    go(0, ListBuffer.empty)
+    go(0, Nil)
   }
+
+  /** The packet that begins at `offset`, and where the next one begins. */
+  private def packetAt(
+      data: Array[Byte],
+      offset: Int
+  ): Either[RtcpError, (RtcpPacket, Int)] =
+    if data.length - offset < 4 then
+      Left(RtcpError.Truncated(4, data.length - offset))
+    else {
+      val first   = data(offset) & 0xff
+      val version = first >> 6
+      val padded  = (first & 0x20) != 0
+      val count   = first & 0x1f
+      val kind    = data(offset + 1) & 0xff
+      val length  =
+        (((data(offset + 2) & 0xff) << 8) | (data(offset + 3) & 0xff)) * 4
+      val end = offset + 4 + length
+      if version != 2 then Left(RtcpError.BadVersion(version))
+      else if end > data.length then
+        Left(RtcpError.Truncated(end - offset, data.length - offset))
+      else {
+        val pad = if padded && length > 0 then data(end - 1) & 0xff else 0
+        if padded && (pad == 0 || pad > length) then
+          Left(RtcpError.BadPadding(kind))
+        else
+          body(kind, count, ByteBuffer.wrap(data, offset + 4, length - pad))
+            .map(_ -> end)
+      }
+    }
 
   private def body(
       kind: Int,
@@ -240,39 +264,46 @@ object RtcpCodec {
       count: Int,
       b: ByteBuffer
   ): Either[RtcpError, RtcpPacket] = {
-    val names                     = ListBuffer.empty[(Long, String)]
-    var chunks                    = 0
-    var broken: Option[RtcpError] = None
-    while chunks < count && broken.isEmpty do {
-      if b.remaining() < 4 then
-        broken = Some(RtcpError.BadLength(DescriptionType, b.remaining() / 4))
+    type Names = List[(Long, String)]
+
+    // The items of one source, up to the zero that ends them.
+    @tailrec
+    def items(ssrc: Long, names: Names): Either[RtcpError, Names] =
+      if b.remaining() < 1 then Right(names)
       else {
-        val ssrc  = b.getInt() & 0xffffffffL
-        var items = true
-        while items && broken.isEmpty do {
-          if b.remaining() < 1 then items = false
+        val kind = b.get() & 0xff
+        if kind == 0 then {
+          // The end of the items, then zeros up to the next word.
+          while b.position() % 4 != 0 && b.remaining() > 0 do b.get()
+          Right(names)
+        } else if b.remaining() < 1 then
+          Left(RtcpError.BadLength(DescriptionType, 0))
+        else {
+          val n = b.get() & 0xff
+          if n > b.remaining() then
+            Left(RtcpError.BadLength(DescriptionType, b.remaining() / 4))
+          else if kind == CanonicalName then
+            items(ssrc, (ssrc, text(b, n)) :: names)
           else {
-            val kind = b.get() & 0xff
-            if kind == 0 then {
-              // The end of the items, then zeros up to the next word.
-              while b.position() % 4 != 0 && b.remaining() > 0 do b.get()
-              items = false
-            } else if b.remaining() < 1 then
-              broken = Some(RtcpError.BadLength(DescriptionType, 0))
-            else {
-              val n = b.get() & 0xff
-              if n > b.remaining() then
-                broken = Some(
-                  RtcpError.BadLength(DescriptionType, b.remaining() / 4)
-                )
-              else if kind == CanonicalName then names += ssrc -> text(b, n)
-              else b.position(b.position() + n)
-            }
+            b.position(b.position() + n)
+            items(ssrc, names)
           }
         }
-        chunks += 1
       }
-    }
-    broken.toLeft(RtcpPacket.SourceDescription(names.toList))
+
+    @tailrec
+    def sources(left: Int, names: Names): Either[RtcpError, Names] =
+      if left == 0 then Right(names)
+      else if b.remaining() < 4 then
+        Left(RtcpError.BadLength(DescriptionType, b.remaining() / 4))
+      else
+        items(b.getInt() & 0xffffffffL, names) match {
+          case Left(error) => Left(error)
+          case Right(more) => sources(left - 1, more)
+        }
+
+    sources(count, Nil).map(names =>
+      RtcpPacket.SourceDescription(names.reverse)
+    )
   }
 }

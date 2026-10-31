@@ -185,4 +185,15 @@ class RtcpCodecSuite extends FunSuite {
       Right(List(RtcpPacket.SourceDescription(List(5L -> "xy"))))
     )
   }
+
+  test("a name longer than the wire can say is cut between characters") {
+    val name = "é" * 200 // 400 bytes of UTF-8
+    val read = roundTrip(List(RtcpPacket.SourceDescription(List(1L -> name))))
+    val cut  = read match {
+      case Right(List(RtcpPacket.SourceDescription(List((_, n))))) => n
+      case other => fail(s"unexpected: $other")
+    }
+    assertEquals(cut, "é" * 127)
+    assert(!cut.contains('\uFFFD'))
+  }
 }
