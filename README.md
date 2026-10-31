@@ -101,10 +101,13 @@ softphone4s handles outbound SIP calls end-to-end:
   `alias` (RFC 5923), and so does a peer's: a request with `alias` makes its
   connection the one to use for requests to that address, provided the address
   is on the IP the connection came from, so a peer cannot claim someone else's
-  traffic. Requests to a Contact then reuse the connection a request arrived on
-  when it is TCP; over TLS a connection is reused only for responses, since
-  reusing it for requests would need the peer's certificate checked against its
-  name. A connection that cannot be framed is dropped without affecting others.
+  traffic. Requests to a Contact then reuse the connection a request arrived on.
+  Over TLS that is only for a host the peer's certificate names (a DNS or IP
+  subject alternative name, matched exactly, wildcards left out), which needs
+  `tls.client-authentication` to be `request` or `require` so that the peer
+  shows one, checked against `tls.trust-store`; a request for any other host
+  gets a connection of its own, verified for that host. A connection that cannot
+  be framed is dropped without affecting others.
 - **Mid-call requests from the remote party**: OPTIONS is answered with our
   `Allow` list; a re-INVITE or UPDATE with SDP is answered with our SDP, media
   follows the new address, and a hold (`sendonly`, `inactive` or `0.0.0.0`)

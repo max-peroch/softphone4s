@@ -2,7 +2,7 @@ package softphone4s.transport
 
 import cats.effect.{Async, Resource, Sync}
 import cats.syntax.all.*
-import com.comcast.ip4s.{Hostname, IDN, IpAddress, Port, SocketAddress}
+import com.comcast.ip4s.{Host, Hostname, IDN, IpAddress, Port, SocketAddress}
 import fs2.io.net.Network
 import fs2.io.net.tls.{TLSContext, TLSParameters, TLSSocket}
 import org.typelevel.log4cats.StructuredLogger
@@ -10,13 +10,16 @@ import softphone4s.model.{SipMessage, SipRequest, SipResponse, SoftphoneError}
 
 import java.nio.file.Files
 import java.security.KeyStore
+import java.security.cert.X509Certificate
 import javax.net.ssl.{
   KeyManagerFactory,
   SNIHostName,
   SSLContext,
+  SSLPeerUnverifiedException,
   TrustManagerFactory
 }
 import scala.concurrent.duration.*
+import scala.jdk.CollectionConverters.*
 import scala.util.Using
 import scala.util.control.NonFatal
 
@@ -51,7 +54,11 @@ object TlsTransport {
               .clientBuilder(raw)
               .withParameters(parameters(config, name))
               .build
-          } yield StreamTransport.Connected(tls, handshaken(tls)),
+          } yield StreamTransport.Connected(
+            tls,
+            handshaken(tls),
+            identitiesOf(tls)
+          ),
         serverNameOf = serverNameOf,
         listener,
         logger
@@ -81,9 +88,45 @@ object TlsTransport {
             .serverBuilder(socket)
             .withParameters(serverParameters(config))
             .build
-            .map(tls => StreamTransport.Connected(tls, handshaken(tls)))
+            .map(tls =>
+              StreamTransport.Connected(
+                tls,
+                handshaken(tls),
+                identitiesOf(tls)
+              )
+            )
         )
     } yield listener
+
+  /** The hosts the certificate the other end showed is valid for: its DNS and
+    * IP subject alternative names (RFC 6125). A name with a wildcard is left
+    * out, so that a host is only ever taken for one the certificate names
+    * exactly. Nothing if no certificate was shown. The TLS layer has already
+    * checked the chain, when it asked for one.
+    */
+  private def identitiesOf[F[_]: Async](tls: TLSSocket[F]): F[List[Host]] =
+    tls.session.flatMap(session =>
+      Sync[F]
+        .delay(session.getPeerCertificates.toList)
+        .map(_.collectFirst { case cert: X509Certificate => namesIn(cert) })
+        .map(_.getOrElse(Nil))
+        .recover { case _: SSLPeerUnverifiedException => Nil }
+    )
+
+  private val DnsName = 2
+  private val IpName  = 7
+
+  private def namesIn(cert: X509Certificate): List[Host] =
+    Option(cert.getSubjectAlternativeNames).toList
+      .flatMap(_.asScala.toList)
+      .flatMap(entry =>
+        entry.asScala.toList match {
+          case (kind: Integer) :: (value: String) :: _
+              if (kind == DnsName || kind == IpName) && !value.contains('*') =>
+            Host.fromString(value)
+          case _ => None
+        }
+      )
 
   private[transport] def serverParameters(config: TlsConfig): TLSParameters =
     TLSParameters(

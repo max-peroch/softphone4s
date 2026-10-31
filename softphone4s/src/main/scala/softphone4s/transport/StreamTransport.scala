@@ -24,7 +24,9 @@ import scala.concurrent.duration.*
   * opened, and is found by the address it came from, so the responses to its
   * requests go back on it. A request whose Via carries `alias` (RFC 5923) also
   * makes the connection the one to use for requests to that sent-by address,
-  * but only when it names the IP address the connection came from.
+  * but only when it names the IP address the connection came from. Requests
+  * that name a host (over TLS) reuse it only for hosts its peer's certificate
+  * vouches for.
   *
   * What differs between TCP and TLS is how a socket is made (`connect`) and
   * what a connection must be told about the host it goes to (`serverNameOf`,
@@ -36,8 +38,17 @@ object StreamTransport {
     * that is at once; for TLS it is when the handshake has finished. The wait
     * runs while the socket is being read, which is what drives a handshake
     * along.
+    *
+    * `identities` are the hosts the other end has proved to be, once the
+    * connection is established: the names in the certificate it showed, which
+    * the TLS layer has checked against what we trust. None for TCP, and for a
+    * TLS peer that showed no certificate.
     */
-  final case class Connected[F[_]](socket: Socket[F], established: F[Unit])
+  final case class Connected[F[_]](
+      socket: Socket[F],
+      established: F[Unit],
+      identities: F[List[Host]]
+  )
 
   /** How to open a socket to an address, given the name of the host behind it,
     * if the message being sent names one.
@@ -248,8 +259,9 @@ object StreamTransport {
             // A ping is answered with a pong (RFC 5626 §4.4.1).
             case Right(Frame.Ping)           => plainWrite(Pong).as(true)
             case Right(Frame.Message(bytes)) =>
-              deliver(remote, slot, Right(bytes))
-            case Left(error) => deliver(remote, slot, Left(error))
+              deliver(remote, slot, connected.identities, Right(bytes))
+            case Left(error) =>
+              deliver(remote, slot, connected.identities, Left(error))
           }
           .takeWhile(identity)
           .compile
@@ -311,6 +323,7 @@ object StreamTransport {
     private def deliver(
         from: SocketAddress[IpAddress],
         slot: Slot[F],
+        identities: F[List[Host]],
         frame: Either[FramingError, Chunk[Byte]]
     ): F[Boolean] =
       frame match {
@@ -324,9 +337,13 @@ object StreamTransport {
           SipCodec.decode(bytes) match {
             case Right(message) =>
               aliasOf(from, message).traverse_(address =>
-                pool.update(m =>
-                  if m.contains(Key(address, None)) then m
-                  else m.updated(Key(address, None), slot)
+                identities.flatMap(names =>
+                  pool.update(m =>
+                    (None :: names.map(Some(_))).foldLeft(m)((acc, name) =>
+                      if acc.contains(Key(address, name)) then acc
+                      else acc.updated(Key(address, name), slot)
+                    )
+                  )
                 )
               ) >> inbox.offer(Inbound(from, message)).as(true)
             case Left(error) =>

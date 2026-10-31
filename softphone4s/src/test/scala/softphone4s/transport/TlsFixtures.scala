@@ -26,7 +26,10 @@ object TlsFixtures {
       stranger: Path,
       /** A client certificate, and the trust store that holds it. */
       client: Path,
-      trustsClient: Path
+      trustsClient: Path,
+      /** A client certificate that names its holder, `peer.example.com`. */
+      peer: Path,
+      trustsPeer: Path
   )
 
   lazy val files: Files_ = {
@@ -101,13 +104,17 @@ object TlsFixtures {
     val stranger =
       keyPair("stranger", "CN=localhost", Some("dns:localhost,ip:127.0.0.1"))
     val client = keyPair("client", "CN=client", None)
+    val peer   =
+      keyPair("peer", "CN=peer", Some("dns:peer.example.com,ip:127.0.0.1"))
     Files_(
       dir,
       server,
       trusting("server", server),
       stranger,
       client,
-      trusting("client", client)
+      trusting("client", client),
+      peer,
+      trusting("peer", peer)
     )
   }
 

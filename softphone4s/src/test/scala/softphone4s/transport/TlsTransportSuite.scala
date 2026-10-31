@@ -451,4 +451,98 @@ class TlsTransportSuite extends CatsEffectSuite {
         )
     }
   }
+
+  // ---- Reusing a connection that came in, for requests ---------------------------------
+
+  /** A request from a peer that says its connection can be reached at
+    * 127.0.0.1:19999 (RFC 5923).
+    */
+  private def aliasedOptions(n: Int) = {
+    val request = optionsTo("localhost", n)
+    request.copy(headers =
+      request.headers.copy(vias =
+        NonEmptyList.one(
+          via(s"SIP/2.0/TLS 127.0.0.1:19999;branch=z9hG4bKal$n;alias")
+        )
+      )
+    )
+  }
+
+  private val behindAlias = SocketAddress(ip"127.0.0.1", port"19999")
+
+  private def peering(authentication: ClientAuthentication) =
+    listening(
+      listeningConfig(authentication).copy(trustStore =
+        Some(TlsFixtures.trusting(files.trustsPeer))
+      )
+    )
+
+  test(
+    "a request to a host the peer's certificate names goes on the connection that peer made"
+  ) {
+    peering(ClientAuthentication.Require).use { transport =>
+      connecting(transport.localAddress, Some(files.peer)).use { peer =>
+        for {
+          _ <- peer.send(aliasedOptions(1))
+          _ <- transport.messages.head.compile.lastOrError.timeout(5.seconds)
+          // Nothing listens at the alias: only the connection that is there can
+          // carry it.
+          _    <- transport.send(behindAlias, optionsTo("peer.example.com", 2))
+          back <- peer.next
+        } yield assertEquals(back, optionsTo("peer.example.com", 2))
+      }
+    }
+  }
+
+  test("an IP address in the peer's certificate counts as well") {
+    peering(ClientAuthentication.Require).use { transport =>
+      connecting(transport.localAddress, Some(files.peer)).use { peer =>
+        for {
+          _    <- peer.send(aliasedOptions(1))
+          _    <- transport.messages.head.compile.lastOrError.timeout(5.seconds)
+          _    <- transport.send(behindAlias, optionsTo("127.0.0.1", 2))
+          back <- peer.next
+        } yield assertEquals(back, optionsTo("127.0.0.1", 2))
+      }
+    }
+  }
+
+  test("a request to a host the certificate does not name is not sent there") {
+    peering(ClientAuthentication.Require).use { transport =>
+      connecting(transport.localAddress, Some(files.peer)).use { peer =>
+        for {
+          _ <- peer.send(aliasedOptions(1))
+          _ <- transport.messages.head.compile.lastOrError.timeout(5.seconds)
+          // A new connection to the alias is tried, and there is nobody there.
+          sent <- transport
+            .send(behindAlias, optionsTo("other.example.com", 2))
+            .attempt
+          quiet <- peer.quiet(500.millis)
+        } yield {
+          assert(sent.isLeft, s"expected a failed connection, got $sent")
+          assert(quiet, "the peer's connection must not carry it")
+        }
+      }
+    }
+  }
+
+  test(
+    "without a certificate from the peer, only responses reuse the connection"
+  ) {
+    peering(ClientAuthentication.Off).use { transport =>
+      connecting(transport.localAddress).use { peer =>
+        for {
+          _    <- peer.send(aliasedOptions(1))
+          _    <- transport.messages.head.compile.lastOrError.timeout(5.seconds)
+          sent <- transport
+            .send(behindAlias, optionsTo("peer.example.com", 2))
+            .attempt
+          quiet <- peer.quiet(500.millis)
+        } yield {
+          assert(sent.isLeft, s"expected a failed connection, got $sent")
+          assert(quiet, "the peer's connection must not carry it")
+        }
+      }
+    }
+  }
 }

@@ -21,7 +21,13 @@ object TcpTransport {
       listener <- listenOn.traverse(port =>
         StreamListener.bind[F](SocketAddress(bindAddress, port), logger)(
           socket =>
-            Resource.pure(StreamTransport.Connected(socket, Async[F].unit))
+            Resource.pure(
+              StreamTransport.Connected(
+                socket,
+                Async[F].unit,
+                Async[F].pure(Nil)
+              )
+            )
         )
       )
       transport <- StreamTransport.resource[F](
@@ -30,7 +36,9 @@ object TcpTransport {
         connect = (to, _) =>
           Network[F]
             .connect(to)
-            .map(StreamTransport.Connected(_, Async[F].unit)),
+            .map(
+              StreamTransport.Connected(_, Async[F].unit, Async[F].pure(Nil))
+            ),
         serverNameOf = _ => None,
         listener,
         logger
