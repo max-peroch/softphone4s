@@ -21,6 +21,17 @@ object TransactionManager {
       config: TransactionConfig,
       logger: StructuredLogger[F]
   ): Resource[F, TransactionLayer[F]] =
+    resourceObserving(transport, config, logger, _ => Async[F].unit)
+
+  /** As [[resource]], and `observed` is told what the servers we send requests
+    * to say we look like from where they are (their `received` and `rport`).
+    */
+  def resourceObserving[F[_]: Async](
+      transport: Transport[F],
+      config: TransactionConfig,
+      logger: StructuredLogger[F],
+      observed: ObservedAddress => F[Unit]
+  ): Resource[F, TransactionLayer[F]] =
     for {
       supervisor <- Supervisor[F](await = false)
       timers     <- Timers.resource[F, TimerKey]
@@ -34,6 +45,7 @@ object TransactionManager {
         commands,
         incomingQ,
         unmatchedQ,
+        observed,
         logger
       )
       _ <- Resource.eval(
@@ -89,6 +101,13 @@ object TransactionManager {
         Stream.fromQueueUnterminated(unmatchedQ)
 
       def transmit(message: SipMessage, to: SocketAddress[IpAddress]): F[Unit] =
-        transport.send(to, message)
+        transport.send(
+          to,
+          message match {
+            case response: SipResponse =>
+              TransactionMessages.seenFrom(response, to)
+            case request => request
+          }
+        )
     }
 }

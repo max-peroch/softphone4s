@@ -79,4 +79,93 @@ class ViaSuite extends FunSuite {
     assert(CallId("abc@host:5060").isRight)
     assert(CallId("a b").isLeft)
   }
+
+  // ---- rport and received (RFC 3581) -----------------------------------------------
+
+  private val source = SocketAddress(ip"203.0.113.7", port"41000")
+
+  test("a request can ask for rport, and it renders as a bare parameter") {
+    assertEquals(
+      parsed(
+        "SIP/2.0/UDP 10.0.0.2:5060;branch=z9hG4bKa"
+      ).requestingRport.render,
+      "SIP/2.0/UDP 10.0.0.2:5060;branch=z9hG4bKa;rport"
+    )
+  }
+
+  test(
+    "the server fills in rport and received when rport was asked for, even if they match"
+  ) {
+    val seen =
+      parsed("SIP/2.0/UDP 203.0.113.7:5060;branch=z9hG4bKa;rport").seenFrom(
+        source
+      )
+    assertEquals(seen.rport, Some(RPort.Assigned(port"41000")))
+    assertEquals(seen.received, Some(ip"203.0.113.7"))
+  }
+
+  test(
+    "without rport, received is added only if the sent-by is not where it came from"
+  ) {
+    val same =
+      parsed("SIP/2.0/UDP 203.0.113.7:5060;branch=z9hG4bKa").seenFrom(source)
+    assertEquals(same.received, None)
+    assertEquals(same.rport, None)
+    val other =
+      parsed("SIP/2.0/UDP 10.0.0.2:5060;branch=z9hG4bKa").seenFrom(source)
+    assertEquals(other.received, Some(ip"203.0.113.7"))
+    assertEquals(other.rport, None)
+  }
+
+  test("a sent-by that is a name always gets received") {
+    assertEquals(
+      parsed("SIP/2.0/UDP phone.example.com;branch=z9hG4bKa")
+        .seenFrom(source)
+        .received,
+      Some(ip"203.0.113.7")
+    )
+  }
+
+  test("an rport that already has a value is left as it is") {
+    val seen =
+      parsed("SIP/2.0/UDP 10.0.0.2;rport=5099;branch=z9hG4bKa").seenFrom(source)
+    assertEquals(seen.rport, Some(RPort.Assigned(port"5099")))
+  }
+
+  test("the address a server saw is read from received and rport") {
+    assertEquals(
+      parsed(
+        "SIP/2.0/UDP 10.0.0.2:5060;rport=41000;received=203.0.113.7"
+      ).observedAddress,
+      Some(source)
+    )
+  }
+
+  test("a part the server does not give is ours from the sent-by") {
+    assertEquals(
+      parsed("SIP/2.0/UDP 10.0.0.2:5060;received=203.0.113.7").observedAddress,
+      Some(SocketAddress(ip"203.0.113.7", port"5060"))
+    )
+    assertEquals(
+      parsed("SIP/2.0/UDP 10.0.0.2:5060;rport=41000").observedAddress,
+      Some(SocketAddress(ip"10.0.0.2", port"41000"))
+    )
+  }
+
+  test("a Via with neither received nor an assigned rport observes nothing") {
+    assertEquals(
+      parsed("SIP/2.0/UDP 10.0.0.2:5060;rport").observedAddress,
+      None
+    )
+    assertEquals(
+      parsed("SIP/2.0/UDP 10.0.0.2:5060;branch=z9hG4bKa").observedAddress,
+      None
+    )
+  }
+
+  test("seenFrom then observedAddress gives the source back") {
+    val sent =
+      parsed("SIP/2.0/UDP 10.0.0.2:5060;branch=z9hG4bKa").requestingRport
+    assertEquals(sent.seenFrom(source).observedAddress, Some(source))
+  }
 }

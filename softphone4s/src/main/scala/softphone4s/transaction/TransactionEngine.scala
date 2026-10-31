@@ -20,6 +20,7 @@ private[transaction] final class TransactionEngine[F[_]: Concurrent](
     commands: Queue[F, Command[F]],
     incomingQueue: Queue[F, ServerTransaction[F]],
     unmatchedQueue: Queue[F, Inbound],
+    observed: ObservedAddress => F[Unit],
     logger: StructuredLogger[F]
 ) {
 
@@ -56,7 +57,8 @@ private[transaction] final class TransactionEngine[F[_]: Concurrent](
       case response: SipResponse =>
         ClientKey.forResponse(response) match {
           case Right(key) if table.clients.contains(key) =>
-            clientEvent(table, key, ClientEvent.Response(response))
+            observe(table.clients(key).to, inbound, response) >>
+              clientEvent(table, key, ClientEvent.Response(response))
           case _ => unmatchedQueue.offer(inbound).as(table)
         }
 
@@ -80,6 +82,23 @@ private[transaction] final class TransactionEngine[F[_]: Concurrent](
             }
         }
     }
+
+  /** What the response says about how we look from outside. Believed only from
+    * the server we sent the request to, and only for UDP: over a stream the
+    * port is that of a connection, not of anything a peer can send to.
+    */
+  private def observe(
+      sentTo: SocketAddress[IpAddress],
+      inbound: Inbound,
+      response: SipResponse
+  ): F[Unit] = {
+    val via = response.headers.topVia
+    if inbound.from == sentTo && via.transport == TransportProtocol.Udp then
+      via.observedAddress.traverse_(address =>
+        observed(ObservedAddress(via.transport, address))
+      )
+    else Concurrent[F].unit
+  }
 
   // ---- Starting transactions ---------------------------------------------------
 
@@ -223,8 +242,9 @@ private[transaction] final class TransactionEngine[F[_]: Concurrent](
   ): F[Unit] = {
     val id = TransactionId.Server(key)
     action match {
-      case ServerAction.Transmit(response) => send(id, entry.from, response)
-      case ServerAction.PassUp(request)    =>
+      case ServerAction.Transmit(response) =>
+        send(id, entry.from, TransactionMessages.seenFrom(response, entry.from))
+      case ServerAction.PassUp(request) =>
         incomingQueue.offer(
           ServerTransaction(
             request,

@@ -1,6 +1,7 @@
 package softphone4s.transaction
 
 import cats.data.NonEmptyList
+import com.comcast.ip4s.{IpAddress, SocketAddress}
 import softphone4s.model.*
 
 /** Messages a transaction builds itself, per RFC 3261 §17 and §8.2.6. */
@@ -48,6 +49,24 @@ object TransactionMessages {
         cseq = request.headers.cseq
       )
     )
+
+  /** `response` with its topmost Via as it records where the request came from
+    * (`received`, and `rport` if it was asked for), per RFC 3261 §18.2.1 and
+    * RFC 3581. Requests that are answered to `source` anyway, as ours are, get
+    * the same answer either way; this is what tells the sender what it looks
+    * like from outside.
+    */
+  def seenFrom(
+      response: SipResponse,
+      source: SocketAddress[IpAddress]
+  ): SipResponse = {
+    val vias = response.headers.vias
+    response.copy(headers =
+      response.headers.copy(vias =
+        NonEmptyList(vias.head.seenFrom(source), vias.tail)
+      )
+    )
+  }
 
   /** The `100 Trying` an INVITE server transaction sends at once. */
   def trying(request: SipRequest): SipResponse =

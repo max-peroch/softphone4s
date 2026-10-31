@@ -15,7 +15,8 @@ object SipMessages {
     NonEmptyList.one {
       val via = Via.request(e.transport, e.ip, e.sipPort, branch)
       // On a connection we opened, ask the peer to send its requests back on it.
-      if e.transport == TransportProtocol.Udp then via else via.withAlias
+      if e.transport == TransportProtocol.Udp then via.requestingRport
+      else via.withAlias
     }
 
   private def contacts(e: LocalEndpoint): List[NameAddr] =

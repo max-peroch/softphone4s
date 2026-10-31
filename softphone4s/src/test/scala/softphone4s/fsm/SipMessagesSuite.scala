@@ -76,7 +76,7 @@ class SipMessagesSuite extends FunSuite {
     assertEquals(invite.headers.to.render, "<sip:1234@sip.example.com>")
     assertEquals(
       invite.headers.topVia.render,
-      "SIP/2.0/UDP 192.168.1.5:5060;branch=z9hG4bKx"
+      "SIP/2.0/UDP 192.168.1.5:5060;branch=z9hG4bKx;rport"
     )
   }
 

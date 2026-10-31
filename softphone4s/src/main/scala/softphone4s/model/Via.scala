@@ -39,6 +39,40 @@ final case class Via(
 
   def hasAlias: Boolean = params.contains(ParamName.Alias)
 
+  /** This Via asking the server to answer to the address and port the request
+    * came from, and to say what they were (RFC 3581).
+    */
+  def requestingRport: Via = copy(rport = Some(RPort.Requested))
+
+  /** This Via as the server that received the request from `source` records it
+    * in its response: with `rport` filled in if it was asked for (RFC 3581),
+    * and `received` set if `rport` was asked for or the sent-by is not
+    * `source`'s address (RFC 3261 §18.2.1).
+    */
+  def seenFrom(source: SocketAddress[IpAddress]): Via = {
+    val asked  = rport.contains(RPort.Requested)
+    val filled =
+      if asked then copy(rport = Some(RPort.Assigned(source.port))) else this
+    val differs = sentBy.forall(_.host != source.host)
+    if asked || differs then filled.copy(received = Some(source.host))
+    else filled
+  }
+
+  /** The address the server that answered saw this request come from, as its
+    * `received` and `rport` say (RFC 3581): what we look like from outside. Any
+    * part it does not give is ours from the sent-by. None when it says nothing
+    * of the kind.
+    */
+  def observedAddress: Option[SocketAddress[IpAddress]] = {
+    val assigned = rport.collect { case RPort.Assigned(p) => p }
+    if received.isEmpty && assigned.isEmpty then None
+    else
+      for {
+        ip   <- received.orElse(sentBy.map(_.host))
+        port <- assigned.orElse(sentBy.map(_.port))
+      } yield SocketAddress(ip, port)
+  }
+
   /** Where the sender says it can be reached, if that is an IP address: its
     * sent-by, with the transport's default port when none is given.
     */
