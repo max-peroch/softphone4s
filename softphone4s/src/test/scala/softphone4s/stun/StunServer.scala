@@ -17,12 +17,14 @@ object StunServer {
   )
 
   def apply(
-      at: SocketAddress[IpAddress],
       says: Option[SocketAddress[IpAddress]] = None,
       ignore: Int = 0
   ): Resource[IO, Running] =
     for {
-      socket   <- Network[IO].bindDatagramSocket(address = at)
+      socket <- Network[IO].bindDatagramSocket(
+        address = SocketAddress(ip"127.0.0.1", port"0")
+      )
+      at       <- Resource.eval(addressOf(socket.address))
       requests <- Resource.eval(Ref.of[IO, Int](0))
       _        <- socket.reads
         .evalMap { datagram =>
@@ -38,6 +40,18 @@ object StunServer {
         .drain
         .background
     } yield Running(at, requests)
+
+  private def addressOf(
+      address: GenSocketAddress
+  ): IO[SocketAddress[IpAddress]] =
+    address match {
+      case a: SocketAddress[?] =>
+        a.host match {
+          case ip: IpAddress => IO.pure(SocketAddress(ip, a.port))
+          case _ => IO.raiseError(new RuntimeException("not an IP address"))
+        }
+      case _ => IO.raiseError(new RuntimeException("not an IP address"))
+    }
 
   /** A success response with the address XOR-mapped (RFC 8489 §14.2). */
   def response(id: Chunk[Byte], seen: SocketAddress[IpAddress]): Chunk[Byte] = {
