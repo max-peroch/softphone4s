@@ -11,6 +11,11 @@ enum CodecChoice(val token: String) {
 
   /** G.711 A-law. */
   case Pcma extends CodecChoice("pcma")
+
+  /** G.722, wideband: it needs an audio format of 16 kHz, so it cannot be mixed
+    * with the G.711 codecs.
+    */
+  case G722 extends CodecChoice("g722")
 }
 
 object CodecChoice {

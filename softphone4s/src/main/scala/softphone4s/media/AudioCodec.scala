@@ -39,6 +39,22 @@ trait AudioCodec {
 
 object AudioCodec {
 
+  /** Pipes for a codec with memory: `make` is run for each stream and gives the
+    * function that turns one chunk into another, which keeps the state of the
+    * stream.
+    */
+  private[media] def stateful[F[_]](
+      packetBytes: Option[Int],
+      make: () => Array[Byte] => Array[Byte]
+  ): Pipe[F, Byte, Byte] =
+    in =>
+      Stream.suspend {
+        val step    = make()
+        val packets =
+          packetBytes.fold(in.chunks)(n => in.chunkN(n, allowFewer = false))
+        packets.flatMap(c => Stream.chunk(fs2.Chunk.array(step(c.toArray))))
+      }
+
   /** Pipes for a codec without memory: `f` turns one chunk into another. */
   private[media] def stateless[F[_]](
       packetBytes: Int,

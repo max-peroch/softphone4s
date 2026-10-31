@@ -7,7 +7,7 @@ import com.comcast.ip4s.*
 import munit.CatsEffectSuite
 import org.typelevel.log4cats.noop.NoOpLogger
 import softphone4s.SipLiterals.*
-import softphone4s.config.SoftphoneConfig
+import softphone4s.config.{CodecChoice, SoftphoneConfig}
 import softphone4s.model.*
 import softphone4s.transaction.TransactionMessages
 import softphone4s.transport.{Inbound, SipTransport, Transport}
@@ -194,6 +194,30 @@ class SoftphoneStreamingSuite extends CatsEffectSuite {
       .map(r =>
         assertEquals(r.left.toOption, Some(SoftphoneError.NoCodecsConfigured))
       )
+  }
+
+  test("G.722 beside G.711 is refused: one audio format cannot serve both") {
+    SoftphoneStreaming
+      .resource[IO](
+        config.copy(codecs = List(CodecChoice.G722, CodecChoice.Pcmu)),
+        audio,
+        NoOpLogger.impl[IO]
+      )
+      .use_
+      .attempt
+      .map(r =>
+        assertEquals(r.left.toOption, Some(SoftphoneError.MixedCodecRates))
+      )
+  }
+
+  test("G.722 alone starts on a 16 kHz audio format") {
+    SoftphoneStreaming
+      .resource[IO](
+        config.copy(codecs = List(CodecChoice.G722)),
+        new AudioFormat(16000f, 16, 1, true, false),
+        NoOpLogger.impl[IO]
+      )
+      .use_
   }
 
   test("codecs that work at another rate than the audio format are refused") {

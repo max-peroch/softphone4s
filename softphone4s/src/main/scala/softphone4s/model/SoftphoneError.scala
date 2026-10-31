@@ -30,6 +30,10 @@ object SoftphoneError {
       extends SoftphoneError(s"No $transport transport is available")
   case object NoCodecsConfigured
       extends SoftphoneError("No codec is configured")
+  case object MixedCodecRates
+      extends SoftphoneError(
+        "The codecs work at different sample rates, which cannot be played on one audio format"
+      )
   final case class AudioFormatMismatch(codecRate: Int, deviceRate: Int)
       extends SoftphoneError(
         s"The codecs work at $codecRate Hz but the audio format is $deviceRate Hz"

@@ -703,14 +703,12 @@ object SoftphoneStreaming {
         .fromList(config.codecs)
         .toRight(SoftphoneError.NoCodecsConfigured)
       codecs = AudioCodecs.of(chosen)
-      rate   = audioFormat.getSampleRate.toInt
+      codecRate <- codecs.pcmRate.toRight(SoftphoneError.MixedCodecRates)
+      deviceRate = audioFormat.getSampleRate.toInt
       _ <- Either.cond(
-        codecs.pcmRate.contains(rate),
+        codecRate == deviceRate,
         (),
-        SoftphoneError.AudioFormatMismatch(
-          codecs.pcmRate.getOrElse(0),
-          rate
-        )
+        SoftphoneError.AudioFormatMismatch(codecRate, deviceRate)
       )
     } yield codecs
 

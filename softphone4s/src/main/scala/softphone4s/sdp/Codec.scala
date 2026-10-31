@@ -15,4 +15,9 @@ final case class Codec(
 object Codec {
   val Pcmu: Codec = Codec("PCMU", 8000, 1, Some(0), None)
   val Pcma: Codec = Codec("PCMA", 8000, 1, Some(8), None)
+
+  /** Sampled at 16 kHz, but its RTP clock rate is 8 000, a mistake in the RFC
+    * that stayed (RFC 3551 §4.5.2).
+    */
+  val G722: Codec = Codec("G722", 8000, 1, Some(9), None)
 }

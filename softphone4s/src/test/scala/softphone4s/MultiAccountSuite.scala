@@ -319,7 +319,7 @@ class MultiAccountSuite extends CatsEffectSuite {
         """user = alice
           |password = pw
           |realm = example.com
-          |codecs = ["pcma", "pcmu"]""".stripMargin
+          |codecs = ["pcma", "pcmu", "g722"]""".stripMargin
       )
       .load[SoftphoneConfig]
       .fold(failures => fail(failures.prettyPrint()), identity)
@@ -327,12 +327,13 @@ class MultiAccountSuite extends CatsEffectSuite {
       parsed.codecs,
       List(
         softphone4s.config.CodecChoice.Pcma,
-        softphone4s.config.CodecChoice.Pcmu
+        softphone4s.config.CodecChoice.Pcmu,
+        softphone4s.config.CodecChoice.G722
       )
     )
     assertEquals(
       parsed.capabilities.codecs.map(_.encoding).toList,
-      List("PCMA", "PCMU")
+      List("PCMA", "PCMU", "G722")
     )
   }
 

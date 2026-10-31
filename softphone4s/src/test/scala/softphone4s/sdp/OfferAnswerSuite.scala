@@ -299,4 +299,19 @@ class OfferAnswerSuite extends FunSuite {
       Some(Reject.NoAudio)
     )
   }
+
+  test(
+    "G.722 is found by its static number, and is answered with the clock rate of 8 000"
+  ) {
+    val caps   = Capabilities(NonEmptyList.one(Codec.G722), None)
+    val result = answered(offerOf("m=audio 4000 RTP/AVP 9"), caps)
+    assertEquals(result.plan.codec, Codec.G722)
+    assertEquals(result.plan.payloadType, 9)
+    assert(
+      result.description.render.contains("a=rtpmap:9 G722/8000"),
+      result.description.render
+    )
+    val offered = OfferAnswer.offer(local, caps, MediaDirection.SendRecv).render
+    assert(offered.contains("m=audio 20000 RTP/AVP 9\r\n"), offered)
+  }
 }

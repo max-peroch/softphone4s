@@ -78,6 +78,50 @@ class AudioCodecsSuite extends CatsEffectSuite {
     }
   }
 
+  test(
+    "G.722 works at 16 kHz: 640 bytes of PCM, 160 of payload, a timestamp step of 160"
+  ) {
+    val codec = G722.Wideband
+    assertEquals(codec.pcmRate, 16000)
+    assertEquals(codec.pcmPacketBytes, 640)
+    assertEquals(codec.payloadPacketBytes, 160)
+    assertEquals(codec.timestampStep, 160)
+    assertEquals(codec.description, Codec.G722)
+  }
+
+  test("G.722 cannot share an audio format with G.711") {
+    val mixed =
+      AudioCodecs.of(NonEmptyList.of(CodecChoice.G722, CodecChoice.Pcmu))
+    assertEquals(mixed.pcmRate, None)
+    assertEquals(
+      AudioCodecs.of(NonEmptyList.one(CodecChoice.G722)).pcmRate,
+      Some(16000)
+    )
+  }
+
+  test(
+    "the G.722 pipes keep their state from one packet to the next, and one stream's from another's"
+  ) {
+    val pcm = Chunk.array(
+      Array.tabulate[Byte](640 * 4)(i => ((i * 37) % 251 - 125).toByte)
+    )
+    def run(in: Chunk[Byte]) =
+      Stream
+        .chunk(in)
+        .through(G722.Wideband.encoder[IO])
+        .compile
+        .to(Chunk)
+    for {
+      whole <- run(pcm)
+      again <- run(pcm)
+      first <- run(pcm.take(640))
+    } yield {
+      assertEquals(whole.size, 640)
+      assertEquals(again, whole)
+      assertEquals(first, whole.take(160))
+    }
+  }
+
   test("less than a packet of PCM makes nothing yet") {
     Stream
       .chunk(pcm(1, 2, 3))

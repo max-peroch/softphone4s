@@ -33,6 +33,7 @@ object AudioCodecs {
   private def implementing(choice: CodecChoice): AudioCodec = choice match {
     case CodecChoice.Pcmu => G711.Pcmu
     case CodecChoice.Pcma => G711.Pcma
+    case CodecChoice.G722 => G722.Wideband
   }
 
   /** The codecs chosen, in the order given, with telephone events on 101. */

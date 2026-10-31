@@ -42,7 +42,7 @@ class MediaCodecSuite extends CatsEffectSuite {
     )
 
   /** A media session on a port that was free a moment ago. */
-  private def session =
+  private def session(codecs: AudioCodecs = AudioCodecs.Default) =
     for {
       ours       <- Resource.eval(bound.use((_, address) => IO.pure(address)))
       supervisor <- Supervisor[IO](await = false)
@@ -50,7 +50,7 @@ class MediaCodecSuite extends CatsEffectSuite {
         MediaSession.create[IO](
           loopback,
           ours.port,
-          AudioCodecs.Default,
+          codecs,
           RtpLatching.Ignore
         )
       )
@@ -59,7 +59,11 @@ class MediaCodecSuite extends CatsEffectSuite {
   /** Runs `media` as `plan` says against a peer socket; the peer's address is
     * in the plan.
     */
-  private def withPeer[A](codec: Codec, payloadType: Int)(
+  private def withPeer[A](
+      codec: Codec,
+      payloadType: Int,
+      codecs: AudioCodecs = AudioCodecs.Default
+  )(
       use: (
           MediaSession[IO],
           SocketAddress[IpAddress],
@@ -67,7 +71,7 @@ class MediaCodecSuite extends CatsEffectSuite {
       ) => IO[A]
   ): IO[A] =
     bound.use { (peerSocket, peerAddress) =>
-      session.use { (media, ours, supervisor) =>
+      session(codecs).use { (media, ours, supervisor) =>
         media.start(
           planFor(codec, payloadType, peerAddress),
           supervisor,
@@ -135,7 +139,7 @@ class MediaCodecSuite extends CatsEffectSuite {
   }
 
   test("before media starts, the capabilities are whole") {
-    session.use { (media, _, _) =>
+    session().use { (media, _, _) =>
       media
         .restrict(Capabilities.Default)
         .map(assertEquals(_, Capabilities.Default))
@@ -144,7 +148,7 @@ class MediaCodecSuite extends CatsEffectSuite {
 
   test("a plan for a codec we do not have fails to start, with a typed error") {
     val g729 = Codec("G729", 8000, 1, Some(18), None)
-    session.use { (media, _, supervisor) =>
+    session().use { (media, _, supervisor) =>
       media
         .start(
           planFor(g729, 18, SocketAddress(loopback, port"9")),
@@ -158,6 +162,61 @@ class MediaCodecSuite extends CatsEffectSuite {
             Some("No implementation of the codec G729")
           )
         )
+    }
+  }
+
+  private val wideband =
+    AudioCodecs.of(
+      cats.data.NonEmptyList.one(softphone4s.config.CodecChoice.G722)
+    )
+
+  private def reference(name: String): Array[Byte] =
+    scala.util.Using.resource(getClass.getResourceAsStream(s"/g722/$name"))(
+      _.readAllBytes()
+    )
+
+  test(
+    "media in G.722 is sent as payload type 9, 160 bytes every 20 ms on a clock of 8 000"
+  ) {
+    val pcm = reference("input.pcm")
+    withPeer(Codec.G722, 9, wideband) { (media, _, peer) =>
+      for {
+        _ <- Stream
+          .chunk(Chunk.array(pcm.take(640 * 3)))
+          .through(media.sink)
+          .compile
+          .drain
+          .start
+        packets <- peer.reads.take(3).compile.toList.timeout(5.seconds)
+      } yield {
+        val decoded = packets.map(d => RtpCodec.decode(d.bytes).get)
+        assertEquals(decoded.map(_._1.payloadType), List(9, 9, 9))
+        assertEquals(decoded.map(_._2.size), List(160, 160, 160))
+        assertEquals(decoded.map(_._1.timestamp), List(0L, 160L, 320L))
+        // The reference's bytes for the same PCM.
+        assertEquals(
+          decoded.flatMap(_._2.toArray).toList,
+          reference("reference.g722").take(480).toList
+        )
+      }
+    }
+  }
+
+  test("G.722 received is played back as the reference plays it") {
+    val codes = reference("reference.g722").take(160)
+    withPeer(Codec.G722, 9, wideband) { (media, ours, peer) =>
+      for {
+        _ <- peer.write(
+          Datagram(
+            ours,
+            RtpCodec.encode(9, 1, 0L, 5L, Chunk.array(codes), marker = false)
+          )
+        )
+        got <- media.source.take(640).compile.to(Chunk).timeout(5.seconds)
+      } yield assertEquals(
+        got.toArray.toList,
+        reference("reference-decoded.pcm").take(640).toList
+      )
     }
   }
 }
