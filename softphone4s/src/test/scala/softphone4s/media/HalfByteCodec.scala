@@ -1,6 +1,6 @@
 package softphone4s.media
 
-import cats.effect.Sync
+import cats.effect.{Resource, Sync}
 import fs2.{Chunk, Pipe}
 import softphone4s.sdp.Codec
 
@@ -21,8 +21,6 @@ object HalfByteCodec extends AudioCodec {
       AudioCodec.stateless(pcm => pcm.grouped(2).map(_(1)).toArray)
     )
 
-  def decoder[F[_]: Sync]: Pipe[F, Chunk[Byte], Byte] =
-    AudioCodec.decoding(
-      AudioCodec.stateless(payload => payload.flatMap(b => Array[Byte](0, b)))
-    )
+  def decoderSession[F[_]: Sync]: Resource[F, AudioCodec.Session] =
+    AudioCodec.stateless(payload => payload.flatMap(b => Array[Byte](0, b)))
 }

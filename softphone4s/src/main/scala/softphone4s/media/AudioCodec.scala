@@ -44,8 +44,15 @@ trait AudioCodec {
     */
   def encoder[F[_]: Sync]: Pipe[F, Byte, Chunk[Byte]]
 
+  /** What turns the payload of one packet into PCM, for the length of a stream.
+    * A call decodes with this one packet at a time, so that what it plays for a
+    * packet that is lost can come between the ones that did.
+    */
+  def decoderSession[F[_]: Sync]: Resource[F, AudioCodec.Session]
+
   /** Payload to PCM: a chunk for each packet received. */
-  def decoder[F[_]: Sync]: Pipe[F, Chunk[Byte], Byte]
+  final def decoder[F[_]: Sync]: Pipe[F, Chunk[Byte], Byte] =
+    AudioCodec.decoding(decoderSession[F])
 }
 
 object AudioCodec {

@@ -181,11 +181,11 @@ class AudioCodecsSuite extends CatsEffectSuite {
 
   test("a codec called what another is called is an error") {
     val twin = new AudioCodec {
-      val token: String       = "pcmu"
-      val description: Codec  = Codec("PCMU2", 8000, 1, None, None)
-      val pcmRate: Int        = 8000
-      def encoder[F[_]: Sync] = G711.Pcmu.encoder
-      def decoder[F[_]: Sync] = G711.Pcmu.decoder
+      val token: String              = "pcmu"
+      val description: Codec         = Codec("PCMU2", 8000, 1, None, None)
+      val pcmRate: Int               = 8000
+      def encoder[F[_]: Sync]        = G711.Pcmu.encoder
+      def decoderSession[F[_]: Sync] = G711.Pcmu.decoderSession
     }
     assertEquals(
       AudioCodecs

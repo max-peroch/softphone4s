@@ -1,6 +1,6 @@
 package softphone4s.media
 
-import cats.effect.Sync
+import cats.effect.{Resource, Sync}
 import fs2.{Chunk, Pipe}
 import softphone4s.codec.G711Codec
 import softphone4s.sdp.Codec
@@ -19,8 +19,8 @@ object G711 {
     def encoder[F[_]: Sync]: Pipe[F, Byte, Chunk[Byte]] =
       AudioCodec.encoding(pcmPacketBytes, AudioCodec.stateless(toPayload))
 
-    def decoder[F[_]: Sync]: Pipe[F, Chunk[Byte], Byte] =
-      AudioCodec.decoding(AudioCodec.stateless(toPcm))
+    def decoderSession[F[_]: Sync]: Resource[F, AudioCodec.Session] =
+      AudioCodec.stateless(toPcm)
   }
 
   /** μ-law, static payload type 0. */

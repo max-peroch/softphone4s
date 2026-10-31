@@ -108,7 +108,7 @@ final case class JitterBuffer private (
               lastPlayed = Some(expected),
               stats = stats.copy(played = stats.played + 1)
             ),
-            Playout.Frame(packet.payload)
+            Playout.Frame(packet)
           )
         case None if held.nonEmpty =>
           (

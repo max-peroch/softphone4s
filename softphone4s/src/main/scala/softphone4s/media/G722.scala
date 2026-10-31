@@ -1,6 +1,6 @@
 package softphone4s.media
 
-import cats.effect.Sync
+import cats.effect.{Resource, Sync}
 import fs2.{Chunk, Pipe}
 import softphone4s.codec.G722Codec
 import softphone4s.sdp.Codec
@@ -24,13 +24,11 @@ object G722 {
         }
       )
 
-    def decoder[F[_]: Sync]: Pipe[F, Chunk[Byte], Byte] =
-      AudioCodec.decoding(
-        AudioCodec.stateful {
-          val decoder = new G722Codec.Decoder
-          decoder.decode
-        }
-      )
+    def decoderSession[F[_]: Sync]: Resource[F, AudioCodec.Session] =
+      AudioCodec.stateful {
+        val decoder = new G722Codec.Decoder
+        decoder.decode
+      }
   }
 
   val Wideband: AudioCodec = new Implementation

@@ -1,12 +1,10 @@
 package softphone4s.media
 
-import fs2.Chunk
-
 /** What to play for one frame of 20 ms. */
 enum Playout {
 
-  /** The payload of the next packet. */
-  case Frame(payload: Chunk[Byte])
+  /** The next packet. */
+  case Frame(packet: JitterPacket)
 
   /** The next packet did not come, and later ones did: it is lost. Play
     * concealment for it.

@@ -4,6 +4,7 @@ import cats.effect.IO
 import cats.effect.testkit.TestControl
 import fs2.{Chunk, Stream}
 import munit.CatsEffectSuite
+import softphone4s.SipLiterals.pt
 
 import scala.concurrent.duration.*
 
@@ -19,13 +20,16 @@ class JitterPlayoutSuite extends CatsEffectSuite {
       sequence * 160L,
       1L,
       marker = false,
+      pt(0),
       Chunk.array(Array((sequence >> 8).toByte, sequence.toByte))
     )
 
   private def show(out: Playout): String = out match {
-    case Playout.Frame(p) => s"F${((p(0) & 0xff) << 8) | (p(1) & 0xff)}"
-    case Playout.Lost     => "L"
-    case Playout.Waiting  => "."
+    case Playout.Frame(packet) =>
+      val p = packet.payload
+      s"F${((p(0) & 0xff) << 8) | (p(1) & 0xff)}"
+    case Playout.Lost    => "L"
+    case Playout.Waiting => "."
   }
 
   /** What is played when packets arrive at the times given, ending a while
@@ -71,7 +75,7 @@ class JitterPlayoutSuite extends CatsEffectSuite {
     // Each packet is up to 30 ms off its place, but the order of arrival is kept.
     val offsets  = List(0, 25, -5, 30, 10, 0, 28, -3, 15, 0).map(_.millis)
     val arrivals =
-      steady(0 until 10, 100.millis).zip(offsets).map { case ((at, n), o) =>
+      steady(0 until 10, 107.millis).zip(offsets).map { case ((at, n), o) =>
         (at + o, n)
       }
     played(arrivals).map { out =>
@@ -84,7 +88,7 @@ class JitterPlayoutSuite extends CatsEffectSuite {
   ) {
     // 2 arrives after 3, and 5 after 6.
     val shifts   = Map(2 -> 25, 3 -> -25, 5 -> 25, 6 -> -25)
-    val arrivals = steady(0 until 8, 100.millis).map { (at, n) =>
+    val arrivals = steady(0 until 8, 107.millis).map { (at, n) =>
       (at + shifts.getOrElse(n, 0).millis, n)
     }
     played(arrivals).map(out =>
@@ -96,7 +100,7 @@ class JitterPlayoutSuite extends CatsEffectSuite {
     "two packets that never arrive are two frames to conceal, and the clock does not slip"
   ) {
     val arrivals =
-      steady(0 until 12, 100.millis).filterNot((_, n) => n == 5 || n == 6)
+      steady(0 until 12, 107.millis).filterNot((_, n) => n == 5 || n == 6)
     played(arrivals).map { out =>
       assertEquals(
         out.take(12),
@@ -121,8 +125,8 @@ class JitterPlayoutSuite extends CatsEffectSuite {
   test(
     "an outage lets the buffer run dry, and when packets return it fills again before playing"
   ) {
-    val before = steady(0 until 5, 100.millis)
-    val after  = steady(20 until 26, 100.millis + period * 20L)
+    val before = steady(0 until 5, 107.millis)
+    val after  = steady(20 until 26, 107.millis + period * 20L)
     played(before ::: after).map { out =>
       // The five, then waiting, then the six that follow the outage.
       assertEquals(out.take(5), (0 until 5).map(n => s"F$n").toList)
@@ -138,7 +142,7 @@ class JitterPlayoutSuite extends CatsEffectSuite {
   test(
     "a packet delayed past its turn is dropped when it comes, and the gap was concealed"
   ) {
-    val arrivals = steady(0 until 10, 100.millis).map { (at, n) =>
+    val arrivals = steady(0 until 10, 107.millis).map { (at, n) =>
       if n == 4 then (at + 150.millis, n) else (at, n)
     }
     played(arrivals).map { out =>

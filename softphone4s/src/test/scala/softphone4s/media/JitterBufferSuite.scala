@@ -1,6 +1,7 @@
 package softphone4s.media
 
 import fs2.Chunk
+import softphone4s.SipLiterals.pt
 import munit.{FunSuite, ScalaCheckSuite}
 import org.scalacheck.Prop.forAll
 import org.scalacheck.Gen
@@ -22,6 +23,7 @@ class JitterBufferSuite extends FunSuite with ScalaCheckSuite {
       sequence * 160L,
       ssrc,
       marker = false,
+      pt(0),
       Chunk.array(Array((sequence >> 8).toByte, sequence.toByte))
     )
 
@@ -29,9 +31,9 @@ class JitterBufferSuite extends FunSuite with ScalaCheckSuite {
     ((payload(0) & 0xff) << 8) | (payload(1) & 0xff)
 
   private def show(out: Playout): String = out match {
-    case Playout.Frame(payload) => s"F${sequenceOf(payload)}"
-    case Playout.Lost           => "L"
-    case Playout.Waiting        => "."
+    case Playout.Frame(packet) => s"F${sequenceOf(packet.payload)}"
+    case Playout.Lost          => "L"
+    case Playout.Waiting       => "."
   }
 
   /** The buffer after the steps, what each pull gave and what each push became.

@@ -307,10 +307,9 @@ class MediaCodecSuite extends CatsEffectSuite {
         }
       )
 
-    def decoder[F[_]: cats.effect.Sync]: fs2.Pipe[F, Chunk[Byte], Byte] =
-      softphone4s.media.AudioCodec.decoding(
-        softphone4s.media.AudioCodec.stateless(payload => payload)
-      )
+    def decoderSession[F[_]: cats.effect.Sync]
+        : cats.effect.Resource[F, softphone4s.media.AudioCodec.Session] =
+      softphone4s.media.AudioCodec.stateless(payload => payload)
   }
 
   test(

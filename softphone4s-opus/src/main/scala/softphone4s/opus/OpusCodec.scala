@@ -82,8 +82,8 @@ object OpusCodec {
     def encoder[F[_]: Sync]: Pipe[F, Byte, Chunk[Byte]] =
       AudioCodec.encoding[F](pcmPacketBytes, encoding[F])
 
-    def decoder[F[_]: Sync]: Pipe[F, Chunk[Byte], Byte] =
-      AudioCodec.decoding(decoding[F])
+    def decoderSession[F[_]: Sync]: Resource[F, AudioCodec.Session] =
+      decoding[F]
 
     private def encoding[F[_]: Sync]: Resource[F, AudioCodec.Session] =
       Resource
