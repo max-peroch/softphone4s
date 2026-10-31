@@ -7,7 +7,8 @@ import cats.syntax.all.*
 import com.comcast.ip4s.*
 import fs2.concurrent.Channel
 import fs2.{Chunk, Pipe, Stream}
-import fs2.io.net.Network
+import fs2.io.net.{Datagram, DatagramSocket, Network}
+import softphone4s.codec.RtcpCodec
 import softphone4s.config.RtpLatching
 import softphone4s.media.{
   AudioCodec,
@@ -15,10 +16,16 @@ import softphone4s.media.{
   ComfortNoise,
   Concealment,
   JitterConfig,
+  JitterPacket,
   JitterPlayout,
   JitterStats,
-  Playout
+  Playout,
+  RtcpPacket,
+  RtcpReports,
+  RtcpSchedule,
+  RtpReception
 }
+import softphone4s.media.RtcpPacket.ReportBlock
 import softphone4s.model.{DtmfDigit, MediaDirection, SoftphoneError, Ssrc}
 import softphone4s.sdp.{Capabilities, Codec, MediaPlan}
 
@@ -40,7 +47,10 @@ private[softphone4s] class MediaSession[F[_]: Async: Network] private (
     playback: Ref[F, MediaSession.Playback],
     remoteSends: Ref[F, Boolean],
     jitterConfig: JitterConfig,
-    stats: Ref[F, JitterStats]
+    stats: Ref[F, JitterStats],
+    receptions: Ref[F, Map[Ssrc, RtpReception]],
+    peerBlock: Ref[F, Option[ReportBlock]],
+    rtcp: RtcpSchedule
 ) {
 
   val source: Stream[F, Byte] =
@@ -95,6 +105,147 @@ private[softphone4s] class MediaSession[F[_]: Async: Network] private (
           )
       }
     )
+
+  /** What the other side last reported of the stream we send: how much of it
+    * they received, lost, and how much it jittered. None until they have.
+    */
+  def peerReport: F[Option[ReportBlock]] = peerBlock.get
+
+  /** A packet of the stream arrived: counted as it came, before the jitter
+    * buffer puts anything in order. A new source replaces the one before, since
+    * a call has two parties.
+    */
+  private def observe(clockRate: Int)(packet: JitterPacket): F[Unit] =
+    Async[F].monotonic.flatMap(now =>
+      receptions.update(known =>
+        known.get(packet.ssrc) match {
+          case Some(seen) =>
+            known.updated(
+              packet.ssrc,
+              seen.hear(packet.sequence, packet.timestamp, now)
+            )
+          case None =>
+            Map(
+              packet.ssrc -> RtpReception.start(
+                packet.ssrc,
+                clockRate,
+                packet.sequence,
+                packet.timestamp,
+                now
+              )
+            )
+        }
+      )
+    )
+
+  /** The RTCP port of the party we send media to: the one after its RTP port.
+    */
+  private def rtcpTarget: F[Option[SocketAddress[IpAddress]]] =
+    target.get.map(
+      _.flatMap(media =>
+        Port.fromInt(media.port.value + 1).map(SocketAddress(media.host, _))
+      )
+    )
+
+  /** The socket RTCP uses, the port after the RTP one. It is optional, so a
+    * port that is taken, or none after 65535, leaves the call without it.
+    */
+  private def rtcpSocket: Resource[F, Option[DatagramSocket[F]]] =
+    Port
+      .fromInt(localRtpPort.value + 1)
+      .fold(Resource.pure[F, Option[DatagramSocket[F]]](None))(port =>
+        Network[F]
+          .bindDatagramSocket(address = SocketAddress(bindAddress, port))
+          .attempt
+          .map(_.toOption)
+      )
+
+  /** Sends a report to the party we send media to, if it is receiving: a
+    * sender's if we have sent anything, with a block for what we heard. With
+    * `leaving` a goodbye follows, and nothing is sent if there is nothing to
+    * say goodbye to. Failing to send one is not an error: it is the next
+    * report's to make up for.
+    */
+  private def report(
+      socket: DatagramSocket[F],
+      rtp: RtpSender[F],
+      leaving: Boolean
+  ): F[Unit] =
+    (Async[F].monotonic, rtp.senderInfo, rtcpTarget).flatMapN {
+      (now, info, to) =>
+        to.traverse_ { address =>
+          receptions
+            .modify { known =>
+              val reported =
+                known.toList.map((ssrc, seen) => ssrc -> seen.report(now))
+              (
+                reported.map((ssrc, step) => ssrc -> step._1).toMap,
+                reported.map(_._2._2)
+              )
+            }
+            .flatMap { blocks =>
+              val name    = s"softphone4s@$bindAddress"
+              val packets =
+                if leaving then
+                  RtcpReports.goodbye(rtp.source, info, blocks, name)
+                else RtcpReports.regular(rtp.source, info, blocks, name)
+              socket
+                .write(Datagram(address, RtcpCodec.encode(packets)))
+                .attempt
+                .void
+                .whenA(!leaving || info.isDefined || blocks.nonEmpty)
+            }
+        }
+    }
+
+  /** What a report from the other side tells us. */
+  private def hear(ours: Ssrc, packet: RtcpPacket): F[Unit] = {
+    def aboutUs(blocks: List[ReportBlock]): F[Unit] =
+      blocks.find(_.ssrc == ours).traverse_(block => peerBlock.set(Some(block)))
+    packet match {
+      case RtcpPacket.SenderReport(ssrc, info, blocks) =>
+        // Their report is what our blocks about them quote back.
+        Async[F].monotonic.flatMap(now =>
+          receptions.update(known =>
+            known
+              .get(ssrc)
+              .fold(known)(seen =>
+                known.updated(ssrc, seen.senderReportHeard(info.middle, now))
+              )
+          )
+        ) >> aboutUs(blocks)
+      case RtcpPacket.ReceiverReport(_, blocks) => aboutUs(blocks)
+      case _                                    => Async[F].unit
+    }
+  }
+
+  /** Reports every so often, and hears the other side's, until cancelled. Only
+    * what comes from the host we send media to is believed.
+    */
+  private def reports(socket: DatagramSocket[F], rtp: RtpSender[F]): F[Unit] = {
+    val wait: (Double => FiniteDuration) => F[Unit] = pick =>
+      Async[F]
+        .delay(scala.util.Random.nextDouble())
+        .flatMap(r => Async[F].sleep(pick(r)))
+    val sending =
+      wait(rtcp.first) >> report(socket, rtp, leaving = false) >>
+        (wait(rtcp.next) >> report(socket, rtp, leaving = false)).foreverM[Unit]
+    val receiving =
+      socket.reads
+        .evalMap(datagram =>
+          target.get.flatMap(media =>
+            RtcpCodec
+              .decode(datagram.bytes)
+              .toOption
+              .filter(_ => media.exists(_.host == datagram.remote.host))
+              .traverse_(_.traverse_(hear(rtp.source, _)))
+          )
+        )
+        .compile
+        .drain
+    // A side channel: whatever goes wrong with it does not end the call.
+    sending.both(receiving).attempt.void
+  }
 
   /** What to play for one thing the jitter buffer gave. */
   private def play(
@@ -228,15 +379,17 @@ private[softphone4s] class MediaSession[F[_]: Async: Network] private (
                     JitterPlayout(
                       jitterConfig,
                       MediaSession.FramePeriod,
-                      RtpTransport.receiveBytes(
-                        socket,
-                        lastDtmfKey,
-                        onDtmf,
-                        heardFrom,
-                        plan.payloadType,
-                        plan.telephoneEventType,
-                        plan.comfortNoiseType
-                      )
+                      RtpTransport
+                        .receiveBytes(
+                          socket,
+                          lastDtmfKey,
+                          onDtmf,
+                          heardFrom,
+                          plan.payloadType,
+                          plan.telephoneEventType,
+                          plan.comfortNoiseType
+                        )
+                        .evalTap(observe(plan.codec.clockRate))
                     ).evalMap((out, standing) =>
                       stats.set(standing) >>
                         play(plan, decode, codec.pcmPacketBytes, out)
@@ -258,7 +411,15 @@ private[softphone4s] class MediaSession[F[_]: Async: Network] private (
                     _.through(codec.encoder[F]).through(rtp.audio)
                   sender.complete(rtp) >>
                     sendPipeReady.complete(pcmToRtp) >>
-                    receiveF.race(mediaStop.get.void).void
+                    rtcpSocket.use {
+                      case None =>
+                        receiveF.race(mediaStop.get.void).void
+                      case Some(rtcpSocket) =>
+                        receiveF
+                          .race(mediaStop.get.void)
+                          .race(reports(rtcpSocket, rtp))
+                          .void >> report(rtcpSocket, rtp, leaving = true)
+                    }
                 }
             } >> audioChannel.close.void
         }
@@ -323,7 +484,8 @@ private[softphone4s] object MediaSession {
       localRtpPort: Port,
       codecs: AudioCodecs,
       latching: RtpLatching,
-      jitter: JitterConfig
+      jitter: JitterConfig,
+      rtcp: RtcpSchedule = RtcpSchedule.Default
   ): F[MediaSession[F]] =
     for {
       audioChannel  <- Channel.bounded[F, Chunk[Byte]](64)
@@ -336,6 +498,8 @@ private[softphone4s] object MediaSession {
       playback      <- Ref[F].of(Playback.Start)
       remoteSends   <- Ref[F].of(true)
       stats         <- Ref[F].of(JitterStats())
+      receptions    <- Ref[F].of(Map.empty[Ssrc, RtpReception])
+      peerBlock     <- Ref[F].of(Option.empty[ReportBlock])
     } yield new MediaSession(
       bindAddress,
       localRtpPort,
@@ -351,6 +515,9 @@ private[softphone4s] object MediaSession {
       playback,
       remoteSends,
       jitter,
-      stats
+      stats,
+      receptions,
+      peerBlock,
+      rtcp
     )
 }

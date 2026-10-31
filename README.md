@@ -170,6 +170,18 @@ softphone4s handles outbound SIP calls end-to-end:
   before the speech ahead of them; a digit is still reported the moment it
   arrives. A depth of 1 is the least delay, 20 ms. The buffer does not adapt to
   the network: the depth is the depth.
+- **RTCP** (RFC 3550): a call sends a report every 5 seconds or so (each wait
+  between half and one and a half times that, the first after half of it) to the
+  port after the other side's RTP port, and reads theirs from the port after
+  ours. The report is a sender's once we have sent audio and a receiver's until
+  then, with a block for what we heard (the highest sequence number, packets
+  lost, interarrival jitter, counted as the packets arrive and before the
+  jitter buffer reorders any), who we are (`softphone4s@address`), and a goodbye
+  when the call ends. `MediaSession.peerReport` is what the other side last
+  said of what we send. Reports are believed only from the host we send media
+  to, and none are sent while the call is on hold. RTCP is best effort: a
+  failure to send one, or an RTCP port that is taken, leaves the call without
+  reports and does not end it. `a=rtcp` and `rtcp-mux` are not read yet.
 - **Comfort noise** (RFC 3389), received: we offer `CN/8000` (payload type 13)
   beside the codecs, and answer it when it is offered (on the number it was
   offered on; other rates are not taken). A party that stops sending speech to
