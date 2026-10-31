@@ -28,6 +28,7 @@ import softphone4s.media.{
 import softphone4s.media.RtcpPacket.ReportBlock
 import softphone4s.model.{DtmfDigit, MediaDirection, SoftphoneError, Ssrc}
 import softphone4s.sdp.{Capabilities, Codec, MediaPlan}
+import softphone4s.srtp.{SrtpError, SrtpInbound, SrtpOutbound, SrtpPlan}
 
 import scala.concurrent.duration.*
 import softphone4s.transport.{RtpLatch, RtpSender, RtpTransport}
@@ -247,6 +248,32 @@ private[softphone4s] class MediaSession[F[_]: Async: Network] private (
     sending.both(receiving).attempt.void
   }
 
+  /** Media as it came, when it is not encrypted. */
+  private val plain: Chunk[Byte] => F[Option[Chunk[Byte]]] =
+    bytes => Async[F].pure(Some(bytes))
+
+  /** Takes SRTP off what came: the packet in it, or nothing if it does not
+    * authenticate, or has been seen, or is too old. A packet from another
+    * source than the one counted is the other side's new stream, and starts a
+    * new count, if the packet is authentic with the key we were given.
+    */
+  private def opener(
+      keys: SrtpPlan,
+      state: Ref[F, SrtpInbound]
+  ): Chunk[Byte] => F[Option[Chunk[Byte]]] =
+    bytes =>
+      state.modify { current =>
+        current.unprotect(bytes) match {
+          case Right((next, packet))            => (next, Some(packet))
+          case Left(SrtpError.SourceChanged(_)) =>
+            SrtpInbound(keys.suite, keys.receive).unprotect(bytes) match {
+              case Right((next, packet)) => (next, Some(packet))
+              case Left(_)               => (current, None)
+            }
+          case Left(_) => (current, None)
+        }
+      }
+
   /** What to play for one thing the jitter buffer gave. */
   private def play(
       plan: MediaPlan,
@@ -363,7 +390,12 @@ private[softphone4s] class MediaSession[F[_]: Async: Network] private (
   ): F[Unit] =
     supervisor
       .supervise(
-        Ref[F].of((-1L, -1)).flatMap { lastDtmfKey =>
+        (
+          Ref[F].of((-1L, -1)),
+          plan.srtp.traverse(keys =>
+            Ref[F].of(SrtpInbound(keys.suite, keys.receive)).map(keys -> _)
+          )
+        ).flatMapN { (lastDtmfKey, inbound) =>
           Network[F]
             .bindDatagramSocket(address =
               SocketAddress(bindAddress, localRtpPort)
@@ -387,7 +419,8 @@ private[softphone4s] class MediaSession[F[_]: Async: Network] private (
                           heardFrom,
                           plan.payloadType,
                           plan.telephoneEventType,
-                          plan.comfortNoiseType
+                          plan.comfortNoiseType,
+                          inbound.fold(plain)(opener(_, _))
                         )
                         .evalTap(observe(plan.codec.clockRate))
                     ).evalMap((out, standing) =>
@@ -404,7 +437,8 @@ private[softphone4s] class MediaSession[F[_]: Async: Network] private (
                   target.get,
                   plan.payloadType,
                   plan.telephoneEventType,
-                  codec.timestampStep
+                  codec.timestampStep,
+                  plan.srtp.map(keys => SrtpOutbound(keys.suite, keys.send))
                 )
                 .flatMap { rtp =>
                   val pcmToRtp: Pipe[F, Byte, Unit] =

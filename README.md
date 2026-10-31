@@ -188,6 +188,22 @@ softphone4s handles outbound SIP calls end-to-end:
   to, and none are sent while the call is on hold. RTCP is best effort: a
   failure to send one, or an RTCP port that is taken, leaves the call without
   reports and does not end it. `a=rtcp` and `rtcp-mux` are not read yet.
+- **SRTP** (RFC 3711, keys by SDES, RFC 4568): `srtp = off | optional | required`
+  (off by default). Each call makes its own keys, one per suite
+  (`AES_CM_128_HMAC_SHA1_80`, then `_32`), and keeps them over its session
+  changes. With `required` the INVITE offers `RTP/SAVP` and only an encrypted
+  answer is taken: an answer in plain RTP, or in secure RTP with no key we can
+  use, ends the call. With `optional` the offer is plain `RTP/AVP` with the keys
+  beside it, and the call is encrypted if the answer takes one. We answer an
+  offer the same way, in the profile it used, with the first of its keys in a
+  suite we speak. Everything RTP carries is encrypted and authenticated,
+  telephone events included; a packet that does not authenticate, or is a
+  replay, is dropped before the jitter buffer sees it. Keys never appear in a
+  log. Not supported: master key identifiers, key lifetimes (read and ignored),
+  `KDR=` and other session parameters (a line with one is not used), and a key
+  change in mid-call (the other side must keep its key over a re-INVITE). RTCP
+  is not encrypted yet (SRTCP is to come); AES-GCM and DTLS-SRTP are not
+  offered.
 - **Comfort noise** (RFC 3389), received: we offer `CN/8000` (payload type 13)
   beside the codecs, and answer it when it is offered (on the number it was
   offered on; other rates are not taken). A party that stops sending speech to
@@ -448,6 +464,7 @@ account every call is taken. Two accounts cannot have the same user.
 | `tls.trust-store` / `tls.client-certificate` | `{ path, password, store-type }` | JVM trust / none | Key stores for the certificates we trust and the one we present (`store-type` is `PKCS12` or `JKS`) |
 | `nat.stun.host` / `port` / `retransmit` / `attempts` / `refresh` | name, `Port`, `Duration`, `Int`, `Duration` | none / 3478 / 500 ms / 5 / 5 minutes | A STUN server to ask what address we have outside a NAT |
 | `nat.rtp-latching` | `follow`/`ignore` | `follow` | Send media to where the remote party's media comes from, when that is not where its SDP said |
+| `srtp` | `off` / `optional` / `required` | `off` | Whether media is encrypted with SRTP (keys exchanged in the SDP, so the signalling should be on TLS) |
 | `jitter-buffer.depth` / `max-depth` / `capacity` | `Int` | 3 / 6 / 12 | Frames of 20 ms held before playing, how far that grows when the network is bad (`max-depth = depth` for a fixed cushion), and the most ever held |
 | `codecs` | list of names: `pcmu`, `pcma`, `g722`, or one you add | `[pcmu, pcma]` | The audio codecs to offer and accept, most wanted first |
 | `nat.observed-address` | `use`/`ignore` | `use` | Advertise the address servers say they see us at (Contact, SDP) |

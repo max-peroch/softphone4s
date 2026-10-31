@@ -9,6 +9,7 @@ import fs2.{Chunk, Pipe}
 import softphone4s.codec.RtpCodec
 import softphone4s.media.RtcpPacket.SenderInfo
 import softphone4s.media.{NtpTime, RtpReception}
+import softphone4s.srtp.SrtpOutbound
 import softphone4s.model.{DtmfDigit, PayloadType, SoftphoneEvent, Ssrc}
 
 import scala.concurrent.duration.*
@@ -34,7 +35,9 @@ final class RtpSender[F[_]: Async] private (
     sendingDigit: Ref[F, Boolean],
     oneDigitAtATime: Semaphore[F],
     counts: Ref[F, RtpSender.Sent],
-    anchor: Ref[F, Option[RtpSender.Anchor]]
+    anchor: Ref[F, Option[RtpSender.Anchor]],
+    srtp: Ref[F, Option[SrtpOutbound]],
+    inOrder: Semaphore[F]
 ) {
 
   /** The source these packets are sent as. */
@@ -145,12 +148,14 @@ final class RtpSender[F[_]: Async] private (
       marker: Boolean,
       payload: Chunk[Byte]
   ): F[Unit] =
-    sequence
-      .getAndUpdate(s => (s + 1) & 0xffff)
-      .flatMap(number =>
-        socket.write(
-          Datagram(
-            to,
+    // The number, the encryption (whose rollover counter goes up as the number
+    // wraps) and the sending are one step, so that packets are protected in the
+    // order they are numbered, whichever of audio and digits sends them.
+    inOrder.permit.surround(
+      sequence
+        .getAndUpdate(s => (s + 1) & 0xffff)
+        .flatMap(number =>
+          secured(
             RtpCodec.encode(
               payloadType = payloadType,
               sequenceNumber = number,
@@ -159,9 +164,28 @@ final class RtpSender[F[_]: Async] private (
               payload = payload,
               marker = marker
             )
+          ).flatMap(
+            _.traverse_(bytes =>
+              socket.write(Datagram(to, bytes)) >>
+                counts.update(_.add(payload.size))
+            )
           )
-        ) >> counts.update(_.add(payload.size))
-      )
+        )
+    )
+
+  /** `packet` as it goes on the wire: encrypted, if the stream is. None if it
+    * could not be, which an RTP packet of ours never cannot.
+    */
+  private def secured(packet: Chunk[Byte]): F[Option[Chunk[Byte]]] =
+    srtp.modify {
+      case None      => (None, Some(packet))
+      case Some(out) =>
+        out.protect(packet) match {
+          case Right((next, protectedPacket)) =>
+            (Some(next), Some(protectedPacket))
+          case Left(_) => (Some(out), None)
+        }
+    }
 
   // Telephone events count at 8 000 a second, and a packet is 20 ms of them.
   private val EventTicksPerMilli = 8
@@ -196,7 +220,8 @@ object RtpSender {
       target: F[Option[SocketAddress[IpAddress]]],
       audioType: PayloadType,
       eventType: Option[PayloadType],
-      timestampStep: Int
+      timestampStep: Int,
+      srtp: Option[SrtpOutbound] = None
   ): F[RtpSender[F]] =
     (
       Async[F].delay(Ssrc.fromBits(scala.util.Random.nextInt())),
@@ -206,7 +231,9 @@ object RtpSender {
       Ref.of[F, Boolean](false),
       Semaphore[F](1),
       Ref.of[F, Sent](Sent(0, 0)),
-      Ref.of[F, Option[Anchor]](None)
+      Ref.of[F, Option[Anchor]](None),
+      Ref.of[F, Option[SrtpOutbound]](srtp),
+      Semaphore[F](1)
     ).mapN(
       new RtpSender(
         socket,
@@ -214,6 +241,8 @@ object RtpSender {
         audioType,
         eventType,
         timestampStep,
+        _,
+        _,
         _,
         _,
         _,

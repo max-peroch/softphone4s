@@ -2,10 +2,18 @@ package softphone4s.codec
 
 import softphone4s.SipLiterals.pt
 import cats.data.NonEmptyList
+import fs2.Chunk
 import com.comcast.ip4s.*
 import munit.FunSuite
 import softphone4s.model.MediaDirection
-import softphone4s.sdp.{Capabilities, Codec, Reject}
+import softphone4s.sdp.{
+  Capabilities,
+  Codec,
+  CryptoAttribute,
+  LocalCrypto,
+  Reject
+}
+import softphone4s.srtp.{MasterKey, SrtpPolicy, SrtpSuite}
 
 /** The SDP the dialogs use: read through the parser and the offer/answer. */
 class SdpCodecSuite extends FunSuite {
@@ -176,5 +184,25 @@ class SdpCodecSuite extends FunSuite {
         .toOption,
       Some(Reject.NoCommonCodec)
     )
+  }
+
+  test(
+    "a secure stream is an offer for a phone that encrypts, and none for one that does not"
+  ) {
+    val secure =
+      "v=0\r\no=- 1 1 IN IP4 10.0.0.9\r\ns=-\r\nc=IN IP4 10.0.0.9\r\nt=0 0\r\n" +
+        "m=audio 4000 RTP/SAVP 0\r\n" +
+        "a=crypto:1 AES_CM_128_HMAC_SHA1_80 inline:d0RmdmcmVCspeEc3QGZiNWpVLFJhQX1cfHAwJSoj\r\n"
+    val ourKey = MasterKey
+      .fromBytes(Chunk.array(Array.fill[Byte](30)(7)))
+      .fold(e => fail(e.message), identity)
+    val keyed = caps.copy(crypto =
+      LocalCrypto(
+        SrtpPolicy.Optional,
+        List(CryptoAttribute(1, SrtpSuite.AesCm128HmacSha1_80, ourKey))
+      )
+    )
+    assert(SdpCodec.parseOffer(secure, keyed).isDefined)
+    assert(SdpCodec.parseOffer(secure, caps).isEmpty)
   }
 }

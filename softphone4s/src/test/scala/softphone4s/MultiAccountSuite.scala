@@ -10,6 +10,7 @@ import pureconfig.ConfigSource
 import softphone4s.SipLiterals.*
 import softphone4s.config.{AccountConfig, KeyStoreType, SoftphoneConfig}
 import softphone4s.model.*
+import softphone4s.srtp.SrtpPolicy
 import softphone4s.transport.{
   ClientAuthentication,
   HostnameVerification,
@@ -406,6 +407,25 @@ class MultiAccountSuite extends CatsEffectSuite {
     assertEquals(store("jks"), Right(Some(KeyStoreType.Jks)))
     assertEquals(store("Pkcs12"), Right(Some(KeyStoreType.Pkcs12)))
     assert(store("PKSC12").isLeft)
+  }
+
+  test(
+    "the encryption policy is read, off if not said, and one that is not known is refused"
+  ) {
+    def load(extra: String) =
+      ConfigSource
+        .string(s"user = alice\npassword = pw\nrealm = example.com\n$extra")
+        .load[SoftphoneConfig]
+    assertEquals(load("").map(_.srtp), Right(SrtpPolicy.Off))
+    assertEquals(
+      load("srtp = optional").map(_.srtp),
+      Right(SrtpPolicy.Optional)
+    )
+    assertEquals(
+      load("srtp = required").map(_.srtp),
+      Right(SrtpPolicy.Required)
+    )
+    assert(load("srtp = always").isLeft)
   }
 
   test("a jitter buffer that cannot work is a configuration error") {

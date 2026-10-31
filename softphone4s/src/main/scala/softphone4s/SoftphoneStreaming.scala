@@ -20,6 +20,7 @@ import softphone4s.dns.{
 import softphone4s.fsm.CallTimer
 import softphone4s.model.*
 import softphone4s.registration.Registration
+import softphone4s.sdp.LocalCrypto
 import softphone4s.media.{AudioCodec, AudioCodecs}
 import softphone4s.runtime.{Entropy, Timers}
 import softphone4s.stun.StunClient
@@ -360,6 +361,9 @@ class SoftphoneStreaming[F[_]: Async: Network] private (
           Port.fromInt(rtpPortInt),
           SoftphoneError.RtpPortExhausted(rtpPortInt)
         )
+        // The keys of a call are made once, and are the same over its session
+        // changes and its uplinks.
+        crypto   <- LocalCrypto.generate[F](config.srtp)
         endpoint <- Async[F].fromEither(
           LocalEndpoint.from(
             account.config,
@@ -368,7 +372,7 @@ class SoftphoneStreaming[F[_]: Async: Network] private (
             sipPortFor(transport),
             rtpPort,
             transport,
-            codecs.capabilities
+            codecs.capabilities.copy(crypto = crypto)
           )
         )
       } yield endpoint

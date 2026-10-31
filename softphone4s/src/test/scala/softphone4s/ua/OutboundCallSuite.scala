@@ -18,6 +18,13 @@ import softphone4s.fsm.CallTimer
 import softphone4s.media.{AudioCodecs, JitterConfig}
 import softphone4s.model.*
 import softphone4s.runtime.{Entropy, Timers}
+import softphone4s.sdp.{
+  CryptoAttribute,
+  LocalCrypto,
+  MediaProtocol,
+  SessionDescription
+}
+import softphone4s.srtp.{MasterKey, SrtpInbound, SrtpPolicy, SrtpSuite}
 import softphone4s.transaction.*
 import softphone4s.transport.{
   FlakyTransport,
@@ -1359,6 +1366,116 @@ class OutboundCallSuite extends CatsEffectSuite {
         assert(!busy, "the early media held its port")
         assert(refused.isLeft)
         assert(freed, "and let it go when the call was refused")
+      }
+    }
+  }
+
+  // ---- Encrypted media ---------------------------------------------------------------
+
+  private def masterKey(n: Int): MasterKey =
+    MasterKey(
+      Chunk.array(Array.fill[Byte](16)(n.toByte)),
+      Chunk.array(Array.fill[Byte](14)((n + 1).toByte))
+    ).fold(e => fail(e.message), identity)
+
+  private def secureUplink(rtp: Port, policy: SrtpPolicy) =
+    Uplink(
+      endpointOn(rtp).withCapabilities(
+        AudioCodecs.Default.capabilities.copy(crypto =
+          LocalCrypto(
+            policy,
+            List(
+              CryptoAttribute(1, SrtpSuite.AesCm128HmacSha1_80, masterKey(10)),
+              CryptoAttribute(2, SrtpSuite.AesCm128HmacSha1_32, masterKey(20))
+            )
+          )
+        )
+      ),
+      them
+    )
+
+  private def answerSdp(protocol: String, lines: String*) =
+    ("v=0\r\no=- 1 1 IN IP4 127.0.0.1\r\ns=-\r\nc=IN IP4 127.0.0.1\r\nt=0 0\r\n" +
+      s"m=audio 40000 $protocol 0\r\n") + lines.map(_ + "\r\n").mkString
+
+  test(
+    "with encryption required the INVITE offers secure media with our keys, and what follows the answer is encrypted"
+  ) {
+    val rtpPeer = Network[IO].bindDatagramSocket(
+      address = SocketAddress(ip"127.0.0.1", port"40000")
+    )
+    val theirs =
+      CryptoAttribute(1, SrtpSuite.AesCm128HmacSha1_80, masterKey(30))
+    (
+      fixture(
+        port"19039",
+        first = Some(secureUplink(port"19039", SrtpPolicy.Required))
+      ),
+      rtpPeer
+    ).tupled.use { (f, media) =>
+      for {
+        invite <- nextOf(f.peer, SipMethod.Invite)
+        _      <- reply(
+          f.peer,
+          answerTo(invite, 200, "OK", withContact = true)
+            .copy(body = answerSdp("RTP/SAVP", theirs.attribute.render))
+        )
+        _ <- f.call.awaitPickup
+        _ <- IO.sleep(500.millis) // the media socket is bound in the background
+        _ <- Stream
+          .chunk(Chunk.array(Array.fill[Byte](320)(1)))
+          .through(f.call.sink)
+          .compile
+          .drain
+        datagram <- media.read.timeout(5.seconds)
+      } yield {
+        val offered = SessionDescription
+          .parse(invite.body)
+          .fold(e => fail(e.message), identity)
+        assertEquals(offered.media.head.protocol, MediaProtocol.RtpSavp)
+        assertEquals(
+          offered.media.head.cryptos.map(c => (c.tag, c.suite)),
+          List(
+            (1, SrtpSuite.AesCm128HmacSha1_80),
+            (2, SrtpSuite.AesCm128HmacSha1_32)
+          )
+        )
+        // The packet is sealed with our key for the suite they chose, and
+        // opens with it.
+        assertEquals(datagram.bytes.size, 12 + 160 + 10)
+        val opened = SrtpInbound(SrtpSuite.AesCm128HmacSha1_80, masterKey(10))
+          .unprotect(datagram.bytes)
+        assert(opened.isRight, opened.left.toOption.map(_.message))
+      }
+    }
+  }
+
+  test(
+    "with encryption required, an answer in plain RTP ends the call, and nothing goes out in the clear"
+  ) {
+    val rtpPeer = Network[IO].bindDatagramSocket(
+      address = SocketAddress(ip"127.0.0.1", port"40000")
+    )
+    (
+      fixture(
+        port"19041",
+        first = Some(secureUplink(port"19041", SrtpPolicy.Required))
+      ),
+      rtpPeer
+    ).tupled.use { (f, media) =>
+      for {
+        invite <- nextOf(f.peer, SipMethod.Invite)
+        _      <- reply(
+          f.peer,
+          answerTo(invite, 200, "OK", withContact = true)
+            .copy(body = answerSdp("RTP/AVP"))
+        )
+        // An answer we cannot use is a call we hang up.
+        bye  <- nextOf(f.peer, SipMethod.Bye).timeout(5.seconds)
+        sent <- media.read.timeout(500.millis).attempt
+      } yield {
+        assertEquals(bye.method, SipMethod.Bye)
+        assert(sent.isLeft, "media went out in the clear")
       }
     }
   }

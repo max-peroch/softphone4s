@@ -2,6 +2,7 @@ package softphone4s.codec
 
 import com.comcast.ip4s.{IpAddress, Port, ip, port}
 import softphone4s.model.{MediaDirection, PayloadType}
+import softphone4s.srtp.SrtpPolicy
 import softphone4s.sdp.{
   Capabilities,
   LocalMedia,
@@ -52,7 +53,9 @@ object SdpCodec {
       description <- SessionDescription.parse(sdp).toOption
       section     <- description.media.find(m =>
         m.kind == MediaKind.Audio && !m.isDeclined &&
-          m.protocol == MediaProtocol.RtpAvp
+          (m.protocol == MediaProtocol.RtpAvp ||
+            (m.protocol == MediaProtocol.RtpSavp &&
+              capabilities.crypto.policy != SrtpPolicy.Off))
       )
       ip <- description.addressOf(section)
       _  <- OfferAnswer.answer(description, probe, capabilities).toOption

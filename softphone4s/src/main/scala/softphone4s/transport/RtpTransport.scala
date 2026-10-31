@@ -18,6 +18,10 @@ object RtpTransport {
     * which would otherwise take the ones that are not audio for packets lost.
     * `heardFrom` is told where each came from, and its SSRC.
     *
+    * `open` turns what came on the wire into the RTP packet in it, or into
+    * nothing if it is to be dropped: it is how SRTP is taken off, and a packet
+    * that does not authenticate goes no further.
+    *
     * A telephone event is also acted on as it arrives, not when its turn comes
     * to be played: DTMF end-bit packets are deduped by (timestamp, event) and
     * delivered via `onDtmf`.
@@ -29,32 +33,37 @@ object RtpTransport {
       heardFrom: (SocketAddress[IpAddress], Ssrc) => F[Unit],
       audioType: PayloadType,
       eventType: Option[PayloadType],
-      comfortType: Option[PayloadType]
+      comfortType: Option[PayloadType],
+      open: Chunk[Byte] => F[Option[Chunk[Byte]]]
   ): Stream[F, JitterPacket] =
-    socket.reads.flatMap { datagram =>
-      RtpCodec.decode(datagram.bytes) match {
-        case None                    => Stream.empty
-        case Some((header, payload)) =>
-          val pt     = header.payloadType
-          val packet = JitterPacket(
-            header.sequenceNumber,
-            header.timestamp,
-            header.ssrc,
-            header.marker,
-            pt,
-            payload
-          )
-          val heard = Stream.exec(heardFrom(datagram.remote, header.ssrc))
-          if pt == audioType || comfortType.contains(pt) then
-            heard ++ Stream.emit(packet)
-          else if eventType.contains(pt) then
-            heard ++
-              Stream.exec(
-                handleSoftphoneEvent(header, payload, lastDtmfKey, onDtmf)
-              ) ++ Stream.emit(packet)
-          else Stream.empty
+    socket.reads
+      .evalMapFilter { datagram =>
+        open(datagram.bytes).map(_.map(bytes => datagram.copy(bytes = bytes)))
       }
-    }
+      .flatMap { datagram =>
+        RtpCodec.decode(datagram.bytes) match {
+          case None                    => Stream.empty
+          case Some((header, payload)) =>
+            val pt     = header.payloadType
+            val packet = JitterPacket(
+              header.sequenceNumber,
+              header.timestamp,
+              header.ssrc,
+              header.marker,
+              pt,
+              payload
+            )
+            val heard = Stream.exec(heardFrom(datagram.remote, header.ssrc))
+            if pt == audioType || comfortType.contains(pt) then
+              heard ++ Stream.emit(packet)
+            else if eventType.contains(pt) then
+              heard ++
+                Stream.exec(
+                  handleSoftphoneEvent(header, payload, lastDtmfKey, onDtmf)
+                ) ++ Stream.emit(packet)
+            else Stream.empty
+        }
+      }
 
   private def handleSoftphoneEvent[F[_]: Async](
       header: RtpCodec.RtpHeader,
