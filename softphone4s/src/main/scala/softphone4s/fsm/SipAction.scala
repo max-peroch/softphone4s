@@ -3,6 +3,8 @@ package softphone4s.fsm
 import softphone4s.codec.SdpCodec.AudioOffer
 import softphone4s.model.*
 
+import scala.concurrent.duration.FiniteDuration
+
 /** Semantic actions: interpreted by the effect layer, never by the state
   * machine itself.
   */
@@ -26,6 +28,9 @@ enum SipAction {
   )
   case SendCancel(ctx: InviteCtx)
   case SendBye(dialog: SipDialog)
+
+  /** A digit in a SIP INFO within `dialog`, whose CSeq is already advanced. */
+  case SendInfo(dialog: SipDialog, digit: DtmfDigit, duration: FiniteDuration)
 
   // Responses the interpreter builds deterministically
   case SendByeOk(request: SipRequest)

@@ -318,6 +318,60 @@ class CallFsmSuite extends FunSuite {
     assert(!actions.exists { case NotifyDtmf(_) => true; case _ => false })
   }
 
+  /** The digit an INFO with `body` tells us of, if any. */
+  private def digitIn(body: String): Option[DtmfDigit] =
+    step(active, RequestReceived(req(SipMethod.Info, body = body)))._2
+      .collectFirst { case NotifyDtmf(digit) => digit }
+
+  test(
+    "an INFO names its digit by symbol or by event number, with or without the rest of a dtmf-relay"
+  ) {
+    List(
+      "Signal=5\r\nDuration=250\r\n" -> Some(DtmfDigit.D5),
+      "Signal=0\r\n"                 -> Some(DtmfDigit.D0),
+      "Signal=*\r\n"                 -> Some(DtmfDigit.Star),
+      "Signal=#\r\n"                 -> Some(DtmfDigit.Hash),
+      "Signal=a\r\n"                 -> Some(DtmfDigit.A),
+      "Signal=D\r\n"                 -> Some(DtmfDigit.D),
+      "Signal=10\r\n"                -> Some(DtmfDigit.Star),
+      "Signal=15\r\n"                -> Some(DtmfDigit.D),
+      "Signal= 7 \r\n"               -> Some(DtmfDigit.D7),
+      "#"                            -> Some(DtmfDigit.Hash),
+      "Signal=16\r\n"                -> None,
+      "Signal=\r\n"                  -> None,
+      "Signal=X\r\n"                 -> None,
+      "Duration=250\r\n"             -> None
+    ).foreach((body, expected) => assertEquals(digitIn(body), expected, body))
+  }
+
+  test(
+    "a digit by INFO is sent with the next CSeq, and the next with the one after"
+  ) {
+    val (first, sent) = step(active, DtmfRequested(DtmfDigit.D5, 160.millis))
+    val next1 = active.dialog.copy(localCseq = active.dialog.localCseq.next)
+    assertEquals(first, Active(next1))
+    assertEquals(sent, List(SendInfo(next1, DtmfDigit.D5, 160.millis)))
+    val (second, again) = step(first, DtmfRequested(DtmfDigit.Star, 80.millis))
+    val next2           = next1.copy(localCseq = next1.localCseq.next)
+    assertEquals(second, Active(next2))
+    assertEquals(again, List(SendInfo(next2, DtmfDigit.Star, 80.millis)))
+  }
+
+  test("the answer to an INFO changes nothing") {
+    val (sentState, _) = step(active, DtmfRequested(DtmfDigit.D5, 160.millis))
+    val ok             = resp(200, "OK", method = SipMethod.Info)
+    assertEquals(step(sentState, ResponseReceived(ok)), (sentState, Nil))
+  }
+
+  test(
+    "a digit asked for during a re-INVITE is not sent: its CSeq is the one the answer is matched on"
+  ) {
+    assertEquals(
+      step(holding, DtmfRequested(DtmfDigit.D5, 160.millis)),
+      (holding, Nil)
+    )
+  }
+
   test("Active + a stale timer expiry → no state change, no actions") {
     val (state, actions) =
       step(active, TimerFired(CallTimer.InviteTimeout))

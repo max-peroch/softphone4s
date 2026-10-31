@@ -504,6 +504,69 @@ class InboundCallSuite extends CatsEffectSuite {
     }
   }
 
+  /** The offer without telephone events, so that a digit has to go by INFO. */
+  private val offerWithoutEvents = offer
+    .replace("RTP/AVP 0 101", "RTP/AVP 0")
+    .replace("a=rtpmap:101 telephone-event/8000\r\n", "")
+
+  test(
+    "a digit from an incoming call goes in an INFO when the caller did not offer telephone events"
+  ) {
+    scenario().use { (phone, peer) =>
+      for {
+        call     <- ring(phone, peer, invite(offerWithoutEvents))
+        accepted <- call.accept.allocated
+        ok       <- response(peer, status(200))
+        _        <- send(peer, inDialog(SipMethod.Ack, 1, ok))
+        _        <- accepted._1.awaitPickup.timeout(5.seconds)
+        method   <- accepted._1.sendDtmf(DtmfDigit.Star, 120.millis)
+        info     <- request(peer, SipMethod.Info)
+        _        <- accepted._2
+      } yield {
+        assertEquals(method, DtmfMethod.SipInfo)
+        assertEquals(info.headers.contentType, Some(MediaType.DtmfRelay))
+        assertEquals(info.body, "Signal=*\r\nDuration=120\r\n")
+        assertEquals(info.headers.cseq.seq.value, 2)
+      }
+    }
+  }
+
+  test(
+    "a digit from an incoming call goes in the media when the caller offered telephone events"
+  ) {
+    scenario().use { (phone, peer) =>
+      for {
+        call     <- ring(phone, peer)
+        accepted <- call.accept.allocated
+        ok       <- response(peer, status(200))
+        _        <- send(peer, inDialog(SipMethod.Ack, 1, ok))
+        _        <- accepted._1.awaitPickup.timeout(5.seconds)
+        _ <- IO.sleep(500.millis) // the media socket is bound in the background
+        method <- accepted._1.sendDtmf(DtmfDigit.D3, 80.millis)
+        info   <- request(peer, SipMethod.Info).timeout(300.millis).attempt
+        _      <- accepted._2
+      } yield {
+        assertEquals(method, DtmfMethod.Rfc4733)
+        assert(info.isLeft, "no INFO for a digit sent in the media")
+      }
+    }
+  }
+
+  test(
+    "a digit cannot be sent from an incoming call that has not been answered"
+  ) {
+    scenario().use { (phone, peer) =>
+      for {
+        call   <- ring(phone, peer)
+        result <- call.accept.allocated.flatMap { accepted =>
+          // The 200 is out but the caller has not ACKed: not established yet.
+          accepted._1.sendDtmf(DtmfDigit.D1, 100.millis).attempt <*
+            accepted._2
+        }
+      } yield assertEquals(result, Left(SoftphoneError.CallNotEstablished))
+    }
+  }
+
   // ---- Requests within a dialog that are too big for UDP -------------------------------
 
   /** Record-Route entries enough to make every request in the dialog big; the

@@ -3,6 +3,8 @@ package softphone4s.fsm
 import softphone4s.codec.SdpCodec.AudioOffer
 import softphone4s.model.*
 
+import scala.concurrent.duration.FiniteDuration
+
 enum InboundAction {
   case SendRinging(ctx: InboundCtx)
   case SendInviteFailure(
@@ -36,6 +38,9 @@ enum InboundAction {
     */
   case SendSessionOk(request: SipRequest, offer: Option[AudioOffer])
   case SendBye(dialog: SipDialog)
+
+  /** A digit in a SIP INFO within `dialog`, whose CSeq is already advanced. */
+  case SendInfo(dialog: SipDialog, digit: DtmfDigit, duration: FiniteDuration)
 
   /** Send a re-INVITE offering `change`; `dialog` carries its CSeq. */
   case SendReinvite(dialog: SipDialog, change: SessionChange)

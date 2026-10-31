@@ -85,6 +85,22 @@ private[softphone4s] class OutboundCall[F[_]: Async] private (
     }
   def awaitHangup: F[Unit] = callEnded.get.void
 
+  def sendDtmf(digit: DtmfDigit, duration: FiniteDuration): F[DtmfMethod] =
+    for {
+      checked  <- Async[F].fromEither(Dtmf.checkedDuration(duration))
+      pickedUp <- answered.tryGet
+      _        <- Async[F].raiseUnless(pickedUp.exists(_.isRight))(
+        SoftphoneError.CallNotEstablished
+      )
+      viaRtp <- media.sendDtmf(digit, checked)
+      method <-
+        if viaRtp then Async[F].pure(DtmfMethod.Rfc4733)
+        else
+          events
+            .send(SipEvent.DtmfRequested(digit, checked))
+            .as(DtmfMethod.SipInfo)
+    } yield method
+
   // ---- The event loop ----------------------------------------------------------
 
   private[softphone4s] def runEventLoop(
@@ -181,7 +197,7 @@ private[softphone4s] class OutboundCall[F[_]: Async] private (
     case SipEvent.TransactionFailed(failure) =>
       logger.debug(Map("failure" -> failure.toString))("Transaction failed")
     case SipEvent.HangupRequested | SipEvent.TimerFired(_) |
-        SipEvent.SessionChangeRequested(_) =>
+        SipEvent.SessionChangeRequested(_) | SipEvent.DtmfRequested(_, _) =>
       Async[F].unit
   }
 
@@ -556,6 +572,17 @@ private[softphone4s] class OutboundCall[F[_]: Async] private (
         (newBranch(), destinationFor(dialog)).flatMapN { (branch, to) =>
           logger.debug("Sending BYE") >> startInDialog(
             endpoint.buildBye(dialog, branch),
+            dialog,
+            to
+          )
+        }
+
+      case SendInfo(dialog, digit, duration) =>
+        (newBranch(), destinationFor(dialog)).flatMapN { (branch, to) =>
+          logger.debug(Map("digit" -> digit.symbol.toString))(
+            "Sending a digit in INFO"
+          ) >> startInDialog(
+            endpoint.buildInfo(dialog, branch, digit, duration),
             dialog,
             to
           )

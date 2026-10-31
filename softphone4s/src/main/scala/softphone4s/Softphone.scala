@@ -4,8 +4,10 @@ import cats.data.NonEmptyList
 import cats.effect.Resource
 import fs2.{Pipe, Stream}
 import softphone4s.fsm.SessionChange
-import softphone4s.model.{AccountId, Callee, DtmfDigit}
+import softphone4s.model.{AccountId, Callee, Dtmf, DtmfDigit, DtmfMethod}
 import softphone4s.registration.Registration
+
+import scala.concurrent.duration.FiniteDuration
 
 trait Call[F[_]] {
 
@@ -17,6 +19,19 @@ trait Call[F[_]] {
 
   /** Stream of DTMF digits; terminates when the call ends. */
   def dtmfEvents: Stream[F, DtmfDigit]
+
+  /** Sends `digit` to the remote party, taking `duration` (from 20 ms to 8 s):
+    * in the media stream as telephone events (RFC 4733) if the other side
+    * agreed to receive them and the call is not on hold, else in a SIP INFO.
+    * Says which it was. Fails with `CallNotEstablished` before the call is
+    * answered, and with `InvalidDtmfDuration` for a duration a digit cannot
+    * have. A digit by INFO is sent only when the call is not changing its
+    * session; one that comes then is not sent.
+    */
+  def sendDtmf(
+      digit: DtmfDigit,
+      duration: FiniteDuration = Dtmf.DefaultDuration
+  ): F[DtmfMethod]
 
   /** Suspends until the remote party answers. Fails if the call is rejected or
     * times out.

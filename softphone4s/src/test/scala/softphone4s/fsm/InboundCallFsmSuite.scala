@@ -420,6 +420,38 @@ class InboundCallFsmSuite extends FunSuite {
     )
   }
 
+  test(
+    "a digit by INFO is sent with the next CSeq, and the next with the one after"
+  ) {
+    val dialog = active match {
+      case Active(d) => d
+      case other     => fail(s"expected Active, got $other")
+    }
+    val (first, sent) = step(active, DtmfRequested(DtmfDigit.D5, 160.millis))
+    val next1         = dialog.copy(localCseq = dialog.localCseq.next)
+    assertEquals(first, Active(next1))
+    assertEquals(sent, List(SendInfo(next1, DtmfDigit.D5, 160.millis)))
+    val (second, again) = step(first, DtmfRequested(DtmfDigit.Hash, 80.millis))
+    val next2           = next1.copy(localCseq = next1.localCseq.next)
+    assertEquals(second, Active(next2))
+    assertEquals(again, List(SendInfo(next2, DtmfDigit.Hash, 80.millis)))
+  }
+
+  test("a digit asked for during a re-INVITE is not sent") {
+    val (holding, _) = step(active, SessionChangeRequested(SessionChange.Hold))
+    assertEquals(
+      step(holding, DtmfRequested(DtmfDigit.D5, 160.millis)),
+      (holding, Nil)
+    )
+  }
+
+  test("a digit asked for before the call is up is not sent") {
+    assertEquals(
+      step(ringing, DtmfRequested(DtmfDigit.D5, 160.millis)),
+      (ringing, Nil)
+    )
+  }
+
   test("hanging up an established call sends a BYE and waits for its answer") {
     val (state, actions) = step(active, HangupRequested)
     assertEquals(state, ByeSent(ctx.dialog))

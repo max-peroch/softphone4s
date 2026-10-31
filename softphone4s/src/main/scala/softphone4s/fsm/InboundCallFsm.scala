@@ -163,6 +163,11 @@ object InboundCallFsm {
         case (Active(dialog), SessionChangeRequested(change)) =>
           sendReinvite(dialog, change)
 
+        // A digit by SIP INFO, when the call is quiet (see CallFsm).
+        case (Active(dialog), DtmfRequested(digit, duration)) =>
+          val next = dialog.copy(localCseq = dialog.localCseq.next)
+          go(Active(next), List(SendInfo(next, digit, duration)))
+
         case (Retrying(dialog, change), TimerFired(CallTimer.ReinviteRetry)) =>
           sendReinvite(dialog, change)
 

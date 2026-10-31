@@ -2,6 +2,8 @@ package softphone4s.fsm
 
 import softphone4s.model.*
 
+import scala.concurrent.duration.FiniteDuration
+
 enum InboundEvent {
   case UserRinging
   case UserAccept
@@ -12,6 +14,9 @@ enum InboundEvent {
 
   /** The application asks to hold or resume the call. */
   case SessionChangeRequested(change: SessionChange)
+
+  /** The application sends a digit in a SIP INFO. */
+  case DtmfRequested(digit: DtmfDigit, duration: FiniteDuration)
 
   /** A request within the call: CANCEL, BYE, INFO, or something we do not
     * support.

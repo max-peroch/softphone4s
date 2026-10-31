@@ -9,8 +9,10 @@ import org.typelevel.otel4s.Attribute
 import org.typelevel.otel4s.trace.{SpanKind, SpanOps, Tracer}
 import softphone4s.{Call, IncomingCall, Softphone}
 import softphone4s.fsm.SessionChange
-import softphone4s.model.{AccountId, Callee, DtmfDigit}
+import softphone4s.model.{AccountId, Callee, DtmfDigit, DtmfMethod}
 import softphone4s.registration.Registration
+
+import scala.concurrent.duration.FiniteDuration
 
 private final class TracedCall[F[_]: Async](
     underlying: Call[F],
@@ -41,6 +43,13 @@ private final class TracedCall[F[_]: Async](
 
   def awaitHangup: F[Unit] =
     tracer.span("softphone4s.call.awaitHangup").surround(underlying.awaitHangup)
+
+  def sendDtmf(digit: DtmfDigit, duration: FiniteDuration): F[DtmfMethod] =
+    tracer
+      .spanBuilder("softphone4s.dtmf.sent")
+      .addAttribute(Attribute("telephony.dtmf.digit", digit.code.toString))
+      .build
+      .surround(underlying.sendDtmf(digit, duration))
 
   def changeSession(change: SessionChange): F[Unit] =
     tracer

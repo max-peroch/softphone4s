@@ -7,6 +7,8 @@ import softphone4s.config.{AccountConfig, SoftphoneConfig}
 import softphone4s.fsm.SipMessages.*
 import softphone4s.model.*
 
+import scala.concurrent.duration.*
+
 class SipMessagesSuite extends FunSuite {
 
   private def ok[A](e: Either[SoftphoneError, A]): A =
@@ -242,6 +244,24 @@ class SipMessagesSuite extends FunSuite {
     val bye = endpoint.buildBye(routedDialog(), branch("z9hG4bKb"))
     assertEquals(bye.requestUri, uri("sip:bob@192.0.2.5:5070"))
     assertEquals(bye.headers.routes, Nil)
+  }
+
+  test(
+    "an INFO carries its digit in a dtmf-relay body, with the dialog's CSeq and route"
+  ) {
+    val d =
+      routedDialog("<sip:p1.example.com;lr>").copy(localCseq = cseqNumber(4))
+    val info =
+      endpoint.buildInfo(d, branch("z9hG4bKi"), DtmfDigit.Hash, 250.millis)
+    assertEquals(info.method, SipMethod.Info)
+    assertEquals(info.requestUri, uri("sip:bob@192.0.2.5:5070"))
+    assertEquals(info.headers.cseq, cseq(4, SipMethod.Info))
+    assertEquals(info.headers.contentType, Some(MediaType.DtmfRelay))
+    assertEquals(info.body, "Signal=#\r\nDuration=250\r\n")
+    assertEquals(
+      info.headers.routes.map(_.render),
+      List("<sip:p1.example.com;lr>")
+    )
   }
 
   test(

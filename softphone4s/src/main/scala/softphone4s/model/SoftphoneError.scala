@@ -30,6 +30,12 @@ object SoftphoneError {
       extends SoftphoneError(s"No $transport transport is available")
   case object NoCodecsConfigured
       extends SoftphoneError("No codec is configured")
+  case object CallNotEstablished
+      extends SoftphoneError("The call is not established")
+  final case class InvalidDtmfDuration(milliseconds: Long)
+      extends SoftphoneError(
+        s"A digit lasts from 20 ms to 8 s, not $milliseconds ms"
+      )
   final case class UnknownCodec(token: String)
       extends SoftphoneError(s"No codec called $token")
   final case class DuplicateCodec(token: String)

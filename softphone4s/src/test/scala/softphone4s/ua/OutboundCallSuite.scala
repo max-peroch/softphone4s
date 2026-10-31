@@ -3,12 +3,15 @@ package softphone4s.ua
 import cats.data.NonEmptyList
 import cats.effect.*
 import cats.effect.std.{Queue, Random, Supervisor}
+import cats.syntax.all.*
 import com.comcast.ip4s.*
 import fs2.Stream
+import fs2.io.net.Network
 import munit.CatsEffectSuite
 import org.typelevel.log4cats.noop.NoOpLogger
 import softphone4s.DigestVerifier
 import softphone4s.SipLiterals.*
+import softphone4s.codec.RtpCodec
 import softphone4s.config.{RtpLatching, SoftphoneConfig}
 import softphone4s.fsm.CallTimer
 import softphone4s.media.AudioCodecs
@@ -1138,6 +1141,102 @@ class OutboundCallSuite extends CatsEffectSuite {
       } yield {
         assertEquals(ack.headers.topVia.transport, TransportProtocol.Udp)
         assertEquals(bye.headers.topVia.transport, TransportProtocol.Udp)
+      }
+    }
+  }
+
+  // ---- Digits --------------------------------------------------------------------------
+
+  private val sdpWithEvents =
+    "v=0\r\no=- 1 1 IN IP4 127.0.0.1\r\ns=-\r\nc=IN IP4 127.0.0.1\r\nt=0 0\r\n" +
+      "m=audio 40000 RTP/AVP 0 101\r\na=rtpmap:101 telephone-event/8000\r\n"
+
+  private def infoOk(info: SipRequest) =
+    TransactionMessages.responseTo(info, 200, "OK")
+
+  test(
+    "a digit goes in a SIP INFO when the other side did not agree to telephone events"
+  ) {
+    fixture(port"19037").use { f =>
+      for {
+        established <- established(f)
+        (invite, _) = established
+        method <- f.call.sendDtmf(DtmfDigit.D5, 200.millis)
+        info   <- nextOf(f.peer, SipMethod.Info)
+        _      <- reply(f.peer, infoOk(info))
+        _      <- f.call.sendDtmf(DtmfDigit.Hash, 160.millis)
+        second <- nextOf(f.peer, SipMethod.Info)
+      } yield {
+        assertEquals(method, DtmfMethod.SipInfo)
+        assertEquals(info.headers.callId, invite.headers.callId)
+        assertEquals(
+          info.headers.cseq.seq.value,
+          invite.headers.cseq.seq.value + 1
+        )
+        assertEquals(info.headers.contentType, Some(MediaType.DtmfRelay))
+        assertEquals(info.body, "Signal=5\r\nDuration=200\r\n")
+        assertEquals(second.body, "Signal=#\r\nDuration=160\r\n")
+        assertEquals(
+          second.headers.cseq.seq.value,
+          invite.headers.cseq.seq.value + 2
+        )
+      }
+    }
+  }
+
+  test(
+    "a digit goes as telephone events, and in no INFO, when the other side agreed to them"
+  ) {
+    val rtpPeer = Network[IO].bindDatagramSocket(
+      address = SocketAddress(ip"127.0.0.1", port"40000")
+    )
+    (fixture(port"19038"), rtpPeer).tupled.use { (f, media) =>
+      for {
+        invite <- nextOf(f.peer, SipMethod.Invite)
+        _      <- reply(
+          f.peer,
+          answerTo(invite, 200, "OK", withContact = true)
+            .copy(body = sdpWithEvents)
+        )
+        _ <- f.call.awaitPickup
+        _ <- IO.sleep(500.millis) // the media socket is bound in the background
+        method  <- f.call.sendDtmf(DtmfDigit.D9, 100.millis)
+        packets <- media.reads.take(7).compile.toList.timeout(5.seconds)
+        info    <- nextOf(f.peer, SipMethod.Info).timeout(300.millis).attempt
+      } yield {
+        assertEquals(method, DtmfMethod.Rfc4733)
+        val events = packets.map(d => RtpCodec.decode(d.bytes).get)
+        assertEquals(events.map(_._1.payloadType).distinct, List(101))
+        assertEquals(
+          events
+            .flatMap(e => SoftphoneEvent.decode(e._2))
+            .map(_.event)
+            .distinct,
+          List(9)
+        )
+        assert(info.isLeft, "no INFO for a digit sent in the media")
+      }
+    }
+  }
+
+  test("a digit cannot be sent before the call is answered") {
+    fixture(port"19039").use { f =>
+      f.call
+        .sendDtmf(DtmfDigit.D1, 100.millis)
+        .attempt
+        .map(r => assertEquals(r, Left(SoftphoneError.CallNotEstablished)))
+    }
+  }
+
+  test("a digit cannot last less than 20 ms or more than 8 s") {
+    fixture(port"19040").use { f =>
+      for {
+        _     <- established(f)
+        short <- f.call.sendDtmf(DtmfDigit.D1, 10.millis).attempt
+        long  <- f.call.sendDtmf(DtmfDigit.D1, 9.seconds).attempt
+      } yield {
+        assertEquals(short, Left(SoftphoneError.InvalidDtmfDuration(10)))
+        assertEquals(long, Left(SoftphoneError.InvalidDtmfDuration(9000)))
       }
     }
   }

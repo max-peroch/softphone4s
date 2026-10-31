@@ -26,8 +26,6 @@ object CallFsm {
   private val ProxyAuthRequired = 407
   private val ErrorResponseMin  = 300
   private val FinalResponseMin  = 200
-  private val StarDigitCode     = 10
-  private val HashDigitCode     = 11
 
   type Transition = State[CallState, List[SipAction]]
 
@@ -128,6 +126,12 @@ object CallFsm {
         // ---- Our own session changes (RFC 3261 §14.1) -------------------------
         case (Active(dialog), SessionChangeRequested(change)) =>
           sendReinvite(dialog, change)
+
+        // A digit by SIP INFO. Only when the call is quiet: during a re-INVITE
+        // the dialog's CSeq is the one its answer is matched on.
+        case (Active(dialog), DtmfRequested(digit, duration)) =>
+          val next = dialog.copy(localCseq = dialog.localCseq.next)
+          go(Active(next), List(SendInfo(next, digit, duration)))
 
         case (Retrying(dialog, change), TimerFired(CallTimer.ReinviteRetry)) =>
           sendReinvite(dialog, change)
@@ -376,25 +380,17 @@ object CallFsm {
     )
   }
 
+  /** The digit in the body of an INFO: `Signal=5` of a dtmf-relay, where the
+    * signal is a symbol (`5`, `*`, `#`, `A`) or an event number (`10`), or a
+    * body that is only the symbol.
+    */
   private[fsm] def parseDtmf(body: String): Option[DtmfDigit] =
-    parseDtmfFromRelay(body)
-      .orElse(parseDtmfFromBare(body))
-      .flatMap(DtmfDigit.fromCode)
-
-  private def parseDtmfFromRelay(body: String): Option[Int] =
     body.linesIterator
       .find(_.startsWith("Signal="))
-      .flatMap(_.stripPrefix("Signal=").trim.toIntOption)
-
-  private def parseDtmfFromBare(body: String): Option[Int] =
-    Some(body.trim)
-      .filter(_.length == 1)
-      .flatMap(_.headOption)
-      .flatMap(charToDigitCode)
-
-  private def charToDigitCode(c: Char): Option[Int] =
-    if c >= '0' && c <= '9' then Some(c - '0')
-    else if c == '*' then Some(StarDigitCode)
-    else if c == '#' then Some(HashDigitCode)
-    else None
+      .map(_.stripPrefix("Signal=").trim)
+      .orElse(Some(body.trim))
+      .flatMap(signal =>
+        if signal.length == 1 then DtmfDigit.fromSymbol(signal.head)
+        else signal.toIntOption.flatMap(DtmfDigit.fromCode)
+      )
 }

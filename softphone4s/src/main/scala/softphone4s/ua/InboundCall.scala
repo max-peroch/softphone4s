@@ -98,6 +98,22 @@ private[softphone4s] final class InboundCall[F[_]: Async] private (
     }
   def awaitHangup: F[Unit] = callEnded.get.void
 
+  def sendDtmf(digit: DtmfDigit, duration: FiniteDuration): F[DtmfMethod] =
+    for {
+      checked <- Async[F].fromEither(Dtmf.checkedDuration(duration))
+      ready   <- established.tryGet
+      _       <- Async[F].raiseUnless(ready.exists(_.isRight))(
+        SoftphoneError.CallNotEstablished
+      )
+      viaRtp <- media.sendDtmf(digit, checked)
+      method <-
+        if viaRtp then Async[F].pure(DtmfMethod.Rfc4733)
+        else
+          events
+            .send(InboundEvent.DtmfRequested(digit, checked))
+            .as(DtmfMethod.SipInfo)
+    } yield method
+
   def changeSession(change: SessionChange): F[Unit] =
     events.send(InboundEvent.SessionChangeRequested(change)).void
 
@@ -281,6 +297,17 @@ private[softphone4s] final class InboundCall[F[_]: Async] private (
         (entropy.branch, destinationFor(dialog)).flatMapN { (branch, to) =>
           logger.debug("Sending BYE") >> startInDialog(
             endpoint.buildBye(dialog, branch),
+            dialog,
+            to
+          )
+        }
+
+      case SendInfo(dialog, digit, duration) =>
+        (entropy.branch, destinationFor(dialog)).flatMapN { (branch, to) =>
+          logger.debug(Map("digit" -> digit.symbol.toString))(
+            "Sending a digit in INFO"
+          ) >> startInDialog(
+            endpoint.buildInfo(dialog, branch, digit, duration),
             dialog,
             to
           )

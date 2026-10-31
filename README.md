@@ -158,6 +158,20 @@ softphone4s handles outbound SIP calls end-to-end:
   shows one, checked against `tls.trust-store`; a request for any other host
   gets a connection of its own, verified for that host. A connection that cannot
   be framed is dropped without affecting others.
+- **Digits (DTMF)**: `call.sendDtmf(digit, duration)` sends a digit lasting
+  from 20 ms to 8 s (160 ms by default) and says how: in the media as
+  telephone events (RFC 4733) when the other side agreed to receive them and the
+  call is not on hold, otherwise in a SIP INFO (`application/dtmf-relay`). As
+  events, a packet goes out every 20 ms with the time so far, the first marked,
+  and the last packet three times with the end bit so that losing one does not
+  lose the digit; they share the audio's SSRC and sequence numbers and carry
+  the timestamp the digit began at, and the audio is held back while a digit
+  is on the wire. A digit by INFO is sent only when the call is not changing
+  its session; one asked for then is not sent. It fails with `CallNotEstablished`
+  before the call is answered. Digits received, from events (once each, however
+  many of the repeated end packets arrive, and also when only those get
+  through) or INFO (`Signal=5`, `*`, `#`, `A` to `D`, or the event number),
+  come on `call.dtmfEvents`.
 - **Mid-call requests from the remote party**: OPTIONS is answered with our
   `Allow` list; a re-INVITE or UPDATE with SDP is answered with our SDP, media
   follows the new address, and a hold (`sendonly`, `inactive` or `0.0.0.0`)

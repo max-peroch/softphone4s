@@ -27,6 +27,10 @@ object MediaType {
 
   val Sdp: MediaType = MediaType("application", "sdp", ListMap.empty)
 
+  /** A digit sent in SIP INFO, the way most phones do. */
+  val DtmfRelay: MediaType =
+    MediaType("application", "dtmf-relay", ListMap.empty)
+
   def from(
       mainType: String,
       subType: String,

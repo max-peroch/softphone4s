@@ -5,6 +5,8 @@ import softphone4s.codec.{DigestAuth, SdpCodec}
 import softphone4s.model.*
 import softphone4s.transaction.TransactionMessages
 
+import scala.concurrent.duration.FiniteDuration
+
 /** Pure construction of the SIP messages of a call from a [[LocalEndpoint]]:
   * every function is deterministic in its arguments, with branches and tags
   * supplied by the caller.
@@ -193,6 +195,32 @@ object SipMessages {
     // -----------------------------------------------------------------------
     // BYE
     // -----------------------------------------------------------------------
+
+    /** An INFO within `dialog` carrying `digit` the way most phones do, in an
+      * `application/dtmf-relay` body. Its CSeq is the dialog's current local
+      * CSeq, which the caller has already advanced for it.
+      */
+    def buildInfo(
+        dialog: SipDialog,
+        branch: Branch,
+        digit: DtmfDigit,
+        duration: FiniteDuration
+    ): SipRequest =
+      SipRequest(
+        method = SipMethod.Info,
+        requestUri = dialog.route.requestUri,
+        headers = SipHeaders(
+          callId = dialog.callId,
+          from = NameAddr.withTag(dialog.localUri, dialog.localTag),
+          to = remoteParty(dialog),
+          vias = vias(e, branch),
+          cseq = CSeq(dialog.localCseq, SipMethod.Info),
+          contacts = contacts(e),
+          contentType = Some(MediaType.DtmfRelay),
+          routes = dialog.route.routes
+        ),
+        body = s"Signal=${digit.symbol}\r\nDuration=${duration.toMillis}\r\n"
+      )
 
     def buildBye(dialog: SipDialog, branch: Branch): SipRequest =
       SipRequest(
