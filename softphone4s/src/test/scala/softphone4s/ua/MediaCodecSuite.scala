@@ -488,4 +488,110 @@ class MediaCodecSuite extends CatsEffectSuite {
         )
     }
   }
+
+  // ---- Media that starts early ---------------------------------------------------------
+
+  private def planTo(
+      remote: SocketAddress[IpAddress],
+      codec: Codec = Codec.Pcmu,
+      payloadType: Int = 0,
+      direction: MediaDirection = MediaDirection.SendRecv
+  ) =
+    MediaPlan(
+      remote,
+      codec,
+      pt(payloadType),
+      None,
+      direction,
+      MediaDirection.SendRecv
+    )
+
+  private val twoPackets = Chunk.array(new Array[Byte](320 * 2))
+
+  private def packetsWithin(socket: DatagramSocket[IO], wait: FiniteDuration) =
+    socket.reads.interruptAfter(wait).compile.toList
+
+  test(
+    "media that is running is not started again: it follows the new answer, and says so"
+  ) {
+    (bound, bound, session()).tupled.use {
+      case (
+            (first, firstAddress),
+            (second, secondAddress),
+            (media, _, supervisor)
+          ) =>
+        for {
+          started <- media.start(planTo(firstAddress), supervisor, _ => IO.unit)
+          _       <- IO.sleep(500.millis)
+          _       <- Stream.chunk(twoPackets).through(media.sink).compile.drain
+          atFirst <- packetsWithin(first, 300.millis)
+          followed <- media.start(
+            planTo(secondAddress),
+            supervisor,
+            _ => IO.unit
+          )
+          _        <- Stream.chunk(twoPackets).through(media.sink).compile.drain
+          atSecond <- packetsWithin(second, 300.millis)
+          moreAtFirst <- packetsWithin(first, 200.millis)
+          _           <- media.stop()
+        } yield {
+          assertEquals(started, MediaStart.Started)
+          assertEquals(followed, MediaStart.Followed)
+          assertEquals(atFirst.size, 2)
+          assertEquals(atSecond.size, 2)
+          assertEquals(moreAtFirst, Nil)
+        }
+    }
+  }
+
+  test(
+    "an answer that changes the codec is followed in address, and the early codec is kept"
+  ) {
+    (bound, session()).tupled.use {
+      case ((peer, address), (media, _, supervisor)) =>
+        for {
+          _       <- media.start(planTo(address), supervisor, _ => IO.unit)
+          _       <- IO.sleep(500.millis)
+          changed <- media.start(
+            planTo(address, Codec.Pcma, 8),
+            supervisor,
+            _ => IO.unit
+          )
+          _       <- Stream.chunk(twoPackets).through(media.sink).compile.drain
+          packets <- packetsWithin(peer, 300.millis)
+          _       <- media.stop()
+        } yield {
+          assertEquals(changed, MediaStart.CodecChanged)
+          assertEquals(
+            packets.map(d => RtpCodec.decode(d.bytes).get._1.payloadType),
+            List(pt(0), pt(0))
+          )
+        }
+    }
+  }
+
+  test(
+    "media is not sent to a party that says it will not receive, until it says it will"
+  ) {
+    (bound, session()).tupled.use {
+      case ((peer, address), (media, _, supervisor)) =>
+        for {
+          _ <- media.start(
+            planTo(address, direction = MediaDirection.SendOnly),
+            supervisor,
+            _ => IO.unit
+          )
+          _      <- IO.sleep(500.millis)
+          _      <- Stream.chunk(twoPackets).through(media.sink).compile.drain
+          silent <- packetsWithin(peer, 300.millis)
+          _      <- media.start(planTo(address), supervisor, _ => IO.unit)
+          _      <- Stream.chunk(twoPackets).through(media.sink).compile.drain
+          heard  <- packetsWithin(peer, 300.millis)
+          _      <- media.stop()
+        } yield {
+          assertEquals(silent, Nil)
+          assertEquals(heard.size, 2)
+        }
+    }
+  }
 }

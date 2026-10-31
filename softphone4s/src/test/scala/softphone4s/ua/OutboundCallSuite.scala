@@ -6,7 +6,8 @@ import cats.effect.std.{Queue, Random, Supervisor}
 import cats.syntax.all.*
 import com.comcast.ip4s.*
 import fs2.Stream
-import fs2.io.net.Network
+import fs2.io.net.{Datagram, Network}
+import fs2.Chunk
 import munit.CatsEffectSuite
 import org.typelevel.log4cats.noop.NoOpLogger
 import softphone4s.DigestVerifier
@@ -1237,6 +1238,126 @@ class OutboundCallSuite extends CatsEffectSuite {
       } yield {
         assertEquals(short, Left(SoftphoneError.InvalidDtmfDuration(10)))
         assertEquals(long, Left(SoftphoneError.InvalidDtmfDuration(9000)))
+      }
+    }
+  }
+
+  // ---- Early media -----------------------------------------------------------------------
+
+  private def mediaPeer(port: Port) =
+    Network[IO].bindDatagramSocket(address = SocketAddress(ip"127.0.0.1", port))
+
+  private def sdpAt(port: Int) = sdp.replace("40000", port.toString)
+
+  private val silenceOf0x80 = Chunk.array(Array.fill[Byte](160)(0x80.toByte))
+
+  private def rtpTo(call: Port, sequence: Int) =
+    Datagram(
+      SocketAddress(ip"127.0.0.1", call),
+      RtpCodec.encode(
+        pt(0),
+        sequence,
+        sequence * 160L,
+        5L,
+        silenceOf0x80,
+        marker = false
+      )
+    )
+
+  private def progress(invite: SipRequest, body: String) =
+    answerTo(invite, 183, "Session Progress", withContact = true)
+      .copy(body = body)
+
+  test(
+    "what the other side plays before it answers is heard, and what we say is heard by it"
+  ) {
+    (fixture(port"19041"), mediaPeer(port"40000")).tupled.use { (f, media) =>
+      for {
+        invite <- nextOf(f.peer, SipMethod.Invite)
+        _      <- reply(f.peer, progress(invite, sdp))
+        _ <- IO.sleep(500.millis) // the media socket is bound in the background
+        _ <- media.write(rtpTo(port"19041", 1))
+        heard <- f.call.source.take(320).compile.to(Chunk).timeout(5.seconds)
+        _     <- Stream
+          .chunk(Chunk.array(new Array[Byte](320)))
+          .through(f.call.sink)
+          .compile
+          .drain
+        sent     <- media.reads.head.compile.lastOrError.timeout(5.seconds)
+        pickedUp <- f.call.awaitPickup.timeout(200.millis).attempt
+      } yield {
+        // μ-law 0x80 is the loudest positive sample.
+        assertEquals(
+          heard.toArray.grouped(2).map(_.toList).toList.distinct.size,
+          1
+        )
+        assertEquals(heard.size, 320)
+        assertEquals(
+          RtpCodec.decode(sent.bytes).map(_._1.payloadType),
+          Some(pt(0))
+        )
+        assert(pickedUp.isLeft, "it was not answered yet")
+      }
+    }
+  }
+
+  test(
+    "the 200 after early media carries on with the same media, pointed where it says"
+  ) {
+    (
+      fixture(port"19042"),
+      mediaPeer(port"40000"),
+      mediaPeer(port"40002")
+    ).tupled.use { (f, early, answering) =>
+      for {
+        invite <- nextOf(f.peer, SipMethod.Invite)
+        _      <- reply(f.peer, progress(invite, sdp))
+        _      <- IO.sleep(500.millis)
+        _      <- reply(
+          f.peer,
+          answerTo(invite, 200, "OK", withContact = true)
+            .copy(body = sdpAt(40002))
+        )
+        _ <- f.call.awaitPickup
+        _ <- Stream
+          .chunk(Chunk.array(new Array[Byte](320)))
+          .through(f.call.sink)
+          .compile
+          .drain
+        atAnswer <- answering.reads.head.compile.lastOrError.timeout(5.seconds)
+        atEarly  <- early.reads.interruptAfter(300.millis).compile.toList
+      } yield {
+        assert(RtpCodec.decode(atAnswer.bytes).isDefined)
+        assertEquals(atEarly, Nil)
+      }
+    }
+  }
+
+  test("a call refused after early media lets go of its media") {
+    (fixture(port"19043"), mediaPeer(port"40000")).tupled.use { (f, _) =>
+      def bindable(attempts: Int): IO[Boolean] =
+        Network[IO]
+          .bindDatagramSocket(address =
+            SocketAddress(ip"127.0.0.1", port"19043")
+          )
+          .use_
+          .as(true)
+          .handleErrorWith(_ =>
+            if attempts <= 0 then IO.pure(false)
+            else IO.sleep(100.millis) >> bindable(attempts - 1)
+          )
+      for {
+        invite  <- nextOf(f.peer, SipMethod.Invite)
+        _       <- reply(f.peer, progress(invite, sdp))
+        _       <- IO.sleep(500.millis)
+        busy    <- bindable(0) // the media is holding the port
+        _       <- reply(f.peer, answerTo(invite, 486, "Busy Here"))
+        refused <- f.call.awaitPickup.attempt
+        freed   <- bindable(30)
+      } yield {
+        assert(!busy, "the early media held its port")
+        assert(refused.isLeft)
+        assert(freed, "and let it go when the call was refused")
       }
     }
   }

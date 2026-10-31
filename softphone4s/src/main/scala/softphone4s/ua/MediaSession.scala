@@ -80,27 +80,49 @@ private[softphone4s] class MediaSession[F[_]: Async: Network] private (
       }
     )
 
-  /** Starts media as `plan` says. Fails with
-    * [[SoftphoneError.CodecUnavailable]] if the codec it settled on is not one
-    * we have, which a plan made from our own capabilities cannot be.
+  /** Starts media as `plan` says, sending only if the other side will receive.
+    * Fails with [[SoftphoneError.CodecUnavailable]] if the codec it settled on
+    * is not one we have, which a plan made from our own capabilities cannot be.
+    *
+    * Media already running, because the call began with early media, is not
+    * started again: it is pointed where the new plan says, and the answer is
+    * whether the codec stayed the same. If it did not, the early one is kept.
     */
   def start(
       plan: MediaPlan,
       supervisor: Supervisor[F],
       onDtmf: DtmfDigit => F[Unit]
-  ): F[Unit] =
-    codecs
-      .implementing(plan.codec)
-      .liftTo[F](SoftphoneError.CodecUnavailable(plan.codec.encoding))
-      .flatMap { codec =>
-        agreed.set(Some(plan)) >>
-          retarget(
-            plan.remote.host,
-            plan.remote.port,
-            MediaDirection.SendRecv
-          ) >>
-          run(codec, plan, supervisor, onDtmf)
-      }
+  ): F[MediaStart] =
+    agreed.get.flatMap {
+      case Some(running) =>
+        agreed.set(
+          Some(
+            running.copy(
+              remote = plan.remote,
+              remoteDirection = plan.remoteDirection
+            )
+          )
+        ) >>
+          retarget(plan.remote.host, plan.remote.port, plan.remoteDirection)
+            .as(
+              if running.codec == plan.codec && running.payloadType == plan.payloadType
+              then MediaStart.Followed
+              else MediaStart.CodecChanged
+            )
+      case None =>
+        codecs
+          .implementing(plan.codec)
+          .liftTo[F](SoftphoneError.CodecUnavailable(plan.codec.encoding))
+          .flatMap { codec =>
+            agreed.set(Some(plan)) >>
+              retarget(
+                plan.remote.host,
+                plan.remote.port,
+                plan.remoteDirection
+              ) >>
+              run(codec, plan, supervisor, onDtmf).as(MediaStart.Started)
+          }
+    }
 
   private def run(
       codec: softphone4s.media.AudioCodec,

@@ -316,7 +316,7 @@ private[softphone4s] final class InboundCall[F[_]: Async] private (
       case StartMedia(offer) =>
         SdpCodec.planFor(offer, endpoint.capabilities) match {
           case Right(plan) =>
-            media.start(plan, supervisor, dtmfChannel.send(_).void)
+            media.start(plan, supervisor, dtmfChannel.send(_).void).void
           case Left(reject) =>
             logger.error(Map("reason" -> reject.message))(
               "The offer we accepted cannot be answered; no media"

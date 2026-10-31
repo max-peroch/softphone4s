@@ -115,6 +115,72 @@ class CallFsmSuite extends FunSuite {
     assertEquals(actions, Nil)
   }
 
+  // ---- Early media (RFC 3960) --------------------------------------------------
+
+  private val early =
+    "v=0\r\no=- 1 1 IN IP4 192.0.2.5\r\ns=-\r\nc=IN IP4 192.0.2.5\r\nt=0 0\r\nm=audio 40000 RTP/AVP 0\r\n"
+
+  private def progress(code: Int, tag: String = "rtag", body: String = early) =
+    resp(code, "Progress", to = s"<sip:callee@host>;tag=$tag", body = body)
+
+  test("a 183 with an answer in it starts the media, and so does a 180") {
+    List(183, 180, 181).foreach { code =>
+      val (state, actions) =
+        step(Inviting(baseCtx), ResponseReceived(progress(code)))
+      assert(state.isInstanceOf[CallState.Ringing], s"$code: $state")
+      assertEquals(actions, List(StartMedia(early)), code.toString)
+    }
+  }
+
+  test("a progress response without an answer starts nothing") {
+    assertEquals(
+      step(Inviting(baseCtx), ResponseReceived(progress(183, body = "")))._2,
+      Nil
+    )
+  }
+
+  test("a body that is not an SDP starts nothing") {
+    val other  = progress(183)
+    val notSdp = other.copy(headers =
+      other.headers.copy(contentType = Some(MediaType.DtmfRelay))
+    )
+    assertEquals(step(Inviting(baseCtx), ResponseReceived(notSdp))._2, Nil)
+  }
+
+  test("100 Trying with a body starts nothing") {
+    assertEquals(
+      step(Inviting(baseCtx), ResponseReceived(progress(100)))._2,
+      Nil
+    )
+  }
+
+  test("when we made no offer there is no answer to start on") {
+    assertEquals(
+      step(
+        Inviting(baseCtx.copy(offerInInvite = false)),
+        ResponseReceived(progress(183))
+      )._2,
+      Nil
+    )
+  }
+
+  test(
+    "more progress from the same party is handed to the media again, from another party it is not"
+  ) {
+    val (ringing, _) = step(Inviting(baseCtx), ResponseReceived(progress(183)))
+    val again        = step(ringing, ResponseReceived(progress(183)))
+    assertEquals(again, (ringing, List(StartMedia(early))))
+    val fork = step(ringing, ResponseReceived(progress(183, tag = "other")))
+    assertEquals(fork, (ringing, Nil))
+  }
+
+  test("the 200 after early media starts it again, for the media to follow") {
+    val (ringing, _) = step(Inviting(baseCtx), ResponseReceived(progress(183)))
+    val ok = resp(200, "OK", to = "<sip:callee@host>;tag=rtag", body = early)
+    val (_, actions) = step(ringing, ResponseReceived(ok))
+    assert(actions.contains(StartMedia(early)), actions.toString)
+  }
+
   test(
     "Inviting + 407 → Inviting(cseq+1), sends ACK and retries with Proxy-Authorization"
   ) {

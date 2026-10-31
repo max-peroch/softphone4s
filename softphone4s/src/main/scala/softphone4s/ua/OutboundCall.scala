@@ -666,7 +666,13 @@ private[softphone4s] class OutboundCall[F[_]: Async] private (
           MediaDirection.SendRecv
         ) match {
           case Right(plan) =>
-            media.start(plan, supervisor, dtmfChannel.send(_).void)
+            media.start(plan, supervisor, dtmfChannel.send(_).void).flatMap {
+              case MediaStart.CodecChanged =>
+                logger.warn(Map("codec" -> plan.codec.encoding))(
+                  "The answer chose another codec than the early media's; keeping the early one"
+                )
+              case MediaStart.Started | MediaStart.Followed => Async[F].unit
+            }
           case Left(reject) =>
             // An answer we cannot use: no media can flow, so the call goes.
             logger.warn(Map("reason" -> reject.message))(
@@ -695,6 +701,9 @@ private[softphone4s] class OutboundCall[F[_]: Async] private (
           case _           => callEnded.complete(err).void
         }
         logger.debug(Map("reason" -> reason.toString))("Call ended") >>
+          // Early media may have started it, and a call that never got to be
+          // answered would otherwise leave it running.
+          media.stop() >>
           signalStreams >>
           dtmfChannel.close.void >>
           answered.complete(Left(err)).void

@@ -158,6 +158,17 @@ softphone4s handles outbound SIP calls end-to-end:
   shows one, checked against `tls.trust-store`; a request for any other host
   gets a connection of its own, verified for that host. A connection that cannot
   be framed is dropped without affecting others.
+- **Early media** (RFC 3960): a `180`, `183` or other provisional response
+  that carries an SDP answer to our offer starts the media before the call is
+  answered, so ringback or an announcement the other side plays comes out of
+  `call.source`, and what is put into `call.sink` is heard by it. The `200` then
+  carries on with the same media, pointed at the address and direction it gives;
+  if it chooses another codec than the early answer did, which cannot be
+  switched to in mid-stream, the early codec is kept and a warning is logged. A
+  provisional response from another party than the first (a fork) has its media
+  ignored. A call that ends without being answered lets go of its media socket.
+  Provisional responses are not sent reliably (PRACK, RFC 3262, is not done), so
+  a `183` lost on the way is lost.
 - **Digits (DTMF)**: `call.sendDtmf(digit, duration)` sends a digit lasting
   from 20 ms to 8 s (160 ms by default) and says how: in the media as
   telephone events (RFC 4733) when the other side agreed to receive them and the

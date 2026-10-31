@@ -19,8 +19,6 @@ object CallFsm {
   private val MaxAuthAttempts = 2
 
   private val Trying            = 100
-  private val Ringing           = 180
-  private val SessionProgress   = 183
   private val Ok                = 200
   private val Unauthorized      = 401
   private val ProxyAuthRequired = 407
@@ -40,12 +38,23 @@ object CallFsm {
             if response.statusCode == Trying =>
           State.pure(Nil)
 
+        // Ringing or progress. An answer in it starts the media early (RFC 3960):
+        // what the other side sends before it picks up, ringback or an
+        // announcement, is heard, and what we send is heard by it.
         case (Inviting(ctx), ResponseReceived(response))
-            if response.statusCode == Ringing || response.statusCode == SessionProgress =>
+            if isProgress(response) =>
           go(
             CallState.Ringing(ctx, SipDialog.fromProvisional(ctx, response)),
-            Nil
+            earlyMedia(ctx, response)
           )
+
+        // More progress from the same party. A fork that answers with another
+        // tag is a different early dialog, and its media is not taken.
+        case (CallState.Ringing(ctx, dialog), ResponseReceived(response))
+            if isProgress(
+              response
+            ) && response.headers.to.tag == dialog.remoteTag =>
+          go(CallState.Ringing(ctx, dialog), earlyMedia(ctx, response))
 
         // Without a Digest challenge we can answer, the 401 or 407 is final.
         case (Inviting(ctx), ResponseReceived(response))
@@ -365,6 +374,24 @@ object CallFsm {
           )
         )
       }
+
+  /** 180, 183 and the other provisional responses that are not 100. */
+  private def isProgress(response: SipResponse): Boolean =
+    response.statusCode > Trying && response.statusCode < FinalResponseMin
+
+  /** Starting the media on an answer that came before the 200, if there is one:
+    * only when we made the offer, and in an SDP.
+    */
+  private def earlyMedia(
+      ctx: InviteCtx,
+      response: SipResponse
+  ): List[SipAction] =
+    Option
+      .when(
+        ctx.offerInInvite && response.body.nonEmpty &&
+          response.headers.contentType.forall(_ == MediaType.Sdp)
+      )(StartMedia(response.body))
+      .toList
 
   private def handle200(ctx: InviteCtx, response: SipResponse): Transition = {
     val dialog             = SipDialog.fromOk(ctx, response)
