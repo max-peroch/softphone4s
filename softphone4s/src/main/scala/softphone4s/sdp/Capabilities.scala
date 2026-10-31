@@ -31,10 +31,24 @@ final case class Capabilities(
   def offered: List[(Int, Codec)] = {
     val taken = (codecs.toList.flatMap(_.staticPayloadType) ++
       telephoneEventType.toList).toSet
-    val dynamic = Iterator.from(96).filterNot(taken).take(codecs.size)
-    codecs.toList.map(codec =>
-      codec.staticPayloadType.getOrElse(dynamic.next()) -> codec
-    )
+    val free = (96 to 127).filterNot(taken).toList
+    codecs.toList
+      .foldLeft((free, List.empty[(Int, Codec)])) {
+        case ((available, offered), codec) =>
+          codec.staticPayloadType match {
+            case Some(payloadType) =>
+              (available, (payloadType -> codec) :: offered)
+            case None =>
+              available match {
+                case payloadType :: rest =>
+                  (rest, (payloadType -> codec) :: offered)
+                // Out of dynamic numbers: this codec cannot be offered.
+                case Nil => (Nil, offered)
+              }
+          }
+      }
+      ._2
+      .reverse
   }
 }
 

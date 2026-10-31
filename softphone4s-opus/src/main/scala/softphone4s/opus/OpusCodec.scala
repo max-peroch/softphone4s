@@ -24,7 +24,7 @@ import java.lang.foreign.{Arena, MemorySegment, ValueLayout}
 object OpusCodec {
 
   /** The name `codecs` calls it by. */
-  val Token = "opus"
+  val Token: String = "opus"
 
   /** Frames of at most 120 ms, the longest Opus has, at 48 kHz. */
   private val MaxFrameSamples = 5760
@@ -44,7 +44,7 @@ object OpusCodec {
       Some(
         List(
           "minptime=20",
-          s"useinbandfec=${if settings.inbandFec then 1 else 0}",
+          s"useinbandfec=${settings.inbandFec.flag}",
           "stereo=0",
           "sprop-stereo=0",
           s"maxplaybackrate=${settings.sampleRate.hz}",
@@ -186,7 +186,7 @@ object OpusCodec {
         _ <- library.setEncoder(
           encoder,
           Libopus.SetInbandFec,
-          if settings.inbandFec then 1 else 0
+          settings.inbandFec.flag
         )
         _ <- library.setEncoder(
           encoder,

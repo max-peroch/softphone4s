@@ -13,7 +13,7 @@ final case class RtpLatch(candidate: Option[RtpLatch.Candidate])
 object RtpLatch {
 
   /** How many packets in a row must come from the new source. */
-  val Threshold = 5
+  val Threshold: Int = 5
 
   /** A source that is not the target, and how many packets in a row it sent. */
   final case class Candidate(

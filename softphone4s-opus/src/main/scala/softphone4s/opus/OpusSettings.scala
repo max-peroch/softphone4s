@@ -23,7 +23,7 @@ final case class OpusSettings(
     sampleRate: OpusSampleRate = OpusSampleRate.Hz16000,
     bitrate: Option[Int] = Some(24000),
     complexity: Option[Int] = None,
-    inbandFec: Boolean = true,
+    inbandFec: InbandFec = InbandFec.Enabled,
     expectedPacketLoss: Int = 5,
     library: Option[Path] = None
 )

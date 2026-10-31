@@ -80,13 +80,17 @@ object Registration {
       _ <- Resource.make(agent.start)(_ => agent.stop(stopTimeout))
     } yield agent
 
+  /** The Contact last registered, and over which of the ways to the registrar.
+    */
+  private[registration] final case class Bound(uplink: Int, contact: SipUri)
+
   private final class Agent[F[_]: Async] private (
       layer: TransactionLayer[F],
       uplinks: NonEmptyList[Uplink],
       publicAddress: Signal[F, Option[SocketAddress[IpAddress]]],
       selected: Ref[F, Int],
       sentContact: Ref[F, Option[SipUri]],
-      bound: Ref[F, Option[(Int, SipUri)]],
+      bound: Ref[F, Option[Registration.Bound]],
       registrarUri: SipUri,
       entropy: Entropy[F],
       requested: Expires,
@@ -269,9 +273,12 @@ object Registration {
       (selected.get, sentContact.get).flatMapN { (index, sent) =>
         sent.traverse_ { now =>
           bound
-            .getAndSet(Some((index, now)))
+            .getAndSet(Some(Registration.Bound(index, now)))
             .flatMap(
-              _.collect { case (i, old) if i == index && old != now => old }
+              _.collect {
+                case Registration.Bound(i, old) if i == index && old != now =>
+                  old
+              }
                 .traverse_(old => supervisor.supervise(removeBinding(old)).void)
             )
         }
@@ -417,7 +424,7 @@ object Registration {
         )
         selected    <- Ref.of[F, Int](0)
         sentContact <- Ref.of[F, Option[SipUri]](None)
-        bound       <- Ref.of[F, Option[(Int, SipUri)]](None)
+        bound       <- Ref.of[F, Option[Registration.Bound]](None)
         fsm    <- Ref.of[F, RegistrationFsmState](RegistrationFsmState.Idle)
         events <- Channel.unbounded[F, RegistrationEvent]
         nonceCounts <- Ref.of[F, Map[Nonce, NonceCount]](Map.empty)

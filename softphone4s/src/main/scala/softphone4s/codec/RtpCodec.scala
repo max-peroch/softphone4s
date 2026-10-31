@@ -5,7 +5,7 @@ import fs2.Chunk
 /** RFC 3550 RTP packet encode/decode — pure. */
 object RtpCodec {
 
-  val HeaderLength = 12 // fixed header, no CSRC, no extension
+  val HeaderLength: Int = 12 // fixed header, no CSRC, no extension
 
   final case class RtpHeader(
       version: Int,

@@ -314,4 +314,16 @@ class OfferAnswerSuite extends FunSuite {
     val offered = OfferAnswer.offer(local, caps, MediaDirection.SendRecv).render
     assert(offered.contains("m=audio 20000 RTP/AVP 9\r\n"), offered)
   }
+
+  test(
+    "dynamic payload numbers stop at 127, and a codec left without one is not offered"
+  ) {
+    val many = NonEmptyList.fromListUnsafe(
+      (1 to 40).toList.map(n => Codec(s"x-$n", 8000, 1, None, None))
+    )
+    val offered = Capabilities(many, Some(101)).offered
+    assertEquals(offered.size, 31) // 96 to 127, but for 101
+    assert(offered.forall((pt, _) => pt >= 96 && pt <= 127 && pt != 101))
+    assertEquals(offered.map(_._1).distinct.size, offered.size)
+  }
 }

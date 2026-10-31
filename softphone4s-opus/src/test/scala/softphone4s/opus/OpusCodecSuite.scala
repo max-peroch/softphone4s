@@ -132,7 +132,7 @@ class OpusCodecSuite extends CatsEffectSuite {
     ).foreach(p => assert(fmtp.split(';').contains(p), fmtp))
     assert(
       OpusCodec
-        .description(OpusSettings(inbandFec = false))
+        .description(OpusSettings(inbandFec = InbandFec.Disabled))
         .fmtp
         .exists(_.contains("useinbandfec=0"))
     )

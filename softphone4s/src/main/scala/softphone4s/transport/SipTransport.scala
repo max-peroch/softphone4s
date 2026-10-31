@@ -75,50 +75,71 @@ object SipTransport {
                   server: SocketAddress[IpAddress],
                   retransmit: FiniteDuration,
                   attempts: Int
-              ): F[Either[Stun.Error, SocketAddress[IpAddress]]] =
-                for {
-                  random <- Async[F].delay(new Array[Byte](12))
-                  _      <- Async[F].delay(secure.nextBytes(random))
-                  id = Stun.TransactionId(Chunk.array(random))
-                  answer <- Deferred[F, Either[Stun.Error, SocketAddress[
-                    IpAddress
-                  ]]]
-                  _ <- pending.update(_.updated(id, Pending(server, answer)))
-                  request = Stun.bindingRequest(id)
-                  waits   = Iterator
-                    .iterate(retransmit)(_ * 2)
-                    .take(math.max(attempts, 1))
-                    .toList
-                  result <- waits
-                    .foldLeft(
-                      Async[F].pure(
-                        Option
-                          .empty[Either[Stun.Error, SocketAddress[IpAddress]]]
+              ): F[Outcome] =
+                freshId[F].flatMap { id =>
+                  // Waiting for the answer is registered for as long as it takes,
+                  // and not a moment longer, however it ends.
+                  Resource
+                    .make(
+                      Deferred[F, Outcome].flatTap(answer =>
+                        pending.update(_.updated(id, Pending(server, answer)))
                       )
-                    ) { (previous, wait) =>
-                      previous.flatMap {
-                        case done @ Some(_) => Async[F].pure(done)
-                        case None           =>
-                          socket.write(Datagram(server, request)) >>
-                            answer.get
-                              .timeoutTo(wait, Async[F].pure(null))
-                              .map(Option(_))
-                      }
-                    }
-                    .guarantee(pending.update(_ - id))
-                } yield result.getOrElse(
-                  Left(Stun.Error.Malformed("no answer"))
-                )
+                    )(_ => pending.update(_ - id))
+                    .use(answer =>
+                      asking(
+                        // Built afresh each time it is run: the socket wraps the bytes
+                        // in a buffer when called, and a buffer can be sent once.
+                        Async[F].defer(
+                          socket.write(
+                            Datagram(server, Stun.bindingRequest(id))
+                          )
+                        ),
+                        answer,
+                        Iterator
+                          .iterate(retransmit)(_ * 2)
+                          .take(math.max(attempts, 1))
+                          .toList
+                      )
+                    )
+                }
             }
           }
       }
 
   private val secure = new java.security.SecureRandom
 
+  /** What a STUN server said: the address it saw us at, or why not. */
+  private type Outcome = Either[Stun.Error, SocketAddress[IpAddress]]
+
+  private def freshId[F[_]: Sync]: F[Stun.TransactionId] =
+    Sync[F].delay {
+      val bytes = new Array[Byte](12)
+      secure.nextBytes(bytes)
+      Stun.TransactionId(Chunk.array(bytes))
+    }
+
+  /** Sends the request, and again after each wait, until it is answered or the
+    * waits are used up.
+    */
+  private def asking[F[_]: Async](
+      send: F[Unit],
+      answer: Deferred[F, Outcome],
+      waits: List[FiniteDuration]
+  ): F[Outcome] =
+    waits match {
+      case Nil           => Async[F].pure(Left(Stun.Error.NoAnswer))
+      case wait :: later =>
+        (send >> answer.get.map(_.some).timeoutTo(wait, none[Outcome].pure[F]))
+          .flatMap {
+            case Some(result) => result.pure[F]
+            case None         => asking(send, answer, later)
+          }
+    }
+
   /** A request waiting for its answer, and whom it was asked of. */
   private final case class Pending[F[_]](
       server: SocketAddress[IpAddress],
-      answer: Deferred[F, Either[Stun.Error, SocketAddress[IpAddress]]]
+      answer: Deferred[F, Outcome]
   )
 
   /** Hands a STUN answer to the request it belongs to, if it came from whom the

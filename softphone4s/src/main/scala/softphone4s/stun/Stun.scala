@@ -21,6 +21,9 @@ object Stun {
     case Malformed(reason: String)
     case Rejected(code: Int)
     case NoAddress
+
+    /** The server did not answer, after the request was repeated. */
+    case NoAnswer
   }
 
   /** The 96 bits that tie a response to its request. */

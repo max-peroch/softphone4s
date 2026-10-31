@@ -233,9 +233,11 @@ object StreamTransport {
         connected: Connected[F]
     ): F[Unit] =
       for {
-        lock     <- Semaphore[F](1)
-        touched  <- Ref.of[F, FiniteDuration](Duration.Zero)
-        received <- Ref.of[F, FiniteDuration](Duration.Zero)
+        (lock, touched, received) <- (
+          Semaphore[F](1),
+          Ref.of[F, FiniteDuration](Duration.Zero),
+          Ref.of[F, FiniteDuration](Duration.Zero)
+        ).tupled
         touch = Async[F].monotonic.flatMap(touched.set)
         _ <- touch
         // Keep-alive traffic is written without counting as activity: a ping we
