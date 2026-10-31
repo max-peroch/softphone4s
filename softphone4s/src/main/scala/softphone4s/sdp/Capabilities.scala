@@ -5,12 +5,16 @@ import softphone4s.model.PayloadType
 
 /** What we can do with an audio stream: the codecs, most wanted first, the
   * payload type we receive telephone events on (RFC 4733), if we do, and the
-  * one we receive comfort noise on (RFC 3389), if we do.
+  * one we receive comfort noise on (RFC 3389), if we do. The keys of a call are
+  * part of what it offers and answers with, so a call's capabilities carry
+  * them: made once for the call, they stay the same over its session changes
+  * and its uplinks.
   */
 final case class Capabilities(
     codecs: NonEmptyList[Codec],
     telephoneEventType: Option[PayloadType],
-    comfortNoiseType: Option[PayloadType] = None
+    comfortNoiseType: Option[PayloadType] = None,
+    crypto: LocalCrypto = LocalCrypto.Off
 ) {
 
   /** The same, with `codec` first if we have it: the one a call is already in

@@ -4,6 +4,11 @@ package softphone4s.sdp
 final case class Attribute(name: String, value: Option[String]) {
 
   def render: String = s"a=$name${value.fold("")(v => s":$v")}"
+
+  // A crypto line carries a key: it is never printed.
+  override def toString: String =
+    if name == "crypto" then "Attribute(crypto,Some(***))"
+    else s"Attribute($name,$value)"
 }
 
 object Attribute {

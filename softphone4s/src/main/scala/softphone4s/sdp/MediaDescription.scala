@@ -25,6 +25,12 @@ final case class MediaDescription(
       RtpMap.parse(value)
     }.flatten
 
+  /** The `a=crypto` lines that can be used, in the order they are listed. */
+  def cryptos: List[CryptoAttribute] =
+    attributes.collect { case Attribute("crypto", Some(value)) =>
+      CryptoAttribute.parse(value).toOption
+    }.flatten
+
   /** The format parameters of a payload type, from `a=fmtp`. */
   def fmtp(payloadType: PayloadType): Option[String] =
     attributes.collectFirst {

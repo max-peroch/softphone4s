@@ -21,6 +21,17 @@ object MasterKey {
   val KeyLength: Int  = 16
   val SaltLength: Int = 14
 
+  /** A key and a salt of random bytes from `random`, which must be a secure
+    * one.
+    */
+  def random(random: java.security.SecureRandom): MasterKey = {
+    val key  = new Array[Byte](KeyLength)
+    val salt = new Array[Byte](SaltLength)
+    random.nextBytes(key)
+    random.nextBytes(salt)
+    new MasterKey(Chunk.array(key), Chunk.array(salt))
+  }
+
   /** A key of 16 bytes and a salt of 14. */
   def apply(
       key: Chunk[Byte],
