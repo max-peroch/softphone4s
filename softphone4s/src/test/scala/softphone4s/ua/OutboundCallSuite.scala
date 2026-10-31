@@ -130,7 +130,8 @@ class OutboundCallSuite extends CatsEffectSuite {
   private def nextOf(peer: Transport[IO], method: SipMethod) =
     received(peer, _.method == method)
 
-  private def sdp = "v=0\r\nc=IN IP4 127.0.0.1\r\nm=audio 40000 RTP/AVP 0\r\n"
+  private def sdp =
+    "v=0\r\no=- 1 1 IN IP4 127.0.0.1\r\ns=-\r\nc=IN IP4 127.0.0.1\r\nt=0 0\r\nm=audio 40000 RTP/AVP 0\r\n"
 
   private def answerTo(
       request: SipRequest,
@@ -625,7 +626,7 @@ class OutboundCallSuite extends CatsEffectSuite {
   // ---- Our own hold and resume -----------------------------------------------
 
   private def sdpAnswering(direction: String) =
-    s"v=0\r\nc=IN IP4 127.0.0.1\r\nt=0 0\r\nm=audio 40000 RTP/AVP 0\r\na=$direction\r\n"
+    s"v=0\r\no=- 1 1 IN IP4 127.0.0.1\r\ns=-\r\nc=IN IP4 127.0.0.1\r\nt=0 0\r\nm=audio 40000 RTP/AVP 0\r\na=$direction\r\n"
 
   private def okTo(reinvite: SipRequest, direction: String): SipResponse = {
     val base = TransactionMessages.responseTo(reinvite, 200, "OK")

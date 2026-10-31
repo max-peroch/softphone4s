@@ -97,6 +97,8 @@ Progress: item 1 is done for TCP and TLS. A message goes out on the transport it
 
 ### Phase 4: SDP and media
 
+Progress: item 1 is done except for the last step. `sdp/` has a parser and printer (`SessionDescription`: session and media sections, `c=` per media, IPv4 and IPv6, `rtpmap`/`fmtp`, direction, the `0.0.0.0` hold, declined streams; a description is read even without `o=`, `s=` or `t=`, but not without `v=`) and the pure offer/answer of RFC 3264 (`OfferAnswer.offer`, `answer`, `accept`, with `Capabilities`, `MediaPlan` and a typed `Reject`). It picks our first codec among those offered (found by `rtpmap` or static number), answers telephone events only on the payload type we receive them on, keeps the order of the `m=` lines declining the ones it does not use, and mirrors the direction. The dialogs still go through `SdpCodec`, now a thin layer over it; they switch to `MediaPlan` with item 2, when the negotiated codec first reaches the media path, which is also when an unusable answer to our INVITE can be rejected instead of falling back to defaults.
+
 1. **SDP:** full parser and printer (session and media sections, `a=` attributes, `c=` per media), and an offer/answer engine (RFC 3264) as a pure function: `answer(offer, localCaps) => Either[Reject, (Sdp, MediaPlan)]`.
 2. **Codec registry** with negotiation: PCMU, PCMA, then G.722 and Opus. Codecs work on `Chunk[Byte]`/`Array[Short]` blocks. Dynamic payload types come from `rtpmap`. Opus may use a JNI-free implementation or a pluggable module. Decide at the start of this phase.
 3. **DTMF:** RFC 4733 telephone-event send and receive (including end-of-event retransmission and de-duplication), SIP INFO kept as a fallback.

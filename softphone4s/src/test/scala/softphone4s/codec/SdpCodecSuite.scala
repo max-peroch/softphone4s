@@ -108,7 +108,7 @@ class SdpCodecSuite extends FunSuite {
   private def offerWith(extra: String, ip: String = "192.168.1.2") =
     SdpCodec
       .parseOffer(
-        s"v=0\r\nc=IN IP4 $ip\r\nt=0 0\r\nm=audio 20000 RTP/AVP 0\r\n$extra"
+        s"v=0\r\no=- 1 1 IN IP4 $ip\r\ns=-\r\nc=IN IP4 $ip\r\nt=0 0\r\nm=audio 20000 RTP/AVP 0\r\n$extra"
       )
       .getOrElse(fail("unparseable"))
 

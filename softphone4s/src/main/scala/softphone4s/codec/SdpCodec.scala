@@ -1,33 +1,43 @@
 package softphone4s.codec
 
-import com.comcast.ip4s.{IpAddress, Port}
+import com.comcast.ip4s.{IpAddress, Port, ip, port}
 import softphone4s.model.MediaDirection
+import softphone4s.sdp.{
+  Capabilities,
+  LocalMedia,
+  MediaKind,
+  MediaProtocol,
+  OfferAnswer,
+  SessionDescription
+}
 
-/** Minimal SDP offer/answer codec for a single audio stream. */
+/** The SDP the call code deals in: one audio stream, PCMU and telephone events
+  * on 101. It reads and writes through [[softphone4s.sdp]], which does the
+  * parsing and the offer/answer; this is the shape the dialogs were written
+  * against, until they take a negotiated plan instead.
+  */
 object SdpCodec {
+
+  private val TelephoneEventPayloadType = 101
+
+  /** A local address that stands for ours when only the outcome of an answer
+    * matters.
+    */
+  private val probe = LocalMedia(ip"0.0.0.0", port"0", 0, 0)
 
   /** Extract the remote RTP endpoint from an SDP body. */
   def parseAudioEndpoint(
       sdp: String,
       defaultIp: IpAddress,
       defaultPort: Port
-  ): (IpAddress, Port) = {
-    val lines = sdp.linesIterator.map(_.trim).toList
-
-    val remoteIp = lines
-      .find(_.startsWith("c=IN IP4 "))
-      .flatMap(l => IpAddress.fromString(l.stripPrefix("c=IN IP4 ").trim))
-      .getOrElse(defaultIp)
-
-    val remotePort = lines
-      .find(_.startsWith("m=audio "))
-      .flatMap(_.split(" ").lift(1))
-      .flatMap(_.toIntOption)
-      .flatMap(Port.fromInt)
-      .getOrElse(defaultPort)
-
-    (remoteIp, remotePort)
-  }
+  ): (IpAddress, Port) =
+    SessionDescription
+      .parse(sdp)
+      .toOption
+      .flatMap(d => d.media.find(_.kind == MediaKind.Audio).map(m => (d, m)))
+      .fold((defaultIp, defaultPort))((d, m) =>
+        (d.addressOf(m).getOrElse(defaultIp), m.port)
+      )
 
   /** What a caller's SDP offers for audio. */
   final case class AudioOffer(
@@ -35,7 +45,8 @@ object SdpCodec {
       port: Port,
       payloadTypes: List[Int],
       offersTelephoneEvent: Boolean,
-      direction: MediaDirection = MediaDirection.SendRecv
+      direction: MediaDirection,
+      description: SessionDescription
   ) {
 
     /** Whether this offer puts the call on hold: nothing is to be sent to its
@@ -43,49 +54,32 @@ object SdpCodec {
       */
     def isHold: Boolean = !direction.receives
 
-    /** We can only speak PCMU (payload type 0). */
-    def isAcceptable: Boolean = payloadTypes.contains(PcmuPayloadType)
+    /** Whether we can answer it: a codec of ours is in it. */
+    def isAcceptable: Boolean =
+      OfferAnswer.answer(description, probe, Capabilities.Default).isRight
   }
-
-  private val PcmuPayloadType           = 0
-  private val TelephoneEventPayloadType = 101
 
   /** The audio an SDP body offers, or `None` if it has no audio stream we can
-    * address. Telephone-event counts only on payload type 101, the one the RTP
-    * code receives.
+    * address: one that is not declined, is plain RTP and has an address.
+    * Telephone-event counts only on payload type 101, the one the RTP code
+    * receives.
     */
-  def parseOffer(sdp: String): Option[AudioOffer] = {
-    val lines = sdp.linesIterator.map(_.trim).toList
+  def parseOffer(sdp: String): Option[AudioOffer] =
     for {
-      media <- lines.find(_.startsWith("m=audio "))
-      parts = media.split(' ').toList
-      port <- parts.lift(1).flatMap(_.toIntOption).flatMap(Port.fromInt)
-      payloads = parts.drop(3).flatMap(_.toIntOption)
-      ip <- lines
-        .find(_.startsWith("c=IN IP4 "))
-        .flatMap(l => IpAddress.fromString(l.stripPrefix("c=IN IP4 ").trim))
+      description <- SessionDescription.parse(sdp).toOption
+      section     <- description.media.find(m =>
+        m.kind == MediaKind.Audio && !m.isDeclined &&
+          m.protocol == MediaProtocol.RtpAvp
+      )
+      ip <- description.addressOf(section)
     } yield AudioOffer(
       ip,
-      port,
-      payloads,
-      offersTelephoneEvent = payloads.contains(TelephoneEventPayloadType) &&
-        lines.exists(l =>
-          l.startsWith(s"a=rtpmap:$TelephoneEventPayloadType ") &&
-            l.toLowerCase.contains("telephone-event")
-        ),
-      direction =
-        if ip.toString == "0.0.0.0" then MediaDirection.Inactive
-        else
-          lines
-            .flatMap(l =>
-              if l.startsWith("a=") then
-                MediaDirection.fromAttribute(l.drop(2).trim)
-              else None
-            )
-            .headOption
-            .getOrElse(MediaDirection.SendRecv)
+      section.port,
+      section.payloadTypes,
+      section.offersTelephoneEvents(TelephoneEventPayloadType),
+      description.directionOf(section),
+      description
     )
-  }
 
   /** An answer to `offer`: PCMU, and telephone-event only if it was offered, so
     * the answer stays within what the caller proposed (RFC 3264 §6).
@@ -95,25 +89,13 @@ object SdpCodec {
       localIp: IpAddress,
       localRtpPort: Port
   ): String = {
-    val payloads =
-      if offer.offersTelephoneEvent then
-        s"$PcmuPayloadType $TelephoneEventPayloadType"
-      else s"$PcmuPayloadType"
-    val events =
-      if offer.offersTelephoneEvent then
-        s"""|a=rtpmap:$TelephoneEventPayloadType telephone-event/8000
-            |a=fmtp:$TelephoneEventPayloadType 0-16
-            |""".stripMargin
-      else ""
-    s"""|v=0
-        |o=- 0 0 IN IP4 $localIp
-        |s=-
-        |c=IN IP4 $localIp
-        |t=0 0
-        |m=audio $localRtpPort RTP/AVP $payloads
-        |a=rtpmap:$PcmuPayloadType PCMU/8000
-        |${events}a=${offer.direction.answer.sdpAttribute}
-        |""".stripMargin.replace("\n", "\r\n")
+    val local = LocalMedia(localIp, localRtpPort, 0, 0)
+    OfferAnswer
+      .answer(offer.description, local, Capabilities.Default)
+      .fold(
+        _ => buildAnswer(localIp, localRtpPort),
+        _.description.render
+      )
   }
 
   /** Build a minimal SDP offer. */
@@ -122,17 +104,13 @@ object SdpCodec {
       localRtpPort: Port,
       direction: MediaDirection = MediaDirection.SendRecv
   ): String =
-    s"""|v=0
-        |o=- 0 0 IN IP4 $localIp
-        |s=-
-        |c=IN IP4 $localIp
-        |t=0 0
-        |m=audio $localRtpPort RTP/AVP 0 101
-        |a=rtpmap:0 PCMU/8000
-        |a=rtpmap:101 telephone-event/8000
-        |a=fmtp:101 0-16
-        |a=${direction.sdpAttribute}
-        |""".stripMargin.replace("\n", "\r\n")
+    OfferAnswer
+      .offer(
+        LocalMedia(localIp, localRtpPort, 0, 0),
+        Capabilities.Default,
+        direction
+      )
+      .render
 
   /** Build a minimal SDP answer, offering the same fixed codec set as
     * `buildOffer`.
