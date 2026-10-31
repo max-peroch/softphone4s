@@ -10,6 +10,7 @@ object G711 {
   private val PacketSamples = 160
 
   private final class Companded(
+      val token: String,
       val description: Codec,
       toPayload: Array[Byte] => Array[Byte],
       toPcm: Array[Byte] => Array[Byte]
@@ -24,9 +25,19 @@ object G711 {
 
   /** μ-law, static payload type 0. */
   val Pcmu: AudioCodec =
-    Companded(Codec.Pcmu, G711Codec.pcmToMulaw, G711Codec.mulawToPcm)
+    Companded(
+      "pcmu",
+      Codec.Pcmu,
+      G711Codec.pcmToMulaw,
+      G711Codec.mulawToPcm
+    )
 
   /** A-law, static payload type 8. */
   val Pcma: AudioCodec =
-    Companded(Codec.Pcma, G711Codec.pcmToAlaw, G711Codec.alawToPcm)
+    Companded(
+      "pcma",
+      Codec.Pcma,
+      G711Codec.pcmToAlaw,
+      G711Codec.alawToPcm
+    )
 }

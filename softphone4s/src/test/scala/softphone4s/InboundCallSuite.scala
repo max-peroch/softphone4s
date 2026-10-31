@@ -7,7 +7,8 @@ import com.comcast.ip4s.*
 import munit.CatsEffectSuite
 import org.typelevel.log4cats.noop.NoOpLogger
 import softphone4s.SipLiterals.*
-import softphone4s.config.SoftphoneConfig
+import softphone4s.config.{CodecChoice, SoftphoneConfig}
+import softphone4s.media.{AudioCodec, HalfByteCodec}
 import softphone4s.model.*
 import fs2.io.net.Network
 import softphone4s.codec.SipCodec
@@ -42,13 +43,16 @@ class InboundCallSuite extends CatsEffectSuite {
 
   /** The softphone under test, and the caller's end of the wire. */
   private def scenario(
-      answerTimeout: FiniteDuration = 60.seconds
+      answerTimeout: FiniteDuration = 60.seconds,
+      codecs: List[CodecChoice] = List(CodecChoice.Pcmu, CodecChoice.Pcma),
+      extraCodecs: List[AudioCodec] = Nil
   ): Resource[IO, (SoftphoneStreaming[IO], Transport[IO])] =
     (
       SoftphoneStreaming.resource[IO](
-        config(answerTimeout),
+        config(answerTimeout).copy(codecs = codecs),
         audio,
-        NoOpLogger.impl[IO]
+        NoOpLogger.impl[IO],
+        extraCodecs
       ),
       SipTransport.udp[IO](
         SocketAddress(ip"127.0.0.1", theirs),
@@ -289,6 +293,34 @@ class InboundCallSuite extends CatsEffectSuite {
       } yield {
         assertEquals(cancelOk.statusCode, 200)
         assertEquals(terminated.headers.cseq.method, SipMethod.Invite)
+      }
+    }
+  }
+
+  test(
+    "a codec the program added is answered with the payload type the caller gave it"
+  ) {
+    val dynamic = offer
+      .replace("RTP/AVP 0 101", "RTP/AVP 111 0 101")
+      .replace(
+        "a=rtpmap:0 PCMU/8000\r\n",
+        "a=rtpmap:0 PCMU/8000\r\na=rtpmap:111 x-half/8000\r\na=fmtp:111 mode=1\r\n"
+      )
+    scenario(
+      codecs = List(CodecChoice.Named("x-half"), CodecChoice.Pcmu),
+      extraCodecs = List(HalfByteCodec)
+    ).use { (phone, peer) =>
+      for {
+        _    <- send(peer, invite(dynamic))
+        call <- phone.incoming.head.compile.lastOrError.timeout(5.seconds)
+        ok   <- call.accept.allocated.flatMap { case (_, release) =>
+          response(peer, status(200)).flatTap(_ => release.start.void)
+        }
+      } yield {
+        assert(ok.body.contains("RTP/AVP 111 101"), ok.body)
+        assert(ok.body.contains("a=rtpmap:111 x-half/8000"), ok.body)
+        assert(ok.body.contains("a=fmtp:111 mode=1"), ok.body)
+        assert(!ok.body.contains("PCMU"), ok.body)
       }
     }
   }

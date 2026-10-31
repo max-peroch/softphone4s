@@ -337,13 +337,34 @@ class MultiAccountSuite extends CatsEffectSuite {
     )
   }
 
-  test("a codec nobody knows is a configuration error") {
+  test(
+    "a name that is not one of ours is read as a codec the program may add"
+  ) {
     val parsed = ConfigSource
       .string(
         """user = alice
           |password = pw
           |realm = example.com
-          |codecs = ["speex"]""".stripMargin
+          |codecs = ["Opus", "pcmu"]""".stripMargin
+      )
+      .load[SoftphoneConfig]
+      .fold(failures => fail(failures.prettyPrint()), identity)
+    assertEquals(
+      parsed.codecs,
+      List(
+        softphone4s.config.CodecChoice.Named("opus"),
+        softphone4s.config.CodecChoice.Pcmu
+      )
+    )
+  }
+
+  test("an empty codec name is a configuration error") {
+    val parsed = ConfigSource
+      .string(
+        """user = alice
+          |password = pw
+          |realm = example.com
+          |codecs = [" "]""".stripMargin
       )
       .load[SoftphoneConfig]
     assert(parsed.isLeft)

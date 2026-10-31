@@ -10,6 +10,7 @@ import softphone4s.sdp.Codec
 object G722 {
 
   private final class Implementation extends AudioCodec {
+    val token: String           = "g722"
     val description: Codec      = Codec.G722
     val pcmRate: Int            = 16000
     val payloadPacketBytes: Int = 160

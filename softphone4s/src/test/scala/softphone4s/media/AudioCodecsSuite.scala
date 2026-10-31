@@ -6,9 +6,19 @@ import cats.syntax.all.*
 import fs2.{Chunk, Stream}
 import munit.CatsEffectSuite
 import softphone4s.config.CodecChoice
+import softphone4s.model.SoftphoneError
 import softphone4s.sdp.Codec
 
 class AudioCodecsSuite extends CatsEffectSuite {
+
+  private def resolved(
+      choices: CodecChoice*
+  ): AudioCodecs = resolvedWith(Nil, choices*)
+
+  private def resolvedWith(extras: List[AudioCodec], choices: CodecChoice*) =
+    AudioCodecs
+      .resolve(NonEmptyList.fromListUnsafe(choices.toList), extras)
+      .fold(error => fail(error.getMessage), identity)
 
   private def pcm(samples: Int*): Chunk[Byte] =
     Chunk.array(
@@ -18,9 +28,7 @@ class AudioCodecsSuite extends CatsEffectSuite {
     )
 
   test("the codecs chosen are used in the order given, once each") {
-    val codecs = AudioCodecs.of(
-      NonEmptyList.of(CodecChoice.Pcma, CodecChoice.Pcmu, CodecChoice.Pcma)
-    )
+    val codecs = resolved(CodecChoice.Pcma, CodecChoice.Pcmu, CodecChoice.Pcma)
     assertEquals(
       codecs.capabilities.codecs.toList,
       List(Codec.Pcma, Codec.Pcmu)
@@ -91,10 +99,10 @@ class AudioCodecsSuite extends CatsEffectSuite {
 
   test("G.722 cannot share an audio format with G.711") {
     val mixed =
-      AudioCodecs.of(NonEmptyList.of(CodecChoice.G722, CodecChoice.Pcmu))
+      resolved(CodecChoice.G722, CodecChoice.Pcmu)
     assertEquals(mixed.pcmRate, None)
     assertEquals(
-      AudioCodecs.of(NonEmptyList.one(CodecChoice.G722)).pcmRate,
+      resolved(CodecChoice.G722).pcmRate,
       Some(16000)
     )
   }
@@ -129,5 +137,70 @@ class AudioCodecsSuite extends CatsEffectSuite {
       .compile
       .to(Chunk)
       .map(out => assertEquals(out.size, 0))
+  }
+
+  // ---- Codecs the program adds ------------------------------------------------------
+
+  test(
+    "a codec the program adds is found by its name, among ours, in the order asked"
+  ) {
+    val codecs = resolvedWith(
+      List(HalfByteCodec),
+      CodecChoice.Named("x-half"),
+      CodecChoice.Pcmu
+    )
+    assertEquals(codecs.codecs.map(_.token).toList, List("x-half", "pcmu"))
+    assertEquals(
+      codecs.implementing(HalfByteCodec.description),
+      Some(HalfByteCodec)
+    )
+  }
+
+  test("its payload type is dynamic, and skips the one telephone events have") {
+    val caps =
+      resolvedWith(
+        List(HalfByteCodec),
+        CodecChoice.Named("x-half"),
+        CodecChoice.Pcmu
+      ).capabilities
+    assertEquals(caps.offered.map(_._1), List(96, 0))
+  }
+
+  test("a name nothing has is an error") {
+    assertEquals(
+      AudioCodecs
+        .resolve(NonEmptyList.one(CodecChoice.Named("opus")), Nil)
+        .left
+        .toOption,
+      Some(SoftphoneError.UnknownCodec("opus"))
+    )
+  }
+
+  test("a codec called what another is called is an error") {
+    val twin = new AudioCodec {
+      val token: String           = "pcmu"
+      val description: Codec      = Codec("PCMU2", 8000, 1, None, None)
+      val pcmRate: Int            = 8000
+      val payloadPacketBytes: Int = 160
+      def encoder[F[_]]           = G711.Pcmu.encoder
+      def decoder[F[_]]           = G711.Pcmu.decoder
+    }
+    assertEquals(
+      AudioCodecs
+        .resolve(NonEmptyList.one(CodecChoice.Pcmu), List(twin))
+        .left
+        .toOption,
+      Some(SoftphoneError.DuplicateCodec("pcmu"))
+    )
+  }
+
+  test("the added codec's pipes work like any other") {
+    val pcm = Chunk.array(Array.tabulate[Byte](640)(i => (i % 100).toByte))
+    Stream
+      .chunk(pcm)
+      .through(HalfByteCodec.encoder[IO])
+      .compile
+      .to(Chunk)
+      .map(payload => assertEquals(payload.size, 320))
   }
 }

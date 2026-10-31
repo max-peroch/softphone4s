@@ -30,6 +30,10 @@ object SoftphoneError {
       extends SoftphoneError(s"No $transport transport is available")
   case object NoCodecsConfigured
       extends SoftphoneError("No codec is configured")
+  final case class UnknownCodec(token: String)
+      extends SoftphoneError(s"No codec called $token")
+  final case class DuplicateCodec(token: String)
+      extends SoftphoneError(s"Two codecs are called $token")
   case object MixedCodecRates
       extends SoftphoneError(
         "The codecs work at different sample rates, which cannot be played on one audio format"

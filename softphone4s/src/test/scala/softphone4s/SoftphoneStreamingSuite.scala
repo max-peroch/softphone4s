@@ -8,6 +8,7 @@ import munit.CatsEffectSuite
 import org.typelevel.log4cats.noop.NoOpLogger
 import softphone4s.SipLiterals.*
 import softphone4s.config.{CodecChoice, SoftphoneConfig}
+import softphone4s.media.HalfByteCodec
 import softphone4s.model.*
 import softphone4s.transaction.TransactionMessages
 import softphone4s.transport.{Inbound, SipTransport, Transport}
@@ -194,6 +195,32 @@ class SoftphoneStreamingSuite extends CatsEffectSuite {
       .map(r =>
         assertEquals(r.left.toOption, Some(SoftphoneError.NoCodecsConfigured))
       )
+  }
+
+  test("a codec nobody supplied is refused when the softphone starts") {
+    SoftphoneStreaming
+      .resource[IO](
+        config.copy(codecs = List(CodecChoice.Named("opus"))),
+        audio,
+        NoOpLogger.impl[IO]
+      )
+      .use_
+      .attempt
+      .map(r =>
+        assertEquals(r.left.toOption, Some(SoftphoneError.UnknownCodec("opus")))
+      )
+  }
+
+  test("a codec the program supplies is accepted, and listed as it chooses") {
+    SoftphoneStreaming
+      .resource[IO](
+        config
+          .copy(codecs = List(CodecChoice.Named("x-half"), CodecChoice.Pcmu)),
+        audio,
+        NoOpLogger.impl[IO],
+        List(HalfByteCodec)
+      )
+      .use_
   }
 
   test("G.722 beside G.711 is refused: one audio format cannot serve both") {

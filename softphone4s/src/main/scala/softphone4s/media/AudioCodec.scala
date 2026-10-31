@@ -6,10 +6,18 @@ import softphone4s.sdp.Codec
 /** An audio codec at work: PCM in, packets of payload out, and back. PCM is
   * 16-bit signed little-endian mono at `pcmRate`; a packet carries 20 ms.
   *
+  * This is the plug-in point for codecs of other origin than ours: implement it
+  * and give the codec to `SoftphoneStreaming` as an extra, then list its
+  * `token` in `codecs`. [[AudioCodec.stateless]] and [[AudioCodec.stateful]]
+  * make the pipes from a function over a packet.
+  *
   * A codec with memory (the ADPCM ones) keeps it in the pipes it makes, which
   * is why they are made per stream rather than shared.
   */
 trait AudioCodec {
+
+  /** The name `codecs` calls it by in the configuration, in lower case. */
+  def token: String
 
   /** How SDP names it. */
   def description: Codec
@@ -43,7 +51,7 @@ object AudioCodec {
     * function that turns one chunk into another, which keeps the state of the
     * stream.
     */
-  private[media] def stateful[F[_]](
+  def stateful[F[_]](
       packetBytes: Option[Int],
       make: () => Array[Byte] => Array[Byte]
   ): Pipe[F, Byte, Byte] =
@@ -56,7 +64,7 @@ object AudioCodec {
       }
 
   /** Pipes for a codec without memory: `f` turns one chunk into another. */
-  private[media] def stateless[F[_]](
+  def stateless[F[_]](
       packetBytes: Int,
       f: Array[Byte] => Array[Byte]
   ): Pipe[F, Byte, Byte] =

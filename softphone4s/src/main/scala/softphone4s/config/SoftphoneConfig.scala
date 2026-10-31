@@ -47,7 +47,8 @@ final case class SoftphoneConfig(
   def capabilities: Capabilities =
     NonEmptyList
       .fromList(codecs)
-      .fold(Capabilities.Default)(AudioCodecs.of(_).capabilities)
+      .flatMap(AudioCodecs.resolve(_, Nil).toOption)
+      .fold(Capabilities.Default)(_.capabilities)
 
   /** The account `call` and `register` use. */
   def defaultAccount: AccountConfig =

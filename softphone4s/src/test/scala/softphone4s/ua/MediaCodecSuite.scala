@@ -8,7 +8,7 @@ import fs2.{Chunk, Stream}
 import munit.CatsEffectSuite
 import softphone4s.codec.{G711Codec, RtpCodec}
 import softphone4s.config.RtpLatching
-import softphone4s.media.AudioCodecs
+import softphone4s.media.{AudioCodecs, HalfByteCodec}
 import softphone4s.model.MediaDirection
 import softphone4s.sdp.{Capabilities, Codec, MediaPlan}
 import softphone4s.transport.RawPeer
@@ -165,10 +165,12 @@ class MediaCodecSuite extends CatsEffectSuite {
     }
   }
 
-  private val wideband =
-    AudioCodecs.of(
-      cats.data.NonEmptyList.one(softphone4s.config.CodecChoice.G722)
+  private val wideband = AudioCodecs
+    .resolve(
+      cats.data.NonEmptyList.one(softphone4s.config.CodecChoice.G722),
+      Nil
     )
+    .fold(e => fail(e.getMessage), identity)
 
   private def reference(name: String): Array[Byte] =
     scala.util.Using.resource(getClass.getResourceAsStream(s"/g722/$name"))(
@@ -217,6 +219,52 @@ class MediaCodecSuite extends CatsEffectSuite {
         got.toArray.toList,
         reference("reference-decoded.pcm").take(640).toList
       )
+    }
+  }
+
+  private val half = AudioCodecs
+    .resolve(
+      cats.data.NonEmptyList
+        .one(softphone4s.config.CodecChoice.Named("x-half")),
+      List(HalfByteCodec)
+    )
+    .fold(e => fail(e.getMessage), identity)
+
+  test("a codec the program added runs on the payload type it was given") {
+    withPeer(HalfByteCodec.description, 96, half) { (media, ours, peer) =>
+      val pcm = Chunk.array(
+        Array.tabulate[Byte](640)(i => (i % 2 * 3 + i / 2 % 50).toByte)
+      )
+      for {
+        _       <- Stream.chunk(pcm).through(media.sink).compile.drain.start
+        packets <- peer.reads.take(2).compile.toList.timeout(5.seconds)
+        _       <- peer.write(
+          Datagram(
+            ours,
+            RtpCodec.encode(
+              96,
+              1,
+              0L,
+              5L,
+              Chunk.array(Array.fill[Byte](160)(7)),
+              marker = false
+            )
+          )
+        )
+        back <- media.source.take(320).compile.to(Chunk).timeout(5.seconds)
+      } yield {
+        val decoded = packets.map(d => RtpCodec.decode(d.bytes).get)
+        assertEquals(decoded.map(_._1.payloadType), List(96, 96))
+        assertEquals(decoded.map(_._2.size), List(160, 160))
+        assertEquals(
+          decoded.head._2.toArray.toList,
+          pcm.toArray.take(320).grouped(2).map(_(1)).toList
+        )
+        assertEquals(
+          back.toArray.toList,
+          List.fill(160)(List[Byte](0, 7)).flatten
+        )
+      }
     }
   }
 }

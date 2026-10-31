@@ -20,7 +20,7 @@ import softphone4s.dns.{
 import softphone4s.fsm.CallTimer
 import softphone4s.model.*
 import softphone4s.registration.Registration
-import softphone4s.media.AudioCodecs
+import softphone4s.media.{AudioCodec, AudioCodecs}
 import softphone4s.runtime.{Entropy, Timers}
 import softphone4s.stun.StunClient
 import softphone4s.transaction.{
@@ -167,7 +167,7 @@ class SoftphoneStreaming[F[_]: Async: Network] private (
             sipPortFor(protocol),
             config.baseRtpPort,
             protocol,
-            config.capabilities
+            codecs.capabilities
           )
         )
       )
@@ -368,7 +368,7 @@ class SoftphoneStreaming[F[_]: Async: Network] private (
             sipPortFor(transport),
             rtpPort,
             transport,
-            config.capabilities
+            codecs.capabilities
           )
         )
       } yield endpoint
@@ -588,13 +588,15 @@ object SoftphoneStreaming {
   def resource[F[_]: Async: Network](
       config: SoftphoneConfig,
       audioFormat: AudioFormat,
-      logger: StructuredLogger[F]
+      logger: StructuredLogger[F],
+      extraCodecs: List[AudioCodec] = Nil
   ): Resource[F, SoftphoneStreaming[F]] =
     resourceWith(
       config,
       audioFormat,
       logger,
-      DnsJavaRecords.configured[F](config.dns)
+      DnsJavaRecords.configured[F](config.dns),
+      extraCodecs
     )
 
   /** As [[resource]], looking names up with `dns` instead of the system's DNS
@@ -604,11 +606,12 @@ object SoftphoneStreaming {
       config: SoftphoneConfig,
       audioFormat: AudioFormat,
       logger: StructuredLogger[F],
-      dns: F[DnsRecords[F]]
+      dns: F[DnsRecords[F]],
+      extraCodecs: List[AudioCodec] = Nil
   ): Resource[F, SoftphoneStreaming[F]] =
     for {
       codecs <- Resource.eval(
-        Async[F].fromEither(audioCodecs(config, audioFormat))
+        Async[F].fromEither(audioCodecs(config, audioFormat, extraCodecs))
       )
       udp <- SipTransport.udp[F](
         SocketAddress(config.bindAddress, config.localSipPort),
@@ -696,13 +699,14 @@ object SoftphoneStreaming {
     */
   private def audioCodecs(
       config: SoftphoneConfig,
-      audioFormat: AudioFormat
+      audioFormat: AudioFormat,
+      extraCodecs: List[AudioCodec]
   ): Either[SoftphoneError, AudioCodecs] =
     for {
       chosen <- NonEmptyList
         .fromList(config.codecs)
         .toRight(SoftphoneError.NoCodecsConfigured)
-      codecs = AudioCodecs.of(chosen)
+      codecs    <- AudioCodecs.resolve(chosen, extraCodecs)
       codecRate <- codecs.pcmRate.toRight(SoftphoneError.MixedCodecRates)
       deviceRate = audioFormat.getSampleRate.toInt
       _ <- Either.cond(

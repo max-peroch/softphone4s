@@ -2,11 +2,11 @@ package softphone4s.media
 
 import cats.data.NonEmptyList
 import softphone4s.config.CodecChoice
+import softphone4s.model.SoftphoneError
 import softphone4s.sdp.{Capabilities, Codec}
 
 /** The codecs in use, most wanted first: what we offer, and what a negotiated
-  * codec is played and recorded with. Further codecs can be added by building
-  * one from their own [[AudioCodec]]s.
+  * codec is played and recorded with.
   */
 final case class AudioCodecs(
     codecs: NonEmptyList[AudioCodec],
@@ -30,15 +30,31 @@ final case class AudioCodecs(
 
 object AudioCodecs {
 
-  private def implementing(choice: CodecChoice): AudioCodec = choice match {
-    case CodecChoice.Pcmu => G711.Pcmu
-    case CodecChoice.Pcma => G711.Pcma
-    case CodecChoice.G722 => G722.Wideband
-  }
+  /** The codecs that come with the library. */
+  val BuiltIn: List[AudioCodec] =
+    List(G711.Pcmu, G711.Pcma, G722.Wideband)
 
-  /** The codecs chosen, in the order given, with telephone events on 101. */
-  def of(choices: NonEmptyList[CodecChoice]): AudioCodecs =
-    AudioCodecs(choices.distinct.map(implementing), Some(101))
+  /** The codecs chosen, in the order given, found among ours and `extras`, with
+    * telephone events on 101. A name that nothing has is an error, and so are
+    * two codecs of one name.
+    */
+  def resolve(
+      choices: NonEmptyList[CodecChoice],
+      extras: List[AudioCodec]
+  ): Either[SoftphoneError, AudioCodecs] = {
+    val available = BuiltIn ++ extras
+    for {
+      _ <- available
+        .groupBy(_.token)
+        .collectFirst { case (token, same) if same.size > 1 => token }
+        .fold(Right(()))(token => Left(SoftphoneError.DuplicateCodec(token)))
+      found <- choices.distinct.traverse(choice =>
+        available
+          .find(_.token == choice.token)
+          .toRight(SoftphoneError.UnknownCodec(choice.token))
+      )
+    } yield AudioCodecs(found, Some(101))
+  }
 
   /** μ-law and A-law, with telephone events on 101. */
   val Default: AudioCodecs =
