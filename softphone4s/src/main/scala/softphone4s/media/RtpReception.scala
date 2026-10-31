@@ -118,7 +118,7 @@ object RtpReception {
     * the system's does from boot, and nanoseconds times a clock rate overflow a
     * `Long` within days of that.
     */
-  private[media] def ticks(at: FiniteDuration, rate: Int): Long = {
+  private[softphone4s] def ticks(at: FiniteDuration, rate: Int): Long = {
     val nanos = at.toNanos
     nanos / 1_000_000_000L * rate + nanos % 1_000_000_000L * rate / 1_000_000_000L
   }

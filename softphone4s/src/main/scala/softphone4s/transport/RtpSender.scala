@@ -7,6 +7,8 @@ import com.comcast.ip4s.{IpAddress, SocketAddress}
 import fs2.io.net.{Datagram, DatagramSocket}
 import fs2.{Chunk, Pipe}
 import softphone4s.codec.RtpCodec
+import softphone4s.media.RtcpPacket.SenderInfo
+import softphone4s.media.{NtpTime, RtpReception}
 import softphone4s.model.{DtmfDigit, PayloadType, SoftphoneEvent, Ssrc}
 
 import scala.concurrent.duration.*
@@ -30,8 +32,31 @@ final class RtpSender[F[_]: Async] private (
     clock: Ref[F, Long],
     talking: Ref[F, Boolean],
     sendingDigit: Ref[F, Boolean],
-    oneDigitAtATime: Semaphore[F]
+    oneDigitAtATime: Semaphore[F],
+    counts: Ref[F, RtpSender.Sent],
+    anchor: Ref[F, Option[RtpSender.Anchor]]
 ) {
+
+  /** The source these packets are sent as. */
+  def source: Ssrc = ssrc
+
+  /** What a sender report says of this stream now: when it is, on the wall
+    * clock and on the stream's, and how much has been sent. None before
+    * anything has been, when there is nothing to report as a sender.
+    */
+  def senderInfo: F[Option[SenderInfo]] =
+    (Async[F].realTime, Async[F].monotonic, counts.get, anchor.get).mapN {
+      (wall, now, sent, last) =>
+        last.filter(_ => sent.packets > 0).map { frame =>
+          val elapsed = RtpReception.ticks(now - frame.at, timestampStep * 50)
+          SenderInfo(
+            NtpTime.fromEpoch(wall),
+            (frame.timestamp + elapsed) & 0xffffffffL,
+            sent.packets & 0xffffffffL,
+            sent.octets & 0xffffffffL
+          )
+        }
+    }
 
   /** Sends each chunk, a payload of 20 ms of audio, as an RTP packet. An empty
     * one, one that comes while a digit is being sent, and any while there is
@@ -43,6 +68,8 @@ final class RtpSender[F[_]: Async] private (
   private def sendAudio(payload: Chunk[Byte]): F[Unit] =
     for {
       timestamp <- clock.getAndUpdate(_ + timestampStep)
+      now       <- Async[F].monotonic
+      _         <- anchor.set(Some(RtpSender.Anchor(timestamp, now)))
       held      <- sendingDigit.get
       previous  <- talking.get
       to        <- target
@@ -133,7 +160,7 @@ final class RtpSender[F[_]: Async] private (
               marker = marker
             )
           )
-        )
+        ) >> counts.update(_.add(payload.size))
       )
 
   // Telephone events count at 8 000 a second, and a packet is 20 ms of them.
@@ -145,6 +172,19 @@ final class RtpSender[F[_]: Async] private (
 }
 
 object RtpSender {
+
+  /** What has been sent: RTP packets, and the bytes of their payloads. */
+  private[transport] final case class Sent(packets: Long, octets: Long) {
+    def add(payloadBytes: Int): Sent = Sent(packets + 1, octets + payloadBytes)
+  }
+
+  /** The timestamp of an audio frame and when it was made, from which the
+    * stream's clock is read at any later time.
+    */
+  private[transport] final case class Anchor(
+      timestamp: Long,
+      at: FiniteDuration
+  )
 
   /** A sender for a stream of `audioType`, with telephone events on `eventType`
     * if they were agreed, writing to `socket` whatever `target` says at the
@@ -164,7 +204,9 @@ object RtpSender {
       Ref.of[F, Long](0L),
       Ref.of[F, Boolean](false),
       Ref.of[F, Boolean](false),
-      Semaphore[F](1)
+      Semaphore[F](1),
+      Ref.of[F, Sent](Sent(0, 0)),
+      Ref.of[F, Option[Anchor]](None)
     ).mapN(
       new RtpSender(
         socket,
@@ -172,6 +214,8 @@ object RtpSender {
         audioType,
         eventType,
         timestampStep,
+        _,
+        _,
         _,
         _,
         _,

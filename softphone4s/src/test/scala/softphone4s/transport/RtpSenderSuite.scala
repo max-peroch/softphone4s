@@ -230,4 +230,82 @@ class RtpSenderSuite extends CatsEffectSuite {
       }
     }
   }
+
+  test("nothing has been sent, so there is nothing to say as a sender") {
+    fixture().use((rtp, _, _) => rtp.senderInfo.map(assertEquals(_, None)))
+  }
+
+  test("frames with nowhere to go are not counted as sent") {
+    fixture(sending = false).use { (rtp, _, _) =>
+      for {
+        _ <- Stream.emits(List(frame, frame)).through(rtp.audio).compile.drain
+        info <- rtp.senderInfo
+      } yield assertEquals(info, None)
+    }
+  }
+
+  test(
+    "the packets and the bytes of payload sent are counted, digits included"
+  ) {
+    fixture().use { (rtp, receiver, _) =>
+      for {
+        _ <- Stream
+          .emits(List(frame, frame, frame))
+          .through(rtp.audio)
+          .compile
+          .drain
+        _    <- rtp.telephoneEvent(DtmfDigit.D1, 100.millis)
+        info <- rtp.senderInfo
+        got  <- received(receiver, 200.millis)
+      } yield {
+        // Three of 160 bytes, and seven events of four.
+        val sent = info.getOrElse(fail("no sender info"))
+        assertEquals((sent.packets, sent.octets), (10L, 3L * 160 + 7 * 4))
+        assertEquals(got.size, 10)
+      }
+    }
+  }
+
+  test("the stream's clock moves on with the wall clock between frames") {
+    fixture().use { (rtp, _, _) =>
+      for {
+        _ <- Stream.emits(List(frame, frame)).through(rtp.audio).compile.drain
+        first <- rtp.senderInfo
+        _     <- IO.sleep(250.millis)
+        later <- rtp.senderInfo
+      } yield {
+        val a = first.getOrElse(fail("no sender info"))
+        val b = later.getOrElse(fail("no sender info"))
+        // 250 ms at 8 kHz is 2 000 ticks.
+        val moved = b.rtpTimestamp - a.rtpTimestamp
+        assert(moved >= 2000 && moved < 2400, moved)
+        assert(b.ntp > a.ntp)
+        // The last frame was the second, at 160.
+        assert(a.rtpTimestamp >= 160 && a.rtpTimestamp < 400, a.rtpTimestamp)
+      }
+    }
+  }
+
+  test("the sender report names the time of the wall clock") {
+    fixture().use { (rtp, _, _) =>
+      for {
+        _    <- Stream.emits(List(frame)).through(rtp.audio).compile.drain
+        wall <- IO.realTime
+        info <- rtp.senderInfo
+      } yield {
+        val seconds = (info.getOrElse(fail("no sender info")).ntp >>> 32) -
+          2_208_988_800L
+        assert(math.abs(seconds - wall.toSeconds) <= 2, seconds)
+      }
+    }
+  }
+
+  test("a source is the one its packets carry") {
+    fixture().use { (rtp, receiver, _) =>
+      for {
+        _   <- Stream.emits(List(frame)).through(rtp.audio).compile.drain
+        got <- received(receiver, 200.millis)
+      } yield assertEquals(got.map(_.header.ssrc), List(rtp.source))
+    }
+  }
 }
