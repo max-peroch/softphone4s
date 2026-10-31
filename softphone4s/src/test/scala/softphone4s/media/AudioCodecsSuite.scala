@@ -1,0 +1,89 @@
+package softphone4s.media
+
+import cats.data.NonEmptyList
+import cats.effect.IO
+import cats.syntax.all.*
+import fs2.{Chunk, Stream}
+import munit.CatsEffectSuite
+import softphone4s.config.CodecChoice
+import softphone4s.sdp.Codec
+
+class AudioCodecsSuite extends CatsEffectSuite {
+
+  private def pcm(samples: Int*): Chunk[Byte] =
+    Chunk.array(
+      samples
+        .flatMap(s => List((s & 0xff).toByte, ((s >> 8) & 0xff).toByte))
+        .toArray
+    )
+
+  test("the codecs chosen are used in the order given, once each") {
+    val codecs = AudioCodecs.of(
+      NonEmptyList.of(CodecChoice.Pcma, CodecChoice.Pcmu, CodecChoice.Pcma)
+    )
+    assertEquals(
+      codecs.capabilities.codecs.toList,
+      List(Codec.Pcma, Codec.Pcmu)
+    )
+    assertEquals(codecs.telephoneEventType, Some(101))
+  }
+
+  test("a negotiated codec is found, and one we do not have is not") {
+    assertEquals(
+      AudioCodecs.Default.implementing(Codec.Pcma).map(_.description),
+      Some(Codec.Pcma)
+    )
+    assertEquals(
+      AudioCodecs.Default.implementing(Codec("G729", 8000, 1, Some(18), None)),
+      None
+    )
+  }
+
+  test("the codecs agree on the sample rate of the audio device") {
+    assertEquals(AudioCodecs.Default.pcmRate, Some(8000))
+  }
+
+  test("a packet is 20 ms: 320 bytes of PCM and 160 of payload for G.711") {
+    List(G711.Pcmu, G711.Pcma).foreach { codec =>
+      assertEquals(codec.pcmPacketBytes, 320)
+      assertEquals(codec.payloadPacketBytes, 160)
+      assertEquals(codec.timestampStep, 160)
+    }
+  }
+
+  test(
+    "the encoder makes a packet from a packet of PCM, and the decoder undoes it"
+  ) {
+    List(G711.Pcmu, G711.Pcma).traverse_ { codec =>
+      val samples = (0 until 160).map(i => ((i - 80) * 300))
+      Stream
+        .chunk(pcm(samples*))
+        .through(codec.encoder[IO])
+        .through(codec.decoder[IO])
+        .compile
+        .to(Chunk)
+        .map { out =>
+          assertEquals(out.size, 320)
+          val back = out.toArray
+            .grouped(2)
+            .map(b => ((b(1) << 8) | (b(0) & 0xff)).toShort.toInt)
+            .toList
+          back.zip(samples).foreach { (b, s) =>
+            assert(
+              math.abs(b - s) <= math.max(64, math.abs(s) / 16 + 1),
+              s"${codec.description.encoding}: $s -> $b"
+            )
+          }
+        }
+    }
+  }
+
+  test("less than a packet of PCM makes nothing yet") {
+    Stream
+      .chunk(pcm(1, 2, 3))
+      .through(G711.Pcma.encoder[IO])
+      .compile
+      .to(Chunk)
+      .map(out => assertEquals(out.size, 0))
+  }
+}

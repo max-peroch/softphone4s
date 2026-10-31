@@ -80,4 +80,64 @@ object G711Codec {
     }
     out
   }
+
+  // ---- A-law (ITU-T G.711) ------------------------------------------------
+
+  // Top of each segment of the 13-bit magnitude.
+  private val alawSegmentEnd: Array[Int] =
+    Array(0x1f, 0x3f, 0x7f, 0xff, 0x1ff, 0x3ff, 0x7ff, 0xfff)
+
+  def encodeAlaw(sample: Short): Byte = {
+    var magnitude = sample.toInt >> 3 // 16 bits to the 13 A-law has
+    val mask      =
+      if magnitude >= 0 then 0xd5
+      else {
+        magnitude = -magnitude - 1
+        0x55
+      }
+    var segment = 0
+    while segment < 8 && magnitude > alawSegmentEnd(segment) do segment += 1
+    if segment >= 8 then (0x7f ^ mask).toByte
+    else {
+      val shift    = if segment < 2 then 1 else segment
+      val mantissa = (magnitude >> shift) & 0x0f
+      (((segment << 4) | mantissa) ^ mask).toByte
+    }
+  }
+
+  def decodeAlaw(alaw: Byte): Short = {
+    val a       = (alaw & 0xff) ^ 0x55
+    val segment = (a & 0x70) >> 4
+    var value   = (a & 0x0f) << 4
+    segment match {
+      case 0 => value += 8
+      case 1 => value += 0x108
+      case _ => value = (value + 0x108) << (segment - 1)
+    }
+    (if (a & 0x80) != 0 then value else -value).toShort
+  }
+
+  def pcmToAlaw(pcm: Array[Byte]): Array[Byte] = {
+    val out   = Array.ofDim[Byte](pcm.length / 2)
+    var index = 0
+    while index < out.length do {
+      val sample =
+        (((pcm(index * 2 + 1) & 0xff) << 8) | (pcm(index * 2) & 0xff)).toShort
+      out(index) = encodeAlaw(sample)
+      index += 1
+    }
+    out
+  }
+
+  def alawToPcm(alaw: Array[Byte]): Array[Byte] = {
+    val out   = Array.ofDim[Byte](alaw.length * 2)
+    var index = 0
+    while index < alaw.length do {
+      val sample = decodeAlaw(alaw(index))
+      out(index * 2) = (sample & 0xff).toByte
+      out(index * 2 + 1) = ((sample >> 8) & 0xff).toByte
+      index += 1
+    }
+    out
+  }
 }

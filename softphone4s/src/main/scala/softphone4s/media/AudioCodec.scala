@@ -1,0 +1,49 @@
+package softphone4s.media
+
+import fs2.{Pipe, Stream}
+import softphone4s.sdp.Codec
+
+/** An audio codec at work: PCM in, packets of payload out, and back. PCM is
+  * 16-bit signed little-endian mono at `pcmRate`; a packet carries 20 ms.
+  *
+  * A codec with memory (the ADPCM ones) keeps it in the pipes it makes, which
+  * is why they are made per stream rather than shared.
+  */
+trait AudioCodec {
+
+  /** How SDP names it. */
+  def description: Codec
+
+  /** The sample rate of the PCM it takes and gives, which is the sample rate of
+    * the audio device and may differ from the RTP clock rate (G.722).
+    */
+  def pcmRate: Int
+
+  /** Bytes of PCM in one 20 ms packet. */
+  def pcmPacketBytes: Int = pcmRate / 50 * 2
+
+  /** Bytes of payload in one 20 ms packet. */
+  def payloadPacketBytes: Int
+
+  /** How much the RTP timestamp moves from one packet to the next: 20 ms at the
+    * RTP clock rate.
+    */
+  def timestampStep: Int = description.clockRate / 50
+
+  /** PCM to payload, one packet's worth at a time. */
+  def encoder[F[_]]: Pipe[F, Byte, Byte]
+
+  /** Payload to PCM, a packet's payload at a time. */
+  def decoder[F[_]]: Pipe[F, Byte, Byte]
+}
+
+object AudioCodec {
+
+  /** Pipes for a codec without memory: `f` turns one chunk into another. */
+  private[media] def stateless[F[_]](
+      packetBytes: Int,
+      f: Array[Byte] => Array[Byte]
+  ): Pipe[F, Byte, Byte] =
+    _.chunkN(packetBytes, allowFewer = false)
+      .flatMap(c => Stream.chunk(fs2.Chunk.array(f(c.toArray))))
+}
