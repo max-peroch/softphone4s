@@ -7,7 +7,7 @@ import com.comcast.ip4s.{IpAddress, SocketAddress}
 import fs2.io.net.{Datagram, DatagramSocket}
 import fs2.{Chunk, Pipe}
 import softphone4s.codec.RtpCodec
-import softphone4s.model.{DtmfDigit, SoftphoneEvent}
+import softphone4s.model.{DtmfDigit, PayloadType, SoftphoneEvent}
 
 import scala.concurrent.duration.*
 
@@ -22,8 +22,8 @@ import scala.concurrent.duration.*
 final class RtpSender[F[_]: Async] private (
     socket: DatagramSocket[F],
     target: F[Option[SocketAddress[IpAddress]]],
-    audioType: Int,
-    eventType: Option[Int],
+    audioType: PayloadType,
+    eventType: Option[PayloadType],
     timestampStep: Int,
     ssrc: Long,
     sequence: Ref[F, Int],
@@ -77,7 +77,7 @@ final class RtpSender[F[_]: Async] private (
     )
 
   private def sendDigit(
-      payloadType: Int,
+      payloadType: PayloadType,
       start: Long,
       digit: DtmfDigit,
       duration: FiniteDuration
@@ -113,7 +113,7 @@ final class RtpSender[F[_]: Async] private (
 
   private def transmit(
       to: SocketAddress[IpAddress],
-      payloadType: Int,
+      payloadType: PayloadType,
       timestamp: Long,
       marker: Boolean,
       payload: Chunk[Byte]
@@ -154,8 +154,8 @@ object RtpSender {
   def make[F[_]: Async](
       socket: DatagramSocket[F],
       target: F[Option[SocketAddress[IpAddress]]],
-      audioType: Int,
-      eventType: Option[Int],
+      audioType: PayloadType,
+      eventType: Option[PayloadType],
       timestampStep: Int
   ): F[RtpSender[F]] =
     (

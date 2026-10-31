@@ -1,8 +1,10 @@
 package softphone4s.sdp
 
+import softphone4s.model.PayloadType
+
 /** What a payload type stands for (RFC 4566 §6, `a=rtpmap`). */
 final case class RtpMap(
-    payloadType: Int,
+    payloadType: PayloadType,
     encoding: String,
     clockRate: Int,
     channels: Option[Int]
@@ -29,7 +31,10 @@ object RtpMap {
   def parse(value: String): Option[RtpMap] =
     value.trim.split("\\s+", 2).toList match {
       case pt :: description :: Nil =>
-        (pt.toIntOption, description.split('/').toList) match {
+        (
+          pt.toIntOption.flatMap(PayloadType.fromInt),
+          description.split('/').toList
+        ) match {
           case (Some(payloadType), encoding :: rate :: rest) =>
             (rate.toIntOption, rest) match {
               case (Some(clockRate), Nil) =>
@@ -48,12 +53,12 @@ object RtpMap {
   /** The payload types of RFC 3551 that have a fixed meaning, for the ones that
     * need no `rtpmap`.
     */
-  val Static: Map[Int, RtpMap] = Map(
-    0  -> RtpMap(0, "PCMU", 8000, None),
-    3  -> RtpMap(3, "GSM", 8000, None),
-    4  -> RtpMap(4, "G723", 8000, None),
-    8  -> RtpMap(8, "PCMA", 8000, None),
-    9  -> RtpMap(9, "G722", 8000, None),
-    18 -> RtpMap(18, "G729", 8000, None)
-  )
+  val Static: Map[PayloadType, RtpMap] = List(
+    RtpMap(PayloadType.Pcmu, "PCMU", 8000, None),
+    RtpMap(PayloadType.Gsm, "GSM", 8000, None),
+    RtpMap(PayloadType.G723, "G723", 8000, None),
+    RtpMap(PayloadType.Pcma, "PCMA", 8000, None),
+    RtpMap(PayloadType.G722, "G722", 8000, None),
+    RtpMap(PayloadType.G729, "G729", 8000, None)
+  ).map(m => m.payloadType -> m).toMap
 }

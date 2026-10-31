@@ -1,5 +1,6 @@
 package softphone4s.codec
 
+import softphone4s.SipLiterals.pt
 import cats.data.NonEmptyList
 import com.comcast.ip4s.*
 import munit.FunSuite
@@ -36,7 +37,7 @@ class SdpCodecSuite extends FunSuite {
       case Some(offer) =>
         assertEquals(offer.ip, ip"192.0.2.5")
         assertEquals(offer.port, port"40000")
-        assertEquals(offer.payloadTypes, List(0, 8, 101))
+        assertEquals(offer.payloadTypes, List(pt(0), pt(8), pt(101)))
         assert(offer.offersTelephoneEvent)
       case None => fail("expected an offer")
     }
@@ -151,8 +152,8 @@ class SdpCodecSuite extends FunSuite {
       )
       .getOrElse(fail("no plan"))
     assertEquals(plan.codec, Codec.Pcma)
-    assertEquals(plan.payloadType, 8)
-    assertEquals(plan.telephoneEventType, Some(101))
+    assertEquals(plan.payloadType, pt(8))
+    assertEquals(plan.telephoneEventType, Some(pt(101)))
     assertEquals(plan.remote.port, port"40000")
   }
 

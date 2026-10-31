@@ -1,5 +1,6 @@
 package softphone4s.media
 
+import softphone4s.SipLiterals.pt
 import cats.data.NonEmptyList
 import cats.effect.{IO, Sync}
 import cats.syntax.all.*
@@ -33,7 +34,7 @@ class AudioCodecsSuite extends CatsEffectSuite {
       codecs.capabilities.codecs.toList,
       List(Codec.Pcma, Codec.Pcmu)
     )
-    assertEquals(codecs.telephoneEventType, Some(101))
+    assertEquals(codecs.telephoneEventType, Some(pt(101)))
   }
 
   test("a negotiated codec is found, and one we do not have is not") {
@@ -42,7 +43,9 @@ class AudioCodecsSuite extends CatsEffectSuite {
       Some(Codec.Pcma)
     )
     assertEquals(
-      AudioCodecs.Default.implementing(Codec("G729", 8000, 1, Some(18), None)),
+      AudioCodecs.Default.implementing(
+        Codec("G729", 8000, 1, Some(pt(18)), None)
+      ),
       None
     )
   }
@@ -163,7 +166,7 @@ class AudioCodecsSuite extends CatsEffectSuite {
         CodecChoice.Named("x-half"),
         CodecChoice.Pcmu
       ).capabilities
-    assertEquals(caps.offered.map(_._1), List(96, 0))
+    assertEquals(caps.offered.map(_._1), List(pt(96), pt(0)))
   }
 
   test("a name nothing has is an error") {

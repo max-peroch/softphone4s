@@ -1,13 +1,14 @@
 package softphone4s.sdp
 
 import cats.data.NonEmptyList
+import softphone4s.model.PayloadType
 
 /** What we can do with an audio stream: the codecs, most wanted first, and the
   * payload type we receive telephone events on (RFC 4733), if we do.
   */
 final case class Capabilities(
     codecs: NonEmptyList[Codec],
-    telephoneEventType: Option[Int]
+    telephoneEventType: Option[PayloadType]
 ) {
 
   /** The same, with `codec` first if we have it: the one a call is already in
@@ -28,12 +29,12 @@ final case class Capabilities(
     * it, the others are given 96 and up, skipping the one telephone events
     * have.
     */
-  def offered: List[(Int, Codec)] = {
+  def offered: List[(PayloadType, Codec)] = {
     val taken = (codecs.toList.flatMap(_.staticPayloadType) ++
       telephoneEventType.toList).toSet
-    val free = (96 to 127).filterNot(taken).toList
+    val free = PayloadType.Dynamic.filterNot(taken)
     codecs.toList
-      .foldLeft((free, List.empty[(Int, Codec)])) {
+      .foldLeft((free, List.empty[(PayloadType, Codec)])) {
         case ((available, offered), codec) =>
           codec.staticPayloadType match {
             case Some(payloadType) =>
@@ -56,5 +57,8 @@ object Capabilities {
 
   /** PCMU and PCMA, with telephone events on 101. */
   val Default: Capabilities =
-    Capabilities(NonEmptyList.of(Codec.Pcmu, Codec.Pcma), Some(101))
+    Capabilities(
+      NonEmptyList.of(Codec.Pcmu, Codec.Pcma),
+      Some(PayloadType.TelephoneEvent)
+    )
 }

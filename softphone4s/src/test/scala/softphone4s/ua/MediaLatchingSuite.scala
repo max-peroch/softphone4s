@@ -1,5 +1,6 @@
 package softphone4s.ua
 
+import softphone4s.SipLiterals.pt
 import cats.effect.std.Supervisor
 import cats.effect.{IO, Resource}
 import cats.syntax.all.*
@@ -33,7 +34,7 @@ class MediaLatchingSuite extends CatsEffectSuite {
 
   private def rtp(sequence: Int): Chunk[Byte] =
     RtpCodec.encode(
-      payloadType = 0,
+      payloadType = pt(0),
       sequenceNumber = sequence,
       timestamp = sequence * 160L,
       ssrc = 77L,
@@ -67,7 +68,7 @@ class MediaLatchingSuite extends CatsEffectSuite {
             MediaPlan(
               SocketAddress(loopback, signalled.port),
               Codec.Pcmu,
-              0,
+              pt(0),
               None,
               MediaDirection.SendRecv,
               MediaDirection.SendRecv

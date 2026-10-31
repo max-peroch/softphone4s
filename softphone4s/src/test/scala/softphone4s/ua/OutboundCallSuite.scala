@@ -1206,7 +1206,7 @@ class OutboundCallSuite extends CatsEffectSuite {
       } yield {
         assertEquals(method, DtmfMethod.Rfc4733)
         val events = packets.map(d => RtpCodec.decode(d.bytes).get)
-        assertEquals(events.map(_._1.payloadType).distinct, List(101))
+        assertEquals(events.map(_._1.payloadType).distinct, List(pt(101)))
         assertEquals(
           events
             .flatMap(e => SoftphoneEvent.decode(e._2))

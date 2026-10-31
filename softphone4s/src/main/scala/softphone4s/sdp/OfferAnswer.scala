@@ -2,7 +2,7 @@ package softphone4s.sdp
 
 import cats.syntax.all.*
 import com.comcast.ip4s.{SocketAddress, port}
-import softphone4s.model.MediaDirection
+import softphone4s.model.{MediaDirection, PayloadType}
 
 /** The offer/answer model of RFC 3264, as pure functions: the offer we make,
   * the answer we give to one, and what we make of an answer to ours. One audio
@@ -135,7 +135,10 @@ object OfferAnswer {
     section.kind == MediaKind.Audio && !section.isDeclined &&
       section.protocol == MediaProtocol.RtpAvp
 
-  private def describe(payloadType: Int, codec: Codec): List[Attribute] =
+  private def describe(
+      payloadType: PayloadType,
+      codec: Codec
+  ): List[Attribute] =
     RtpMap(
       payloadType,
       codec.encoding,
@@ -144,7 +147,7 @@ object OfferAnswer {
     ).attribute ::
       codec.fmtp.toList.map(f => Attribute.valued("fmtp", s"$payloadType $f"))
 
-  private def telephoneEvents(payloadType: Int): List[Attribute] =
+  private def telephoneEvents(payloadType: PayloadType): List[Attribute] =
     List(
       RtpMap(payloadType, TelephoneEvent, 8000, None).attribute,
       Attribute.valued("fmtp", s"$payloadType $Events")

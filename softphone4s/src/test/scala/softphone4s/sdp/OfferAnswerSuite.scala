@@ -1,9 +1,10 @@
 package softphone4s.sdp
 
+import softphone4s.SipLiterals.pt
 import cats.data.NonEmptyList
 import com.comcast.ip4s.*
 import munit.FunSuite
-import softphone4s.model.MediaDirection
+import softphone4s.model.{MediaDirection, PayloadType}
 
 class OfferAnswerSuite extends FunSuite {
 
@@ -59,11 +60,11 @@ class OfferAnswerSuite extends FunSuite {
   test(
     "codecs without a static number are given dynamic ones that skip telephone events"
   ) {
-    val caps = Capabilities(NonEmptyList.of(opus, Codec.Pcmu), Some(96))
-    assertEquals(caps.offered, List(97 -> opus, 0 -> Codec.Pcmu))
+    val caps = Capabilities(NonEmptyList.of(opus, Codec.Pcmu), Some(pt(96)))
+    assertEquals(caps.offered, List(pt(97) -> opus, pt(0) -> Codec.Pcmu))
     val sdp = OfferAnswer.offer(local, caps, MediaDirection.SendRecv)
     assertEquals(sdp.media.head.formats, List("97", "0", "96"))
-    assertEquals(sdp.media.head.fmtp(97), Some("useinbandfec=1"))
+    assertEquals(sdp.media.head.fmtp(pt(97)), Some("useinbandfec=1"))
     assert(sdp.render.contains("a=rtpmap:97 opus/48000/2"))
   }
 
@@ -73,7 +74,7 @@ class OfferAnswerSuite extends FunSuite {
     val caps   = Capabilities(NonEmptyList.of(Codec.Pcma, Codec.Pcmu), None)
     val result = answered(offerOf("m=audio 4000 RTP/AVP 0 8"), caps)
     assertEquals(result.plan.codec, Codec.Pcma)
-    assertEquals(result.plan.payloadType, 8)
+    assertEquals(result.plan.payloadType, pt(8))
     assertEquals(result.description.media.head.formats, List("8"))
   }
 
@@ -85,7 +86,7 @@ class OfferAnswerSuite extends FunSuite {
       offerOf("m=audio 4000 RTP/AVP 111 0", "a=rtpmap:111 OPUS/48000/2"),
       caps
     )
-    assertEquals(result.plan.payloadType, 111)
+    assertEquals(result.plan.payloadType, pt(111))
     assert(result.description.render.contains("a=rtpmap:111 opus/48000/2"))
   }
 
@@ -110,7 +111,7 @@ class OfferAnswerSuite extends FunSuite {
     val on101 = answered(
       offerOf("m=audio 4000 RTP/AVP 0 101", "a=rtpmap:101 telephone-event/8000")
     )
-    assertEquals(on101.plan.telephoneEventType, Some(101))
+    assertEquals(on101.plan.telephoneEventType, Some(pt(101)))
     assertEquals(on101.description.media.head.formats, List("0", "101"))
     val on96 = answered(
       offerOf("m=audio 4000 RTP/AVP 0 96", "a=rtpmap:96 telephone-event/8000")
@@ -234,7 +235,8 @@ class OfferAnswerSuite extends FunSuite {
   }
 
   test("an answer to our offer picks the first of its codecs that we offered") {
-    val caps = Capabilities(NonEmptyList.of(Codec.Pcmu, Codec.Pcma), Some(101))
+    val caps =
+      Capabilities(NonEmptyList.of(Codec.Pcmu, Codec.Pcma), Some(pt(101)))
     val answer = offerOf(
       "m=audio 4000 RTP/AVP 8 0 101",
       "a=rtpmap:101 telephone-event/8000",
@@ -244,8 +246,8 @@ class OfferAnswerSuite extends FunSuite {
       .accept(answer, caps, MediaDirection.SendRecv)
       .fold(r => fail(r.message), identity)
     assertEquals(plan.codec, Codec.Pcma)
-    assertEquals(plan.payloadType, 8)
-    assertEquals(plan.telephoneEventType, Some(101))
+    assertEquals(plan.payloadType, pt(8))
+    assertEquals(plan.telephoneEventType, Some(pt(101)))
     assertEquals(plan.remote, SocketAddress(ip"198.51.100.1", port"4000"))
     assertEquals(plan.direction, MediaDirection.SendRecv)
   }
@@ -306,7 +308,7 @@ class OfferAnswerSuite extends FunSuite {
     val caps   = Capabilities(NonEmptyList.one(Codec.G722), None)
     val result = answered(offerOf("m=audio 4000 RTP/AVP 9"), caps)
     assertEquals(result.plan.codec, Codec.G722)
-    assertEquals(result.plan.payloadType, 9)
+    assertEquals(result.plan.payloadType, pt(9))
     assert(
       result.description.render.contains("a=rtpmap:9 G722/8000"),
       result.description.render
@@ -321,9 +323,13 @@ class OfferAnswerSuite extends FunSuite {
     val many = NonEmptyList.fromListUnsafe(
       (1 to 40).toList.map(n => Codec(s"x-$n", 8000, 1, None, None))
     )
-    val offered = Capabilities(many, Some(101)).offered
+    val offered = Capabilities(many, Some(pt(101))).offered
     assertEquals(offered.size, 31) // 96 to 127, but for 101
-    assert(offered.forall((pt, _) => pt >= 96 && pt <= 127 && pt != 101))
+    assert(
+      offered.forall((p, _) =>
+        p.value >= 96 && p.value <= 127 && p != PayloadType.TelephoneEvent
+      )
+    )
     assertEquals(offered.map(_._1).distinct.size, offered.size)
   }
 }

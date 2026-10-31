@@ -1,5 +1,6 @@
 package softphone4s.sdp
 
+import softphone4s.SipLiterals.pt
 import com.comcast.ip4s.*
 import munit.FunSuite
 import softphone4s.model.MediaDirection
@@ -91,14 +92,14 @@ class SessionDescriptionSuite extends FunSuite {
     assertEquals(
       section.meanings,
       List(
-        RtpMap(0, "PCMU", 8000, None),
-        RtpMap(8, "PCMA", 8000, None),
-        RtpMap(96, "opus", 48000, Some(2)),
-        RtpMap(101, "telephone-event", 8000, None)
+        RtpMap(pt(0), "PCMU", 8000, None),
+        RtpMap(pt(8), "PCMA", 8000, None),
+        RtpMap(pt(96), "opus", 48000, Some(2)),
+        RtpMap(pt(101), "telephone-event", 8000, None)
       )
     )
-    assertEquals(section.fmtp(96), Some("minptime=10;useinbandfec=1"))
-    assertEquals(section.fmtp(0), None)
+    assertEquals(section.fmtp(pt(96)), Some("minptime=10;useinbandfec=1"))
+    assertEquals(section.fmtp(pt(0)), None)
   }
 
   test("IPv6 addresses are read and printed with their address type") {

@@ -1,7 +1,7 @@
 package softphone4s.sdp
 
 import com.comcast.ip4s.{IpAddress, Port}
-import softphone4s.model.MediaDirection
+import softphone4s.model.{MediaDirection, PayloadType}
 
 /** One `m=` section. A `port` of 0 is a stream that is declined (RFC 3264 §6).
   */
@@ -17,7 +17,8 @@ final case class MediaDescription(
   def isDeclined: Boolean = port.value == 0
 
   /** The formats that are RTP payload types. */
-  def payloadTypes: List[Int] = formats.flatMap(_.toIntOption)
+  def payloadTypes: List[PayloadType] =
+    formats.flatMap(_.toIntOption).flatMap(PayloadType.fromInt)
 
   def rtpMaps: List[RtpMap] =
     attributes.collect { case Attribute("rtpmap", Some(value)) =>
@@ -25,7 +26,7 @@ final case class MediaDescription(
     }.flatten
 
   /** The format parameters of a payload type, from `a=fmtp`. */
-  def fmtp(payloadType: Int): Option[String] =
+  def fmtp(payloadType: PayloadType): Option[String] =
     attributes.collectFirst {
       case Attribute("fmtp", Some(value))
           if value.trim.startsWith(s"$payloadType ") =>
@@ -41,7 +42,7 @@ final case class MediaDescription(
   }
 
   /** Whether telephone events (RFC 4733) are offered on `payloadType`. */
-  def offersTelephoneEvents(payloadType: Int): Boolean =
+  def offersTelephoneEvents(payloadType: PayloadType): Boolean =
     payloadTypes.contains(payloadType) &&
       rtpMaps.exists(m =>
         m.payloadType == payloadType &&

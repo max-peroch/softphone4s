@@ -1,5 +1,6 @@
 package softphone4s.ua
 
+import softphone4s.SipLiterals.pt
 import cats.effect.std.Supervisor
 import cats.effect.{IO, Ref, Resource}
 import cats.syntax.all.*
@@ -36,7 +37,7 @@ class MediaCodecSuite extends CatsEffectSuite {
     MediaPlan(
       remote,
       codec,
-      payloadType,
+      pt(payloadType),
       None,
       MediaDirection.SendRecv,
       MediaDirection.SendRecv
@@ -98,7 +99,7 @@ class MediaCodecSuite extends CatsEffectSuite {
         packets <- peer.reads.take(3).compile.toList.timeout(5.seconds)
       } yield {
         val decoded = packets.map(d => RtpCodec.decode(d.bytes).get)
-        assertEquals(decoded.map(_._1.payloadType), List(8, 8, 8))
+        assertEquals(decoded.map(_._1.payloadType), List(pt(8), pt(8), pt(8)))
         assertEquals(decoded.map(_._2.size), List(160, 160, 160))
         assertEquals(decoded.map(_._1.timestamp), List(0L, 160L, 320L))
         // Silence in A-law, not in μ-law.
@@ -115,8 +116,15 @@ class MediaCodecSuite extends CatsEffectSuite {
   ) {
     withPeer(Codec.Pcma, 8) { (media, ours, peer) =>
       val sample = payload(0)
-      val packet = (pt: Int, seq: Int) =>
-        RtpCodec.encode(pt, seq, seq * 160L, 5L, sample, marker = false)
+      val packet = (payload: Int, seq: Int) =>
+        RtpCodec.encode(
+          pt(payload),
+          seq,
+          seq * 160L,
+          5L,
+          sample,
+          marker = false
+        )
       for {
         _ <- peer.write(
           Datagram(ours, packet(0, 1))
@@ -148,7 +156,7 @@ class MediaCodecSuite extends CatsEffectSuite {
   }
 
   test("a plan for a codec we do not have fails to start, with a typed error") {
-    val g729 = Codec("G729", 8000, 1, Some(18), None)
+    val g729 = Codec("G729", 8000, 1, Some(pt(18)), None)
     session().use { (media, _, supervisor) =>
       media
         .start(
@@ -193,7 +201,7 @@ class MediaCodecSuite extends CatsEffectSuite {
         packets <- peer.reads.take(3).compile.toList.timeout(5.seconds)
       } yield {
         val decoded = packets.map(d => RtpCodec.decode(d.bytes).get)
-        assertEquals(decoded.map(_._1.payloadType), List(9, 9, 9))
+        assertEquals(decoded.map(_._1.payloadType), List(pt(9), pt(9), pt(9)))
         assertEquals(decoded.map(_._2.size), List(160, 160, 160))
         assertEquals(decoded.map(_._1.timestamp), List(0L, 160L, 320L))
         // The reference's bytes for the same PCM.
@@ -212,7 +220,14 @@ class MediaCodecSuite extends CatsEffectSuite {
         _ <- peer.write(
           Datagram(
             ours,
-            RtpCodec.encode(9, 1, 0L, 5L, Chunk.array(codes), marker = false)
+            RtpCodec.encode(
+              pt(9),
+              1,
+              0L,
+              5L,
+              Chunk.array(codes),
+              marker = false
+            )
           )
         )
         got <- media.source.take(640).compile.to(Chunk).timeout(5.seconds)
@@ -243,7 +258,7 @@ class MediaCodecSuite extends CatsEffectSuite {
           Datagram(
             ours,
             RtpCodec.encode(
-              96,
+              pt(96),
               1,
               0L,
               5L,
@@ -255,7 +270,7 @@ class MediaCodecSuite extends CatsEffectSuite {
         back <- media.source.take(320).compile.to(Chunk).timeout(5.seconds)
       } yield {
         val decoded = packets.map(d => RtpCodec.decode(d.bytes).get)
-        assertEquals(decoded.map(_._1.payloadType), List(96, 96))
+        assertEquals(decoded.map(_._1.payloadType), List(pt(96), pt(96)))
         assertEquals(decoded.map(_._2.size), List(160, 160))
         assertEquals(
           decoded.head._2.toArray.toList,
@@ -343,8 +358,8 @@ class MediaCodecSuite extends CatsEffectSuite {
           val plan = MediaPlan(
             peerAddress,
             Codec.Pcmu,
-            0,
-            Some(101),
+            pt(0),
+            Some(pt(101)),
             MediaDirection.SendRecv,
             MediaDirection.SendRecv
           )
@@ -364,7 +379,7 @@ class MediaCodecSuite extends CatsEffectSuite {
       duration: Int = 800
   ): Chunk[Byte] =
     RtpCodec.encode(
-      101,
+      pt(101),
       sequence,
       timestamp,
       9L,

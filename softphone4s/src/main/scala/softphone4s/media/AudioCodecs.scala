@@ -2,7 +2,7 @@ package softphone4s.media
 
 import cats.data.NonEmptyList
 import softphone4s.config.CodecChoice
-import softphone4s.model.SoftphoneError
+import softphone4s.model.{PayloadType, SoftphoneError}
 import softphone4s.sdp.{Capabilities, Codec}
 
 /** The codecs in use, most wanted first: what we offer, and what a negotiated
@@ -10,7 +10,7 @@ import softphone4s.sdp.{Capabilities, Codec}
   */
 final case class AudioCodecs(
     codecs: NonEmptyList[AudioCodec],
-    telephoneEventType: Option[Int]
+    telephoneEventType: Option[PayloadType]
 ) {
 
   /** What offers and answers are made from. */
@@ -53,10 +53,13 @@ object AudioCodecs {
           .find(_.token == choice.token)
           .toRight(SoftphoneError.UnknownCodec(choice.token))
       )
-    } yield AudioCodecs(found, Some(101))
+    } yield AudioCodecs(found, Some(PayloadType.TelephoneEvent))
   }
 
   /** μ-law and A-law, with telephone events on 101. */
   val Default: AudioCodecs =
-    AudioCodecs(NonEmptyList.of(G711.Pcmu, G711.Pcma), Some(101))
+    AudioCodecs(
+      NonEmptyList.of(G711.Pcmu, G711.Pcma),
+      Some(PayloadType.TelephoneEvent)
+    )
 }

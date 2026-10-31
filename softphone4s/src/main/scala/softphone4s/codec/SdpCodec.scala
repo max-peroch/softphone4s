@@ -1,7 +1,7 @@
 package softphone4s.codec
 
 import com.comcast.ip4s.{IpAddress, Port, ip, port}
-import softphone4s.model.MediaDirection
+import softphone4s.model.{MediaDirection, PayloadType}
 import softphone4s.sdp.{
   Capabilities,
   LocalMedia,
@@ -19,8 +19,6 @@ import softphone4s.sdp.{
   */
 object SdpCodec {
 
-  private val TelephoneEventPayloadType = 101
-
   /** A local address that stands for ours when only the outcome of an answer
     * matters.
     */
@@ -30,7 +28,7 @@ object SdpCodec {
   final case class AudioOffer(
       ip: IpAddress,
       port: Port,
-      payloadTypes: List[Int],
+      payloadTypes: List[PayloadType],
       offersTelephoneEvent: Boolean,
       direction: MediaDirection,
       description: SessionDescription
@@ -62,7 +60,7 @@ object SdpCodec {
       ip,
       section.port,
       section.payloadTypes,
-      section.offersTelephoneEvents(TelephoneEventPayloadType),
+      section.offersTelephoneEvents(PayloadType.TelephoneEvent),
       description.directionOf(section),
       description
     )

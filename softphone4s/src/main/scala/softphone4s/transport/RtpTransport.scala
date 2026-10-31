@@ -6,7 +6,7 @@ import com.comcast.ip4s.*
 import fs2.io.net.DatagramSocket
 import fs2.{Chunk, Stream}
 import softphone4s.codec.RtpCodec
-import softphone4s.model.{DtmfDigit, SoftphoneEvent}
+import softphone4s.model.{DtmfDigit, PayloadType, SoftphoneEvent}
 
 object RtpTransport {
 
@@ -23,8 +23,8 @@ object RtpTransport {
       lastDtmfKey: Ref[F, (Long, Int)],
       onDtmf: DtmfDigit => F[Unit],
       heardFrom: (SocketAddress[IpAddress], Long) => F[Unit],
-      audioType: Int,
-      eventType: Option[Int]
+      audioType: PayloadType,
+      eventType: Option[PayloadType]
   ): Stream[F, Chunk[Byte]] =
     socket.reads.flatMap { datagram =>
       RtpCodec.decode(datagram.bytes) match {

@@ -1,6 +1,7 @@
 package softphone4s.codec
 
 import fs2.Chunk
+import softphone4s.model.PayloadType
 
 /** RFC 3550 RTP packet encode/decode — pure. */
 object RtpCodec {
@@ -9,7 +10,7 @@ object RtpCodec {
 
   final case class RtpHeader(
       version: Int,
-      payloadType: Int,
+      payloadType: PayloadType,
       marker: Boolean,
       sequenceNumber: Int,
       timestamp: Long,
@@ -17,7 +18,7 @@ object RtpCodec {
   )
 
   def encode(
-      payloadType: Int,
+      payloadType: PayloadType,
       sequenceNumber: Int,
       timestamp: Long,
       ssrc: Long,
@@ -26,7 +27,8 @@ object RtpCodec {
   ): Chunk[Byte] = {
     val packet = Array.ofDim[Byte](HeaderLength + payload.size)
     packet(0) = 0x80.toByte
-    packet(1) = ((if marker then 0x80 else 0x00) | (payloadType & 0x7f)).toByte
+    packet(1) =
+      ((if marker then 0x80 else 0x00) | (payloadType.value & 0x7f)).toByte
     packet(2) = ((sequenceNumber >> 8) & 0xff).toByte
     packet(3) = (sequenceNumber & 0xff).toByte
     packet(4) = ((timestamp >> 24) & 0xff).toByte
@@ -55,23 +57,25 @@ object RtpCodec {
     else {
       val csrcCount      = bytes(0) & 0x0f
       val marker         = (bytes(1) & 0x80) != 0
-      val payloadType    = bytes(1) & 0x7f
+      val payloadType    = PayloadType.fromInt(bytes(1) & 0x7f)
       val sequenceNumber = ((bytes(2) & 0xff) << 8) | (bytes(3) & 0xff)
       val timestamp = ((bytes(4) & 0xffL) << 24) | ((bytes(5) & 0xffL) << 16) |
         ((bytes(6) & 0xffL) << 8) | (bytes(7) & 0xffL)
       val ssrc = ((bytes(8) & 0xffL) << 24) | ((bytes(9) & 0xffL) << 16) |
         ((bytes(10) & 0xffL) << 8) | (bytes(11) & 0xffL)
       val headerLength = HeaderLength + csrcCount * 4
-      Some(
-        RtpHeader(
-          version,
-          payloadType,
-          marker,
-          sequenceNumber,
-          timestamp,
-          ssrc
-        ),
-        headerLength
+      payloadType.map(type_ =>
+        (
+          RtpHeader(
+            version,
+            type_,
+            marker,
+            sequenceNumber,
+            timestamp,
+            ssrc
+          ),
+          headerLength
+        )
       )
     }
   }

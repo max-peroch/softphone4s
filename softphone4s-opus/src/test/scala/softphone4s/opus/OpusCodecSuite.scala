@@ -11,7 +11,7 @@ import munit.CatsEffectSuite
 import softphone4s.codec.RtpCodec
 import softphone4s.config.{CodecChoice, RtpLatching}
 import softphone4s.media.{AudioCodec, AudioCodecs}
-import softphone4s.model.MediaDirection
+import softphone4s.model.{MediaDirection, PayloadType}
 import softphone4s.sdp.{
   Capabilities,
   LocalMedia,
@@ -36,6 +36,9 @@ class OpusCodecSuite extends CatsEffectSuite {
     * variable, or the first line of `.opus-library` (in the module's directory,
     * which git ignores).
     */
+  private def pt(n: Int): PayloadType =
+    PayloadType(n).fold(e => fail(e), identity)
+
   private val library: Option[Path] =
     sys.props
       .get("softphone4s.opus.library")
@@ -143,7 +146,7 @@ class OpusCodecSuite extends CatsEffectSuite {
   ) {
     val caps = Capabilities(
       NonEmptyList.one(OpusCodec.description(OpusSettings())),
-      Some(101)
+      Some(pt(101))
     )
     val offer = SessionDescription
       .parse(
@@ -155,7 +158,7 @@ class OpusCodecSuite extends CatsEffectSuite {
     val result = OfferAnswer
       .answer(offer, local, caps)
       .fold(r => fail(r.message), identity)
-    assertEquals(result.plan.payloadType, 111)
+    assertEquals(result.plan.payloadType, pt(111))
     val text = result.description.render
     assert(text.contains("m=audio 20000 RTP/AVP 111\r\n"), text)
     assert(text.contains("a=rtpmap:111 opus/48000/2"), text)
@@ -317,7 +320,7 @@ class OpusCodecSuite extends CatsEffectSuite {
     "media in Opus is sent one packet to an RTP packet, 960 ticks apart, on the payload type given"
   ) {
     withCodec() { codec =>
-      val codecs = AudioCodecs(NonEmptyList.one(codec), Some(101))
+      val codecs = AudioCodecs(NonEmptyList.one(codec), Some(pt(101)))
       (
         bound,
         Resource.eval(bound.use((_, a) => IO.pure(a))),
@@ -326,7 +329,7 @@ class OpusCodecSuite extends CatsEffectSuite {
         val plan = MediaPlan(
           peerAddress,
           codec.description,
-          111,
+          pt(111),
           None,
           MediaDirection.SendRecv,
           MediaDirection.SendRecv
@@ -348,13 +351,20 @@ class OpusCodecSuite extends CatsEffectSuite {
           _ <- peer.write(
             Datagram(
               ours,
-              RtpCodec.encode(111, 1, 0L, 9L, decoded.head._2, marker = false)
+              RtpCodec.encode(
+                pt(111),
+                1,
+                0L,
+                9L,
+                decoded.head._2,
+                marker = false
+              )
             )
           )
           pcm <- media.source.take(640).compile.to(Chunk).timeout(5.seconds)
           _   <- media.stop()
         } yield {
-          assertEquals(decoded.map(_._1.payloadType), List(111, 111, 111, 111))
+          assertEquals(decoded.map(_._1.payloadType), List.fill(4)(pt(111)))
           assertEquals(
             decoded.map(_._1.timestamp),
             List(0L, 960L, 1920L, 2880L)

@@ -7,7 +7,8 @@ import fs2.io.net.{DatagramSocket, Network}
 import fs2.{Chunk, Stream}
 import munit.CatsEffectSuite
 import softphone4s.codec.RtpCodec
-import softphone4s.model.{DtmfDigit, SoftphoneEvent}
+import softphone4s.SipLiterals.pt
+import softphone4s.model.{DtmfDigit, PayloadType, SoftphoneEvent}
 
 import scala.concurrent.duration.*
 
@@ -37,7 +38,7 @@ class RtpSenderSuite extends CatsEffectSuite {
   /** The sender, the receiver's socket, and where the sender is told to send.
     */
   private def fixture(
-      eventType: Option[Int] = Some(101),
+      eventType: Option[PayloadType] = Some(pt(101)),
       sending: Boolean = true
   ) =
     for {
@@ -49,7 +50,7 @@ class RtpSenderSuite extends CatsEffectSuite {
         )
       )
       rtp <- Resource.eval(
-        RtpSender.make[IO](sender, target.get, 0, eventType, 160)
+        RtpSender.make[IO](sender, target.get, pt(0), eventType, 160)
       )
     } yield (rtp, receiver, target)
 
@@ -69,7 +70,7 @@ class RtpSenderSuite extends CatsEffectSuite {
         _       <- sent.joinWithNever
       } yield {
         assertEquals(packets.size, 7) // 4 running, 3 ending
-        assertEquals(packets.map(_.header.payloadType).distinct, List(101))
+        assertEquals(packets.map(_.header.payloadType).distinct, List(pt(101)))
         assertEquals(packets.map(_.header.timestamp).distinct, List(0L))
         assertEquals(packets.map(_.header.ssrc).distinct.size, 1)
         assertEquals(packets.map(_.header.sequenceNumber), (0 to 6).toList)
@@ -131,7 +132,7 @@ class RtpSenderSuite extends CatsEffectSuite {
           assert(firstEvent > 0, "some audio came first")
           assert(lastEvent < kinds.size - 1, "and some after")
           assert(
-            kinds.slice(firstEvent, lastEvent + 1).forall(_ == 101),
+            kinds.slice(firstEvent, lastEvent + 1).forall(_ == pt(101)),
             s"no audio between the first and last packet of the digit: $kinds"
           )
           // One run of sequence numbers for both.
