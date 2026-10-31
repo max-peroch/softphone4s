@@ -1,5 +1,6 @@
 package softphone4s.ua
 
+import softphone4s.model.Ssrc
 import softphone4s.SipLiterals.pt
 import cats.effect.std.Supervisor
 import cats.effect.{IO, Resource}
@@ -37,7 +38,7 @@ class MediaLatchingSuite extends CatsEffectSuite {
       payloadType = pt(0),
       sequenceNumber = sequence,
       timestamp = sequence * 160L,
-      ssrc = 77L,
+      ssrc = Ssrc.fromBits(77),
       payload = Chunk.array(new Array[Byte](160)),
       marker = false
     )

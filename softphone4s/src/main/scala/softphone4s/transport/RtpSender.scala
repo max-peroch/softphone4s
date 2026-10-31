@@ -7,7 +7,7 @@ import com.comcast.ip4s.{IpAddress, SocketAddress}
 import fs2.io.net.{Datagram, DatagramSocket}
 import fs2.{Chunk, Pipe}
 import softphone4s.codec.RtpCodec
-import softphone4s.model.{DtmfDigit, PayloadType, SoftphoneEvent}
+import softphone4s.model.{DtmfDigit, PayloadType, SoftphoneEvent, Ssrc}
 
 import scala.concurrent.duration.*
 
@@ -25,7 +25,7 @@ final class RtpSender[F[_]: Async] private (
     audioType: PayloadType,
     eventType: Option[PayloadType],
     timestampStep: Int,
-    ssrc: Long,
+    ssrc: Ssrc,
     sequence: Ref[F, Int],
     clock: Ref[F, Long],
     talking: Ref[F, Boolean],
@@ -159,7 +159,7 @@ object RtpSender {
       timestampStep: Int
   ): F[RtpSender[F]] =
     (
-      Async[F].delay(scala.util.Random.nextLong() & 0xffffffffL),
+      Async[F].delay(Ssrc.fromBits(scala.util.Random.nextInt())),
       Ref.of[F, Int](0),
       Ref.of[F, Long](0L),
       Ref.of[F, Boolean](false),

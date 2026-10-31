@@ -1,5 +1,6 @@
 package softphone4s.media
 
+import softphone4s.model.Ssrc
 import fs2.Chunk
 import softphone4s.SipLiterals.pt
 import munit.{FunSuite, ScalaCheckSuite}
@@ -21,7 +22,7 @@ class JitterBufferSuite extends FunSuite with ScalaCheckSuite {
     JitterPacket(
       sequence,
       sequence * 160L,
-      ssrc,
+      Ssrc.fromBits(ssrc.toInt),
       marker = false,
       pt(0),
       Chunk.array(Array((sequence >> 8).toByte, sequence.toByte))

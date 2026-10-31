@@ -1,6 +1,7 @@
 package softphone4s.transport
 
 import com.comcast.ip4s.{IpAddress, SocketAddress}
+import softphone4s.model.Ssrc
 
 /** Symmetric RTP (RFC 4961): when the media we receive comes from somewhere
   * other than where the remote party said it would, a NAT has changed its
@@ -18,7 +19,7 @@ object RtpLatch {
   /** A source that is not the target, and how many packets in a row it sent. */
   final case class Candidate(
       source: SocketAddress[IpAddress],
-      ssrc: Long,
+      ssrc: Ssrc,
       packets: Int
   )
 
@@ -32,7 +33,7 @@ object RtpLatch {
       latch: RtpLatch,
       target: Option[SocketAddress[IpAddress]],
       source: SocketAddress[IpAddress],
-      ssrc: Long
+      ssrc: Ssrc
   ): (RtpLatch, Option[SocketAddress[IpAddress]]) =
     if target.forall(_ == source) then (empty, None)
     else {

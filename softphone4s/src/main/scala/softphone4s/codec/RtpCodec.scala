@@ -1,7 +1,7 @@
 package softphone4s.codec
 
 import fs2.Chunk
-import softphone4s.model.PayloadType
+import softphone4s.model.{PayloadType, Ssrc}
 
 /** RFC 3550 RTP packet encode/decode — pure. */
 object RtpCodec {
@@ -14,17 +14,18 @@ object RtpCodec {
       marker: Boolean,
       sequenceNumber: Int,
       timestamp: Long,
-      ssrc: Long
+      ssrc: Ssrc
   )
 
   def encode(
       payloadType: PayloadType,
       sequenceNumber: Int,
       timestamp: Long,
-      ssrc: Long,
+      ssrc: Ssrc,
       payload: Chunk[Byte],
       marker: Boolean = false
   ): Chunk[Byte] = {
+    val id     = ssrc.value
     val packet = Array.ofDim[Byte](HeaderLength + payload.size)
     packet(0) = 0x80.toByte
     packet(1) =
@@ -35,10 +36,10 @@ object RtpCodec {
     packet(5) = ((timestamp >> 16) & 0xff).toByte
     packet(6) = ((timestamp >> 8) & 0xff).toByte
     packet(7) = (timestamp & 0xff).toByte
-    packet(8) = ((ssrc >> 24) & 0xff).toByte
-    packet(9) = ((ssrc >> 16) & 0xff).toByte
-    packet(10) = ((ssrc >> 8) & 0xff).toByte
-    packet(11) = (ssrc & 0xff).toByte
+    packet(8) = ((id >> 24) & 0xff).toByte
+    packet(9) = ((id >> 16) & 0xff).toByte
+    packet(10) = ((id >> 8) & 0xff).toByte
+    packet(11) = (id & 0xff).toByte
     payload.copyToArray(packet, HeaderLength)
     Chunk.array(packet)
   }
@@ -61,8 +62,10 @@ object RtpCodec {
       val sequenceNumber = ((bytes(2) & 0xff) << 8) | (bytes(3) & 0xff)
       val timestamp = ((bytes(4) & 0xffL) << 24) | ((bytes(5) & 0xffL) << 16) |
         ((bytes(6) & 0xffL) << 8) | (bytes(7) & 0xffL)
-      val ssrc = ((bytes(8) & 0xffL) << 24) | ((bytes(9) & 0xffL) << 16) |
-        ((bytes(10) & 0xffL) << 8) | (bytes(11) & 0xffL)
+      val ssrc = Ssrc.fromBits(
+        ((bytes(8) & 0xff) << 24) | ((bytes(9) & 0xff) << 16) |
+          ((bytes(10) & 0xff) << 8) | (bytes(11) & 0xff)
+      )
       val headerLength = HeaderLength + csrcCount * 4
       payloadType.map(type_ =>
         (

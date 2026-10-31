@@ -19,7 +19,7 @@ import softphone4s.media.{
   JitterStats,
   Playout
 }
-import softphone4s.model.{DtmfDigit, MediaDirection, SoftphoneError}
+import softphone4s.model.{DtmfDigit, MediaDirection, SoftphoneError, Ssrc}
 import softphone4s.sdp.{Capabilities, Codec, MediaPlan}
 
 import scala.concurrent.duration.*
@@ -37,10 +37,9 @@ private[softphone4s] class MediaSession[F[_]: Async: Network] private (
     agreed: Ref[F, Option[MediaPlan]],
     latching: RtpLatching,
     latch: Ref[F, RtpLatch],
-    comfort: Ref[F, Option[ComfortNoise.Noise]],
+    playback: Ref[F, MediaSession.Playback],
     remoteSends: Ref[F, Boolean],
     jitterConfig: JitterConfig,
-    concealment: Ref[F, Concealment],
     stats: Ref[F, JitterStats]
 ) {
 
@@ -75,7 +74,7 @@ private[softphone4s] class MediaSession[F[_]: Async: Network] private (
     latch.set(RtpLatch.empty) >>
       remoteSends.set(direction.sends) >>
       // A party that sends nothing makes no noise either.
-      comfort.set(None).whenA(!direction.sends) >>
+      playback.update(_.copy(noise = None)).whenA(!direction.sends) >>
       target.set(
         Option.when(direction.receives)(SocketAddress(remoteIp, remotePort))
       )
@@ -84,7 +83,7 @@ private[softphone4s] class MediaSession[F[_]: Async: Network] private (
     * the target, send there (see [[RtpLatch]]). The target is changed only if
     * it is still the one the decision was made against.
     */
-  private def heardFrom(source: SocketAddress[IpAddress], ssrc: Long): F[Unit] =
+  private def heardFrom(source: SocketAddress[IpAddress], ssrc: Ssrc): F[Unit] =
     Async[F].whenA(latching == RtpLatching.Follow)(
       target.get.flatMap { current =>
         latch
@@ -103,32 +102,21 @@ private[softphone4s] class MediaSession[F[_]: Async: Network] private (
       decode: AudioCodec.Session,
       frameBytes: Int,
       out: Playout
-  ): F[Unit] = {
-    val samples = frameBytes / 2
-    // Neither speech nor a loss to hide: noise if some is wanted.
-    val quiet = concealment.set(Concealment.Empty) >> playNoise(samples)
+  ): F[Unit] =
     out match {
       case Playout.Frame(packet) if packet.payloadType == plan.payloadType =>
         val pcm = Chunk.array(decode(packet.payload.toArray))
         // Speech again: the noise that stood in for it ends.
-        comfort.set(None) >> concealment.update(_.heard(pcm)) >>
+        playback.update(_.heard(pcm)) >>
           audioChannel.send(pcm).void.whenA(pcm.nonEmpty)
       case Playout.Frame(packet)
           if plan.comfortNoiseType.contains(packet.payloadType) =>
-        noiseHeard(packet.payload) >> quiet
+        noiseHeard(packet.payload) >> fill(frameBytes, lost = false)
       // A telephone event: its digit was acted on when it arrived.
-      case Playout.Frame(_) => quiet
-      case Playout.Lost     =>
-        comfort.get.flatMap {
-          case Some(_) => quiet
-          case None    =>
-            concealment
-              .modify(_.fill(frameBytes))
-              .flatMap(audioChannel.send(_).void)
-        }
-      case Playout.Waiting => quiet
+      case Playout.Frame(_) => fill(frameBytes, lost = false)
+      case Playout.Lost     => fill(frameBytes, lost = true)
+      case Playout.Waiting  => fill(frameBytes, lost = false)
     }
-  }
 
   /** How the jitter buffer stands: what it has received, played, concealed and
     * dropped.
@@ -143,25 +131,24 @@ private[softphone4s] class MediaSession[F[_]: Async: Network] private (
       .parse(payload)
       .traverse_(level =>
         Async[F].monotonic.flatMap(now =>
-          comfort.update(before =>
-            Some(ComfortNoise.Noise.heard(level, now, before))
+          playback.update(before =>
+            before.copy(noise =
+              Some(ComfortNoise.Noise.heard(level, now, before.noise))
+            )
           )
         )
       )
 
-  /** A frame of noise of `samples` samples to play now, if some is wanted: the
+  /** What to play when there is no speech to: noise if some is wanted (the
     * other side told us the level, has not spoken since, is still sending and
-    * the news is not stale.
+    * the news is not stale), else, for a packet that was `lost`, the frame
+    * before it again and fading, else nothing. Decided and recorded in one
+    * step.
     */
-  private def playNoise(samples: Int): F[Unit] =
+  private def fill(frameBytes: Int, lost: Boolean): F[Unit] =
     (Async[F].monotonic, remoteSends.get).flatMapN { (now, sends) =>
-      comfort
-        .modify {
-          case Some(noise) if sends && noise.isCurrent(now) =>
-            val (next, frame) = noise.frame(samples)
-            (Some(next), Some(frame))
-          case _ => (None, None)
-        }
+      playback
+        .modify(_.silent(now, sends, frameBytes, lost))
         .flatMap(_.traverse_(audioChannel.send(_).void))
     }
 
@@ -292,6 +279,42 @@ private[softphone4s] class MediaSession[F[_]: Async: Network] private (
 
 private[softphone4s] object MediaSession {
 
+  /** What the receiving end plays when it has no speech to play, kept together
+    * because the two are decided together: the background noise the other side
+    * told us of, and the speech to repeat for a packet that is lost.
+    */
+  private[ua] final case class Playback(
+      noise: Option[ComfortNoise.Noise],
+      concealment: Concealment
+  ) {
+
+    /** Speech was played: the noise that stood in for it ends. */
+    def heard(pcm: Chunk[Byte]): Playback =
+      Playback(None, concealment.heard(pcm))
+
+    /** The frame to play in place of speech, if any, and the state after it. */
+    def silent(
+        now: FiniteDuration,
+        remoteSends: Boolean,
+        frameBytes: Int,
+        lost: Boolean
+    ): (Playback, Option[Chunk[Byte]]) =
+      noise match {
+        case Some(current) if remoteSends && current.isCurrent(now) =>
+          val (next, frame) = current.frame(frameBytes / 2)
+          (Playback(Some(next), Concealment.Empty), Some(frame))
+        case Some(_)      => (Playback.Start, None)
+        case None if lost =>
+          val (next, frame) = concealment.fill(frameBytes)
+          (copy(concealment = next), Some(frame))
+        case None => (Playback.Start, None)
+      }
+  }
+
+  private[ua] object Playback {
+    val Start: Playback = Playback(None, Concealment.Empty)
+  }
+
   /** The time one frame of audio stands for. */
   private val FramePeriod: FiniteDuration = 20.millis
 
@@ -310,9 +333,8 @@ private[softphone4s] object MediaSession {
       target        <- Ref[F].of(Option.empty[SocketAddress[IpAddress]])
       agreed        <- Ref[F].of(Option.empty[MediaPlan])
       latch         <- Ref[F].of(RtpLatch.empty)
-      comfort       <- Ref[F].of(Option.empty[ComfortNoise.Noise])
+      playback      <- Ref[F].of(Playback.Start)
       remoteSends   <- Ref[F].of(true)
-      concealment   <- Ref[F].of(Concealment.Empty)
       stats         <- Ref[F].of(JitterStats())
     } yield new MediaSession(
       bindAddress,
@@ -326,10 +348,9 @@ private[softphone4s] object MediaSession {
       agreed,
       latching,
       latch,
-      comfort,
+      playback,
       remoteSends,
       jitter,
-      concealment,
       stats
     )
 }

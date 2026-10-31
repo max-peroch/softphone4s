@@ -1,5 +1,6 @@
 package softphone4s.transport
 
+import softphone4s.model.Ssrc
 import com.comcast.ip4s.*
 import munit.FunSuite
 
@@ -17,8 +18,9 @@ class RtpLatchSuite extends FunSuite {
       .foldLeft(
         (RtpLatch.empty, from, List.empty[Option[SocketAddress[IpAddress]]])
       ) { case ((latch, target, seen), (source, ssrc)) =>
-        val (next, moved) = RtpLatch.hear(latch, target, source, ssrc)
-        val now           = moved.orElse(target)
+        val (next, moved) =
+          RtpLatch.hear(latch, target, source, Ssrc.fromBits(ssrc.toInt))
+        val now = moved.orElse(target)
         (next, now, seen :+ now)
       }
       ._3

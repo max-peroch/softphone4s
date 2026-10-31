@@ -1,5 +1,6 @@
 package softphone4s.media
 
+import softphone4s.model.Ssrc
 import munit.FunSuite
 
 import scala.concurrent.duration.*
@@ -20,7 +21,13 @@ class RtpReceptionSuite extends FunSuite {
     )
 
   private def begin(first: Int = 0): RtpReception =
-    RtpReception.start(1L, Rate, first, first * 160L, (first * 20).millis)
+    RtpReception.start(
+      Ssrc.fromBits(1),
+      Rate,
+      first,
+      first * 160L,
+      (first * 20).millis
+    )
 
   test("packets in order count as expected and none lost") {
     val r = feed(begin(), 1, 49)
@@ -74,7 +81,8 @@ class RtpReceptionSuite extends FunSuite {
   test("a timestamp that wraps at 32 bits does not look like jitter") {
     val start = 0xffffffffL - 160 * 2
     val r     = (0 to 6).foldLeft(
-      RtpReception.start(1L, Rate, 0, start & 0xffffffffL, Duration.Zero)
+      RtpReception
+        .start(Ssrc.fromBits(1), Rate, 0, start & 0xffffffffL, Duration.Zero)
     )((r, n) =>
       if n == 0 then r
       else r.hear(n, (start + n * 160L) & 0xffffffffL, (n * 20).millis)
@@ -85,13 +93,13 @@ class RtpReceptionSuite extends FunSuite {
   test("a report counts the fraction lost since the one before it") {
     val first                = feed(begin(), 1, 9) // 10 of 10
     val (afterFirst, block1) = first.report(200.millis)
-    assertEquals((block1.fractionLost, block1.cumulativeLost), (0, 0))
+    assertEquals((block1.fractionLost.value, block1.cumulativeLost), (0, 0))
     // Sequences 10..19 expected, the odd 5 of them come: half lost.
     val second = (11 to 19 by 2).foldLeft(afterFirst)((r, n) =>
       r.hear(n, n * 160L, (n * 20).millis)
     )
     val (_, block2) = second.report(400.millis)
-    assertEquals(block2.fractionLost, 128)
+    assertEquals(block2.fractionLost.value, 128)
     assertEquals(block2.cumulativeLost, 5)
     assertEquals(block2.highestSequence, 19L)
   }
@@ -112,7 +120,7 @@ class RtpReceptionSuite extends FunSuite {
     // 30 days of uptime: nanoseconds times 8000 overflow a Long long before.
     val uptime = 30.days
     val r      = (0 to 99).foldLeft(
-      RtpReception.start(1L, Rate, 0, 0L, uptime)
+      RtpReception.start(Ssrc.fromBits(1), Rate, 0, 0L, uptime)
     )((r, n) =>
       if n == 0 then r else r.hear(n, n * 160L, uptime + (n * 20).millis)
     )

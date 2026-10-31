@@ -1,35 +1,38 @@
 package softphone4s.media
 
+import cats.data.NonEmptyList
+import softphone4s.model.Ssrc
+
 /** The RTCP packets of RFC 3550 that a softphone makes and reads. Fields hold
-  * what is on the wire, as unsigned values widened to `Long` where 32 bits are
-  * used.
+  * what is on the wire; a packet of a type we do not use is not one of them,
+  * and is skipped when a compound packet is read.
   */
 enum RtcpPacket {
 
   /** What a sender says of itself and what it has heard of the others. */
   case SenderReport(
-      ssrc: Long,
+      ssrc: Ssrc,
       info: RtcpPacket.SenderInfo,
       blocks: List[RtcpPacket.ReportBlock]
   )
 
   /** What a receiver that is not sending has heard. */
-  case ReceiverReport(ssrc: Long, blocks: List[RtcpPacket.ReportBlock])
+  case ReceiverReport(ssrc: Ssrc, blocks: List[RtcpPacket.ReportBlock])
 
   /** Who the SSRCs are: the canonical name of each (SDES item CNAME). */
-  case SourceDescription(names: List[(Long, String)])
+  case SourceDescription(names: NonEmptyList[RtcpPacket.SourceName])
 
   /** The sources leave, and perhaps why. */
-  case Goodbye(ssrcs: List[Long], reason: Option[String])
-
-  /** A packet of a type we do not use, which is skipped. */
-  case Other(packetType: Int)
+  case Goodbye(ssrcs: NonEmptyList[Ssrc], reason: Option[String])
 }
 
 object RtcpPacket {
 
   /** The most blocks, or sources, a packet counts (5 bits). */
   val MaxCount: Int = 31
+
+  /** The canonical name of a source, like `user@host`. */
+  final case class SourceName(ssrc: Ssrc, name: String)
 
   /** @param ntp
     *   wall-clock time as 32.32 fixed point seconds since 1900.
@@ -53,8 +56,6 @@ object RtcpPacket {
 
   /** What one receiver heard of one source.
     *
-    * @param fractionLost
-    *   0 to 255: lost since the last report, in 256ths.
     * @param cumulativeLost
     *   lost since the start; negative when duplicates outnumber losses. 24 bits
     *   on the wire.
@@ -70,8 +71,8 @@ object RtcpPacket {
     *   the time since it, in 65536ths of a second, or 0.
     */
   final case class ReportBlock(
-      ssrc: Long,
-      fractionLost: Int,
+      ssrc: Ssrc,
+      fractionLost: LossFraction,
       cumulativeLost: Int,
       highestSequence: Long,
       jitter: Long,

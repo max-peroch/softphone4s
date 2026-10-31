@@ -7,7 +7,7 @@ import fs2.io.net.DatagramSocket
 import fs2.{Chunk, Stream}
 import softphone4s.codec.RtpCodec
 import softphone4s.media.JitterPacket
-import softphone4s.model.{DtmfDigit, PayloadType, SoftphoneEvent}
+import softphone4s.model.{DtmfDigit, PayloadType, SoftphoneEvent, Ssrc}
 
 object RtpTransport {
 
@@ -26,7 +26,7 @@ object RtpTransport {
       socket: DatagramSocket[F],
       lastDtmfKey: Ref[F, (Long, Int)],
       onDtmf: DtmfDigit => F[Unit],
-      heardFrom: (SocketAddress[IpAddress], Long) => F[Unit],
+      heardFrom: (SocketAddress[IpAddress], Ssrc) => F[Unit],
       audioType: PayloadType,
       eventType: Option[PayloadType],
       comfortType: Option[PayloadType]

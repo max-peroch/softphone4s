@@ -1,5 +1,6 @@
 package softphone4s.media
 
+import softphone4s.model.Ssrc
 import cats.effect.IO
 import cats.effect.testkit.TestControl
 import fs2.{Chunk, Stream}
@@ -18,7 +19,7 @@ class JitterPlayoutSuite extends CatsEffectSuite {
     JitterPacket(
       sequence,
       sequence * 160L,
-      1L,
+      Ssrc.fromBits(1),
       marker = false,
       pt(0),
       Chunk.array(Array((sequence >> 8).toByte, sequence.toByte))

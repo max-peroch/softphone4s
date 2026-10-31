@@ -1,6 +1,7 @@
 package softphone4s.media
 
 import softphone4s.media.RtcpPacket.ReportBlock
+import softphone4s.model.Ssrc
 
 import scala.concurrent.duration.FiniteDuration
 
@@ -14,7 +15,7 @@ import scala.concurrent.duration.FiniteDuration
   * afresh.
   */
 final case class RtpReception private (
-    ssrc: Long,
+    ssrc: Ssrc,
     clockRate: Int,
     firstSequence: Int,
     highestSequence: Int,
@@ -82,10 +83,8 @@ final case class RtpReception private (
   def report(now: FiniteDuration): (RtpReception, ReportBlock) = {
     val expectedInterval = expected - expectedAtReport
     val lostInterval     = expectedInterval - (received - receivedAtReport)
-    val fraction         =
-      if expectedInterval <= 0 || lostInterval <= 0 then 0
-      else math.min(255L, (lostInterval << 8) / expectedInterval).toInt
-    val (quoted, delay) = lastSender.fold((0L, 0L))(heard =>
+    val fraction         = LossFraction.of(lostInterval, expectedInterval)
+    val (quoted, delay)  = lastSender.fold((0L, 0L))(heard =>
       (
         heard.middle,
         math.max(0L, (now - heard.at).toNanos * 65536L / 1_000_000_000L)
@@ -132,7 +131,7 @@ object RtpReception {
 
   /** The reception that begins with the first packet heard of `ssrc`. */
   def start(
-      ssrc: Long,
+      ssrc: Ssrc,
       clockRate: Int,
       sequence: Int,
       timestamp: Long,

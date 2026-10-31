@@ -19,7 +19,7 @@ import scala.collection.immutable.TreeMap
   */
 final case class JitterBuffer private (
     config: JitterConfig,
-    ssrc: Option[Long],
+    ssrc: Option[softphone4s.model.Ssrc],
     held: TreeMap[Long, JitterPacket],
     newest: Option[Long],
     phase: JitterBuffer.Phase,

@@ -1259,7 +1259,7 @@ class OutboundCallSuite extends CatsEffectSuite {
         pt(0),
         sequence,
         sequence * 160L,
-        5L,
+        Ssrc.fromBits(5),
         silenceOf0x80,
         marker = false
       )

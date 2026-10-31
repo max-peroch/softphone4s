@@ -2,6 +2,8 @@ package softphone4s.media
 
 import fs2.Chunk
 
+import java.nio.{ByteBuffer, ByteOrder}
+
 /** What to play for a packet that is lost: the frame before it again, a little
   * quieter each time, and then silence. That hides one lost packet, and does
   * not hold a tone for the length of a burst of them.
@@ -48,22 +50,24 @@ object Concealment {
   /** In how many frames the repeated sound fades to nothing: 60 ms. */
   val FadeFrames: Int = 3
 
-  /** `pcm`, 16-bit little-endian samples, times `numerator / denominator`. */
+  /** `pcm`, 16-bit little-endian samples, times `numerator / denominator`. A
+    * byte left over after the last whole sample stays zero.
+    */
   private[media] def scaled(
       pcm: Chunk[Byte],
       numerator: Int,
       denominator: Int
   ): Chunk[Byte] = {
-    val in  = pcm.toArray
-    val out = new Array[Byte](in.length)
-    var i   = 0
-    while i + 1 < in.length do {
-      val sample = ((in(i + 1) << 8) | (in(i) & 0xff)).toShort.toInt
-      val faded  = sample * numerator / denominator
-      out(i) = faded.toByte
-      out(i + 1) = (faded >> 8).toByte
-      i += 2
-    }
-    Chunk.array(out)
+    val in  = ByteBuffer.wrap(pcm.toArray).order(ByteOrder.LITTLE_ENDIAN)
+    val out = ByteBuffer.allocate(pcm.size).order(ByteOrder.LITTLE_ENDIAN)
+    Iterator
+      .range(0, pcm.size / 2)
+      .foreach(i =>
+        out.putShort(
+          i * 2,
+          (in.getShort(i * 2) * numerator / denominator).toShort
+        )
+      )
+    Chunk.array(out.array())
   }
 }

@@ -11,7 +11,7 @@ import munit.CatsEffectSuite
 import softphone4s.codec.RtpCodec
 import softphone4s.config.{CodecChoice, RtpLatching}
 import softphone4s.media.{AudioCodec, AudioCodecs, JitterConfig}
-import softphone4s.model.{MediaDirection, PayloadType}
+import softphone4s.model.{MediaDirection, PayloadType, Ssrc}
 import softphone4s.sdp.{
   Capabilities,
   LocalMedia,
@@ -361,7 +361,7 @@ class OpusCodecSuite extends CatsEffectSuite {
                 pt(111),
                 1,
                 0L,
-                9L,
+                Ssrc.fromBits(9),
                 decoded.head._2,
                 marker = false
               )

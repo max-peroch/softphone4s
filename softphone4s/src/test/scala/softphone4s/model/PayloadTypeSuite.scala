@@ -1,5 +1,6 @@
 package softphone4s.model
 
+import softphone4s.model.Ssrc
 import munit.FunSuite
 import softphone4s.codec.RtpCodec
 import softphone4s.sdp.{RtpMap, SessionDescription}
@@ -70,7 +71,7 @@ class PayloadTypeSuite extends FunSuite {
         PayloadType(n).fold(e => fail(e), identity),
         1,
         0L,
-        1L,
+        Ssrc.fromBits(1),
         Chunk.array(Array[Byte](1, 2, 3)),
         marker = n % 2 == 0
       )

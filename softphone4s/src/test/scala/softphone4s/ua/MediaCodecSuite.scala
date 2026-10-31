@@ -1,5 +1,6 @@
 package softphone4s.ua
 
+import softphone4s.model.Ssrc
 import softphone4s.SipLiterals.pt
 import cats.effect.std.Supervisor
 import cats.effect.{IO, Ref, Resource}
@@ -127,7 +128,7 @@ class MediaCodecSuite extends CatsEffectSuite {
           pt(payload),
           seq,
           seq * 160L,
-          5L,
+          Ssrc.fromBits(5),
           sample,
           marker = false
         )
@@ -230,7 +231,7 @@ class MediaCodecSuite extends CatsEffectSuite {
               pt(9),
               1,
               0L,
-              5L,
+              Ssrc.fromBits(5),
               Chunk.array(codes),
               marker = false
             )
@@ -267,7 +268,7 @@ class MediaCodecSuite extends CatsEffectSuite {
               pt(96),
               1,
               0L,
-              5L,
+              Ssrc.fromBits(5),
               Chunk.array(Array.fill[Byte](160)(7)),
               marker = false
             )
@@ -382,7 +383,7 @@ class MediaCodecSuite extends CatsEffectSuite {
       digit: DtmfDigit,
       end: Boolean,
       duration: Int = 800,
-      ssrc: Long = 9L
+      ssrc: Ssrc = Ssrc.fromBits(9)
   ): Chunk[Byte] =
     RtpCodec.encode(
       pt(101),
@@ -641,7 +642,7 @@ class MediaCodecSuite extends CatsEffectSuite {
         pt(13),
         sequence,
         sequence * 160L,
-        7L,
+        Ssrc.fromBits(7),
         Chunk.array(Array[Byte](40)),
         marker = false
       )
@@ -654,7 +655,7 @@ class MediaCodecSuite extends CatsEffectSuite {
         pt(0),
         sequence,
         sequence * 160L,
-        7L,
+        Ssrc.fromBits(7),
         Chunk.array(Array.fill[Byte](160)(0xff.toByte)),
         marker = false
       )
@@ -744,7 +745,7 @@ class MediaCodecSuite extends CatsEffectSuite {
               pt(13),
               1,
               160L,
-              7L,
+              Ssrc.fromBits(7),
               Chunk.empty[Byte],
               marker = false
             )
@@ -805,7 +806,7 @@ class MediaCodecSuite extends CatsEffectSuite {
         pt(0),
         sequence,
         sequence * 160L,
-        7L,
+        Ssrc.fromBits(7),
         Chunk.array(Array.fill[Byte](160)(code.toByte)),
         marker = false
       )
@@ -896,7 +897,7 @@ class MediaCodecSuite extends CatsEffectSuite {
             DtmfDigit.D8,
             end = n >= 3,
             duration = n * 160,
-            ssrc = 7L
+            ssrc = Ssrc.fromBits(7)
           )
         )
       for {
