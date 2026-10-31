@@ -16,17 +16,23 @@ object JitterPlayout {
       period: FiniteDuration,
       packets: Stream[F, JitterPacket]
   ): Stream[F, (Playout, JitterStats)] = {
-    val arrivals = packets.map(Left(_))
-    val ticks    = Stream.fixedRate[F](period).map(_ => Right(()))
+    val arrivals = packets.map(Event.Arrived(_))
+    val ticks    = Stream.fixedRate[F](period).map(_ => Event.Tick)
     arrivals
       .mergeHaltL(ticks)
       .mapAccumulate(JitterBuffer.empty(config)) {
-        case (buffer, Left(packet)) => (buffer.push(packet)._1, None)
-        case (buffer, Right(_))     =>
+        case (buffer, Event.Arrived(packet)) => (buffer.push(packet)._1, None)
+        case (buffer, Event.Tick)            =>
           val (next, out) = buffer.pull
           (next, Some((out, next.stats)))
       }
       .map(_._2)
       .unNone
+  }
+
+  /** What the buffer is told of. */
+  private enum Event {
+    case Arrived(packet: JitterPacket)
+    case Tick
   }
 }

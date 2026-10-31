@@ -128,36 +128,44 @@ private[softphone4s] class MediaSession[F[_]: Async: Network] private (
       supervisor: Supervisor[F],
       onDtmf: DtmfDigit => F[Unit]
   ): F[MediaStart] =
-    agreed.get.flatMap {
-      case Some(running) =>
-        agreed.set(
-          Some(
-            running.copy(
-              remote = plan.remote,
-              remoteDirection = plan.remoteDirection
-            )
+    // Decided in one step, so that two starts at once cannot both begin.
+    agreed
+      .modify {
+        case Some(running) =>
+          (
+            Some(
+              running.copy(
+                remote = plan.remote,
+                remoteDirection = plan.remoteDirection
+              )
+            ),
+            Some(running)
           )
-        ) >>
+        case None => (Some(plan), None)
+      }
+      .flatMap {
+        case Some(running) =>
           retarget(plan.remote.host, plan.remote.port, plan.remoteDirection)
             .as(
-              if running.codec == plan.codec && running.payloadType == plan.payloadType
+              if running.codec == plan.codec &&
+                running.payloadType == plan.payloadType
               then MediaStart.Followed
               else MediaStart.CodecChanged
             )
-      case None =>
-        codecs
-          .implementing(plan.codec)
-          .liftTo[F](SoftphoneError.CodecUnavailable(plan.codec.encoding))
-          .flatMap { codec =>
-            agreed.set(Some(plan)) >>
+        case None =>
+          codecs
+            .implementing(plan.codec)
+            .liftTo[F](SoftphoneError.CodecUnavailable(plan.codec.encoding))
+            .onError(_ => agreed.set(None))
+            .flatMap { codec =>
               retarget(
                 plan.remote.host,
                 plan.remote.port,
                 plan.remoteDirection
               ) >>
-              run(codec, plan, supervisor, onDtmf).as(MediaStart.Started)
-          }
-    }
+                run(codec, plan, supervisor, onDtmf).as(MediaStart.Started)
+            }
+      }
 
   private def run(
       codec: softphone4s.media.AudioCodec,

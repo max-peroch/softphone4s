@@ -39,12 +39,12 @@ class JitterBufferSuite extends FunSuite with ScalaCheckSuite {
   private def run(
       steps: List[Step],
       config: JitterConfig = config()
-  ): (JitterBuffer, List[String], List[JitterBuffer.Arrival]) =
-    steps.foldLeft(
+  ): (JitterBuffer, List[String], List[JitterBuffer.Arrival]) = {
+    val (buffer, outs, arrivals) = steps.foldLeft(
       (
         JitterBuffer.empty(config),
-        List.empty[String],
-        List.empty[JitterBuffer.Arrival]
+        Vector.empty[String],
+        Vector.empty[JitterBuffer.Arrival]
       )
     ) {
       case ((buffer, outs, arrivals), Push(sequence, ssrc)) =>
@@ -54,6 +54,8 @@ class JitterBufferSuite extends FunSuite with ScalaCheckSuite {
         val (next, out) = buffer.pull
         (next, outs :+ show(out), arrivals)
     }
+    (buffer, outs.toList, arrivals.toList)
+  }
 
   private def pulls(n: Int): List[Step] = List.fill(n)(Pull)
 
@@ -175,6 +177,26 @@ class JitterBufferSuite extends FunSuite with ScalaCheckSuite {
   ) {
     val (_, outs, _) = run(pushes(1, 40000) ::: pulls(4))
     assertEquals(outs, List(".", ".", "F40000", "."))
+  }
+
+  test(
+    "a long run across the wrap is played whole, in order, and the wrap is lost on no one"
+  ) {
+    val sequences = (60000 until 60000 + 12000).map(_ % 65536)
+    val steps = sequences.toList.flatMap(s => List(Push(s), Pull)) ::: pulls(6)
+    val (buffer, outs, arrivals) = run(steps)
+    assertEquals(outs.filterNot(_ == ".").size, 12000)
+    assertEquals(
+      outs.filterNot(_ == ".").take(3),
+      List("F60000", "F60001", "F60002")
+    )
+    assertEquals(
+      outs.filterNot(_ == ".").slice(5535, 5538),
+      List("F65535", "F0", "F1")
+    )
+    assert(arrivals.forall(_ == JitterBuffer.Arrival.Accepted))
+    assertEquals(buffer.stats.lost, 0L)
+    assertEquals(buffer.stats.late, 0L)
   }
 
   test("a depth of 0, or a capacity below the depth, is refused") {

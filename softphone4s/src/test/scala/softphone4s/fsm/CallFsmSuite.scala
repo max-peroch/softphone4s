@@ -147,6 +147,25 @@ class CallFsmSuite extends FunSuite {
     assertEquals(step(Inviting(baseCtx), ResponseReceived(notSdp))._2, Nil)
   }
 
+  test("an SDP is an SDP whatever parameters its Content-Type has") {
+    val withCharset = progress(183)
+    val typed       = withCharset.copy(headers =
+      withCharset.headers.copy(contentType =
+        Some(
+          MediaType
+            .parse("application/sdp;charset=utf-8")
+            .fold(e => fail(e), identity)
+        )
+      )
+    )
+    assertEquals(
+      step(Inviting(baseCtx), ResponseReceived(typed))._2,
+      List(StartMedia(early))
+    )
+    assert(MediaType.Sdp.isSdp)
+    assert(!MediaType.DtmfRelay.isSdp)
+  }
+
   test("100 Trying with a body starts nothing") {
     assertEquals(
       step(Inviting(baseCtx), ResponseReceived(progress(100)))._2,

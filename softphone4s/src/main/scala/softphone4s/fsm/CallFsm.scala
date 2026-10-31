@@ -389,7 +389,7 @@ object CallFsm {
     Option
       .when(
         ctx.offerInInvite && response.body.nonEmpty &&
-          response.headers.contentType.forall(_ == MediaType.Sdp)
+          response.headers.contentType.forall(_.isSdp)
       )(StartMedia(response.body))
       .toList
 

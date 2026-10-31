@@ -753,4 +753,40 @@ class MediaCodecSuite extends CatsEffectSuite {
       } yield assertEquals(heard.size, 0)
     }
   }
+
+  test("two starts at once begin the media once: the other follows") {
+    (bound, session()).tupled.use {
+      case ((_, address), (media, _, supervisor)) =>
+        List(1, 2)
+          .parTraverse(_ =>
+            media.start(planTo(address), supervisor, _ => IO.unit)
+          )
+          .flatTap(_ => media.stop())
+          .map(results =>
+            assertEquals(
+              results.sortBy(_.ordinal),
+              List(MediaStart.Started, MediaStart.Followed)
+            )
+          )
+    }
+  }
+
+  test(
+    "a start that fails leaves the media not started, so that a good one can follow"
+  ) {
+    val g729 = Codec("G729", 8000, 1, Some(pt(18)), None)
+    (bound, session()).tupled.use {
+      case ((_, address), (media, _, supervisor)) =>
+        for {
+          failed <- media
+            .start(planTo(address, g729, 18), supervisor, _ => IO.unit)
+            .attempt
+          started <- media.start(planTo(address), supervisor, _ => IO.unit)
+          _       <- media.stop()
+        } yield {
+          assert(failed.isLeft)
+          assertEquals(started, MediaStart.Started)
+        }
+    }
+  }
 }

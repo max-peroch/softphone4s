@@ -17,6 +17,9 @@ final case class MediaType private (
   def render: String =
     s"$mainType/$subType${HeaderSyntax.renderParams(params)}"
 
+  /** Whether this is `application/sdp`, whatever its parameters. */
+  def isSdp: Boolean = mainType == "application" && subType == "sdp"
+
   override def toString: String = render
 }
 

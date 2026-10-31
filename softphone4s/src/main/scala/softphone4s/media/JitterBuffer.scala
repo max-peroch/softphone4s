@@ -78,7 +78,9 @@ final case class JitterBuffer private (
     }
   }
 
-  /** Too many held: the oldest go, and playing carries on from the oldest left.
+  /** One packet too many: the oldest goes, and playing carries on from the
+    * oldest left. Packets come in one at a time, so there is never more than
+    * one too many, and the capacity is at least 1, so one is left.
     */
   private def withinCapacity: JitterBuffer =
     if held.size <= config.capacity then this
@@ -92,7 +94,7 @@ final case class JitterBuffer private (
           case buffering => buffering
         },
         stats = stats.copy(overflows = stats.overflows + 1)
-      ).withinCapacity
+      )
     }
 
   private def play: (JitterBuffer, Playout) = phase match {
@@ -183,9 +185,11 @@ object JitterBuffer {
     */
   private def unwrap(sequence: Int, reference: Option[Long]): Long =
     reference.fold(sequence.toLong) { r =>
-      val cycle = r >> 16
-      List(cycle - 1, cycle, cycle + 1)
-        .map(c => c * 65536L + sequence)
-        .minBy(candidate => math.abs(candidate - r))
+      val low   = (r & 0xffffL).toInt
+      val delta = sequence - low
+      // Past half a cycle either way it is in the next or the last one.
+      val cycles =
+        if delta > 32767 then -65536L else if delta < -32768 then 65536L else 0L
+      r - low + sequence + cycles
     }
 }
