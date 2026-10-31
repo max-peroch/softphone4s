@@ -48,6 +48,19 @@ lazy val softphone4sOtel4s = project
     )
   )
 
+// Opus, through libopus; needs --enable-native-access=ALL-UNNAMED and libopus
+lazy val softphone4sOpus = project
+  .in(file("softphone4s-opus"))
+  .dependsOn(softphone4s)
+  .settings(
+    name := "softphone4s-opus",
+    libraryDependencies ++= Seq(munit, munitCatsEffect, catsEffectTestkit),
+    // Forked, with native access allowed. The tests that need libopus use the
+    // system one, or the path in softphone4s-opus/.opus-library
+    Test / fork := true,
+    Test / javaOptions ++= Seq("--enable-native-access=ALL-UNNAMED")
+  )
+
 // JMH benchmarks: sbt "softphone4sBench/Jmh/run"
 lazy val softphone4sBench = project
   .in(file("softphone4s-bench"))

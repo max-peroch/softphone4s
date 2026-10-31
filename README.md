@@ -23,6 +23,9 @@ libraryDependencies += "io.github.max-peroch" %% "softphone4s" % "<latest versio
 
 // optional: tracing
 libraryDependencies += "io.github.max-peroch" %% "softphone4s-otel4s" % "<latest version>"
+
+// optional: the Opus codec (needs libopus installed on the machine)
+libraryDependencies += "io.github.max-peroch" %% "softphone4s-opus" % "<latest version>"
 ```
 
 See the [releases page](https://github.com/max-peroch/softphone4s/releases)
@@ -107,10 +110,32 @@ softphone4s handles outbound SIP calls end-to-end:
   `token` the configuration calls it by, the sample rate of the PCM it works at,
   how many bytes a 20 ms packet is in PCM and in payload, and an `encoder` and a
   `decoder` pipe (`AudioCodec.stateless` and `AudioCodec.stateful` make them from
-  a function over a packet; a codec with memory makes its state for each stream).
-  A name that neither we nor you supplied, and two codecs of one name, are errors
-  when the softphone starts. The library does not ship Opus: it needs a native
-  library, which belongs in a module of its own.
+  a function over a packet, or a `Resource` of one, which is how a codec with
+  memory or native state makes it for each stream and releases it; a packet is a
+  chunk of its own, so packets may differ in length). A name that neither we nor
+  you supplied, and two codecs of one name, are errors when the softphone
+  starts.
+- **Opus** (RFC 6716, RFC 7587): the `softphone4s-opus` module, which calls
+  libopus through the JDK's Foreign Function & Memory API (JDK 22 or later): no
+  JNI to build and no extra dependency, but libopus has to be installed
+  (`apt install libopus0`, `brew install opus`) or its path given, and the JVM is
+  best started with `--enable-native-access=ALL-UNNAMED`. It is mono, with
+  in-band FEC, an optional bit rate and complexity, and one of 8, 12, 16, 24 or
+  48 kHz for the audio, which has to be the audio format's (8 kHz lets it share a
+  softphone with G.711, 16 kHz with G.722). SDP names it `opus/48000/2` as
+  RFC 7587 requires, whatever the audio rate, and asks for mono. A packet that
+  cannot be decoded is dropped rather than ending the call.
+
+  ```scala
+  OpusCodec.resource[IO](OpusSettings(sampleRate = OpusSampleRate.Hz16000)).flatMap { opus =>
+    SoftphoneStreaming.resource[IO](
+      config.copy(codecs = List(CodecChoice.Named("opus"))),
+      new AudioFormat(16000f, 16, 1, true, false),
+      logger,
+      List(opus)
+    )
+  }
+  ```
 - **STUN** (RFC 8489): with `nat.stun.host` set, the SIP UDP socket itself
   sends a Binding request to the server (repeated, waiting twice as long each
   time) and the answer is used like an address a SIP server reported, so the

@@ -31,3 +31,5 @@ project/plugins/project/
 ### Scala ###
 *.class
 *.log
+# Local path to libopus for the Opus tests
+softphone4s-opus/.opus-library
