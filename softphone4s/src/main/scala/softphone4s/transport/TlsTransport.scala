@@ -221,7 +221,7 @@ object TlsTransport {
   }
 
   private def keyStore(config: KeyStoreConfig): KeyStore = {
-    val store = KeyStore.getInstance(config.storeType)
+    val store = KeyStore.getInstance(config.storeType.javaName)
     Using.resource(Files.newInputStream(config.path))(in =>
       store.load(in, config.password.toCharArray)
     )

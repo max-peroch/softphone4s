@@ -8,7 +8,7 @@ import munit.CatsEffectSuite
 import org.typelevel.log4cats.noop.NoOpLogger
 import pureconfig.ConfigSource
 import softphone4s.SipLiterals.*
-import softphone4s.config.{AccountConfig, SoftphoneConfig}
+import softphone4s.config.{AccountConfig, KeyStoreType, SoftphoneConfig}
 import softphone4s.model.*
 import softphone4s.transport.{
   ClientAuthentication,
@@ -385,6 +385,23 @@ class MultiAccountSuite extends CatsEffectSuite {
     assertEquals(none.jitterBuffer, softphone4s.media.JitterConfig.Default)
   }
 
+  test(
+    "a key store type is read in any case, and one that is not known is refused"
+  ) {
+    def load(extra: String) =
+      ConfigSource
+        .string(s"user = alice\npassword = pw\nrealm = example.com\n$extra")
+        .load[SoftphoneConfig]
+    val store = (kind: String) =>
+      load(
+        s"""tls.trust-store { path = "/x", password = "p", store-type = "$kind" }"""
+      )
+        .map(_.tls.trustStore.map(_.storeType))
+    assertEquals(store("jks"), Right(Some(KeyStoreType.Jks)))
+    assertEquals(store("Pkcs12"), Right(Some(KeyStoreType.Pkcs12)))
+    assert(store("PKSC12").isLeft)
+  }
+
   test("a jitter buffer that cannot work is a configuration error") {
     def load(extra: String) =
       ConfigSource
@@ -446,8 +463,14 @@ class MultiAccountSuite extends CatsEffectSuite {
       parsed.tls.trustStore.map(_.path.toString),
       Some("/etc/sip/trust.p12")
     )
-    assertEquals(parsed.tls.trustStore.map(_.storeType), Some("PKCS12"))
-    assertEquals(parsed.tls.clientCertificate.map(_.storeType), Some("JKS"))
+    assertEquals(
+      parsed.tls.trustStore.map(_.storeType),
+      Some(KeyStoreType.Pkcs12)
+    )
+    assertEquals(
+      parsed.tls.clientCertificate.map(_.storeType),
+      Some(KeyStoreType.Jks)
+    )
     assertEquals(parsed.tls.minVersion, TlsVersion.Tls13)
     assertEquals(parsed.tls.hostnameVerification, HostnameVerification.Skip)
     assertEquals(parsed.tls.cipherSuites, Some(List("TLS_AES_128_GCM_SHA256")))
