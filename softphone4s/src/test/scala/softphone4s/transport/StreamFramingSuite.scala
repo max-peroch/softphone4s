@@ -69,6 +69,38 @@ class StreamFramingSuite extends ScalaCheckSuite {
     )
   }
 
+  private def events(
+      pieces: List[Chunk[Byte]]
+  ): List[Either[FramingError, Frame]] =
+    Stream
+      .emits(pieces)
+      .flatMap(Stream.chunk)
+      .through(StreamFraming.events[Id]())
+      .compile
+      .toList
+
+  test("a double CRLF is a ping, wherever it falls between messages") {
+    val a = message("x")
+    assertEquals(
+      events(List(bytes("\r\n\r\n" + a + "\r\n\r\n"))).map(_.map {
+        case Frame.Ping       => "ping"
+        case Frame.Message(_) => "message"
+      }),
+      List(Right("ping"), Right("message"), Right("ping"))
+    )
+  }
+
+  test("a ping cut in pieces is still one ping") {
+    assertEquals(
+      events(List(bytes("\r"), bytes("\n\r"), bytes("\n"))),
+      List(Right(Frame.Ping))
+    )
+  }
+
+  test("a single CRLF, a pong, is not a ping") {
+    assertEquals(events(List(bytes("\r\n"))), Nil)
+  }
+
   test("the short form of Content-Length is understood") {
     val m = message("short", header = "l")
     assertEquals(frame(List(bytes(m))), List(Right(m)))

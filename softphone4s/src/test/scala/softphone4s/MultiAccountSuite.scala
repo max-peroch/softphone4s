@@ -293,7 +293,7 @@ class MultiAccountSuite extends CatsEffectSuite {
           |password = pw
           |realm = example.com
           |transport = tcp
-          |tcp { connect-timeout = 2 seconds, idle-timeout = 10 minutes }
+          |tcp { connect-timeout = 2 seconds, idle-timeout = 10 minutes, keep-alive { interval = 90 seconds, timeout = 5 seconds } }
           |additional-accounts = [
           |  { user = bob, password = pw2, realm = example.org, transport = udp }
           |]""".stripMargin
@@ -306,6 +306,10 @@ class MultiAccountSuite extends CatsEffectSuite {
     )
     assertEquals(parsed.tcp.connectTimeout, 2.seconds)
     assertEquals(parsed.tcp.idleTimeout, 10.minutes)
+    assertEquals(
+      parsed.tcp.keepAlive,
+      Some(softphone4s.transport.KeepAlive(90.seconds, 5.seconds))
+    )
   }
 
   test("an unknown transport in configuration is an error") {

@@ -311,6 +311,7 @@ account every call is taken. Two accounts cannot have the same user.
 | `transport`         | `udp`/`tcp`/`tls` | `udp`  | Transport of the default account                  |
 | `tcp.connect-timeout` | `Duration` | `5 seconds` | How long to wait for a TCP connection           |
 | `tcp.idle-timeout`  | `Duration`  | `5 minutes`  | A TCP connection with nothing sent or received for this long is closed |
+| `tcp.keep-alive.interval` / `timeout` | `Duration` | 2 minutes / 10 seconds (off unless set) | Ping a quiet TCP connection with a double CRLF (RFC 5626) and close it if nothing at all comes back within the timeout; pings from the other side are always answered with a pong |
 | `tcp.framing.max-header-bytes` / `max-body-bytes` | `Int` | 16 KiB / 1 MiB | Largest message a TCP connection may carry before it is dropped |
 | `tls.trust-store` / `tls.client-certificate` | `{ path, password, store-type }` | JVM trust / none | Key stores for the certificates we trust and the one we present (`store-type` is `PKCS12` or `JKS`) |
 | `nat.observed-address` | `use`/`ignore` | `use` | Advertise the address servers say they see us at (Contact, SDP) |

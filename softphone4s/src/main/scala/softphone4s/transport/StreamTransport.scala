@@ -61,6 +61,14 @@ object StreamTransport {
       serve: (Int, Accepted[F] => F[Unit]) => F[Unit]
   )
 
+  private val Ping: Chunk[Byte] =
+    Chunk.array(
+      "\r\n\r\n".getBytes(java.nio.charset.StandardCharsets.ISO_8859_1)
+    )
+
+  private val Pong: Chunk[Byte] =
+    Chunk.array("\r\n".getBytes(java.nio.charset.StandardCharsets.ISO_8859_1))
+
   /** An open connection, as the senders see it. */
   private final class Connection[F[_]](val write: Chunk[Byte] => F[Unit])
 
@@ -214,27 +222,77 @@ object StreamTransport {
         connected: Connected[F]
     ): F[Unit] =
       for {
-        lock    <- Semaphore[F](1)
-        touched <- Ref.of[F, FiniteDuration](Duration.Zero)
+        lock     <- Semaphore[F](1)
+        touched  <- Ref.of[F, FiniteDuration](Duration.Zero)
+        received <- Ref.of[F, FiniteDuration](Duration.Zero)
         touch = Async[F].monotonic.flatMap(touched.set)
         _ <- touch
-        connection = new Connection[F](bytes =>
-          lock.permit.surround(connected.socket.write(bytes)) <* touch
-        )
+        // Keep-alive traffic is written without counting as activity: a ping we
+        // send must not keep a connection that nobody answers alive.
+        plainWrite = (bytes: Chunk[Byte]) =>
+          lock.permit.surround(connected.socket.write(bytes))
+        connection = new Connection[F](bytes => plainWrite(bytes) <* touch)
         // Ready once established; a failure while getting there ends the
         // reading below, and is reported through `slot` by the handler.
         ready = connected.established >>
           slot.ready.complete(Right(connection)).void
         read = connected.socket.reads.chunks
-          .evalTap(_ => touch)
+          .evalTap(_ =>
+            Async[F].monotonic.flatMap(now =>
+              touched.set(now) >> received.set(now)
+            )
+          )
           .unchunks
-          .through(StreamFraming.frames[F](config.framing))
-          .evalMap(deliver(remote, slot, _))
+          .through(StreamFraming.events[F](config.framing))
+          .evalMap {
+            // A ping is answered with a pong (RFC 5626 §4.4.1).
+            case Right(Frame.Ping)           => plainWrite(Pong).as(true)
+            case Right(Frame.Message(bytes)) =>
+              deliver(remote, slot, Right(bytes))
+            case Left(error) => deliver(remote, slot, Left(error))
+          }
           .takeWhile(identity)
           .compile
           .drain
-        _ <- (read.race(slot.stop.get).race(idle(touched)), ready).parTupled
+        _ <- (
+          read
+            .race(slot.stop.get)
+            .race(idle(touched))
+            .race(keepAlive(plainWrite, touched, received)),
+          ready
+        ).parTupled
       } yield ()
+
+    /** Pings the connection whenever it has been quiet for the interval, and
+      * completes, which ends the connection, if nothing at all comes back
+      * within the timeout. Never completes when keep-alives are not configured.
+      */
+    private def keepAlive(
+        write: Chunk[Byte] => F[Unit],
+        touched: Ref[F, FiniteDuration],
+        received: Ref[F, FiniteDuration]
+    ): F[Unit] =
+      config.keepAlive.fold(Async[F].never[Unit]) { ka =>
+        def loop: F[Unit] =
+          Async[F].sleep(ka.interval) >>
+            (Async[F].monotonic, touched.get).mapN(_ - _).flatMap { quiet =>
+              if quiet < ka.interval then loop
+              else
+                for {
+                  sentAt <- Async[F].monotonic
+                  _      <- write(Ping)
+                  _      <- Async[F].sleep(ka.timeout)
+                  heard  <- received.get
+                  _      <-
+                    if heard >= sentAt then loop
+                    else
+                      logger.debug(Map("after" -> ka.timeout.toString))(
+                        "No answer to a keep-alive; closing the connection"
+                      )
+                } yield ()
+            }
+        loop
+      }
 
     /** Completes when nothing has crossed the connection for `idleTimeout`.
       */

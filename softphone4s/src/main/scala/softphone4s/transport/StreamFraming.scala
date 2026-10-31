@@ -16,7 +16,8 @@ object StreamFraming {
   private enum Step {
     case NeedMore
     case Skip(rest: Chunk[Byte])
-    case Frame(message: Chunk[Byte], rest: Chunk[Byte])
+    case Ping(rest: Chunk[Byte])
+    case Message(message: Chunk[Byte], rest: Chunk[Byte])
     case Failed(error: FramingError)
   }
 
@@ -24,15 +25,25 @@ object StreamFraming {
   private val Lf = '\n'.toByte
 
   /** Every complete message of the stream, or the error that ended it. A stream
-    * that ends in the middle of a message yields nothing for it.
+    * that ends in the middle of a message yields nothing for it. Keep-alive
+    * pings and pongs are skipped; see [[events]] for those.
     */
   def frames[F[_]](
       limits: FramingLimits = FramingLimits()
-  ): Pipe[F, Byte, Either[FramingError, Chunk[Byte]]] = {
+  ): Pipe[F, Byte, Either[FramingError, Chunk[Byte]]] =
+    _.through(events[F](limits)).collect {
+      case Right(Frame.Message(bytes)) => Right(bytes)
+      case Left(error)                 => Left(error)
+    }
+
+  /** As [[frames]], and the pings as well (a lone CRLF, a pong, is skipped). */
+  def events[F[_]](
+      limits: FramingLimits = FramingLimits()
+  ): Pipe[F, Byte, Either[FramingError, Frame]] = {
     def loop(
         in: Stream[F, Chunk[Byte]],
         buffer: Chunk[Byte]
-    ): Pull[F, Either[FramingError, Chunk[Byte]], Unit] = {
+    ): Pull[F, Either[FramingError, Frame], Unit] = {
       val (messages, rest, failure) = drain(buffer, limits)
       Pull.output(Chunk.from(messages.map(Right(_)))) >> (failure match {
         case Some(error) => Pull.output1(Left(error))
@@ -52,17 +63,19 @@ object StreamFraming {
   private def drain(
       buffer: Chunk[Byte],
       limits: FramingLimits
-  ): (Vector[Chunk[Byte]], Chunk[Byte], Option[FramingError]) = {
+  ): (Vector[Frame], Chunk[Byte], Option[FramingError]) = {
     @tailrec
     def go(
         remaining: Chunk[Byte],
-        acc: Vector[Chunk[Byte]]
-    ): (Vector[Chunk[Byte]], Chunk[Byte], Option[FramingError]) =
+        acc: Vector[Frame]
+    ): (Vector[Frame], Chunk[Byte], Option[FramingError]) =
       next(remaining, limits) match {
-        case Step.NeedMore             => (acc, remaining, None)
-        case Step.Skip(rest)           => go(rest, acc)
-        case Step.Frame(message, rest) => go(rest, acc :+ message)
-        case Step.Failed(error)        => (acc, remaining, Some(error))
+        case Step.NeedMore               => (acc, remaining, None)
+        case Step.Skip(rest)             => go(rest, acc)
+        case Step.Ping(rest)             => go(rest, acc :+ Frame.Ping)
+        case Step.Message(message, rest) =>
+          go(rest, acc :+ Frame.Message(message))
+        case Step.Failed(error) => (acc, remaining, Some(error))
       }
     go(buffer, Vector.empty)
   }
@@ -70,13 +83,7 @@ object StreamFraming {
   private def next(buffer: Chunk[Byte], limits: FramingLimits): Step = {
     val bytes = buffer.toArray
     if bytes.isEmpty then Step.NeedMore
-    else if bytes(0) == Cr || bytes(0) == Lf then
-      // A keep-alive: drop the line ending.
-      Step.Skip(
-        buffer.drop(if bytes.length > 1 && bytes(0) == Cr && bytes(1) == Lf then
-          2
-        else 1)
-      )
+    else if bytes(0) == Cr || bytes(0) == Lf then blankLines(buffer, bytes)
     else
       endOfHeaders(bytes) match {
         case -1 =>
@@ -96,10 +103,27 @@ object StreamFraming {
               else if bytes.length - end < length then Step.NeedMore
               else {
                 val total = end + length.toInt
-                Step.Frame(buffer.take(total), buffer.drop(total))
+                Step.Message(buffer.take(total), buffer.drop(total))
               }
           }
       }
+  }
+
+  /** Blank lines between messages (RFC 5626 §4.4.1): a double CRLF is a ping, a
+    * single CRLF a pong or nothing at all. What looks like the start of a ping
+    * but is not yet four bytes long has to wait for the rest.
+    */
+  private def blankLines(buffer: Chunk[Byte], bytes: Array[Byte]): Step = {
+    val ping = Array(Cr, Lf, Cr, Lf)
+    if bytes.length >= 4 && bytes.take(4).sameElements(ping) then
+      Step.Ping(buffer.drop(4))
+    else if bytes.length < 4 && ping.startsWith(bytes) then Step.NeedMore
+    else
+      Step.Skip(
+        buffer.drop(
+          if bytes.length > 1 && bytes(0) == Cr && bytes(1) == Lf then 2 else 1
+        )
+      )
   }
 
   /** The index just past the first blank line, or -1. */
