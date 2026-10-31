@@ -370,6 +370,30 @@ class MultiAccountSuite extends CatsEffectSuite {
     assert(parsed.isLeft)
   }
 
+  test("the jitter buffer is read from configuration, each key optional") {
+    def load(extra: String) =
+      ConfigSource
+        .string(s"user = alice\npassword = pw\nrealm = example.com\n$extra")
+        .load[SoftphoneConfig]
+    val both = load("jitter-buffer { depth = 5, capacity = 20 }")
+      .fold(failures => fail(failures.prettyPrint()), identity)
+    assertEquals((both.jitterBuffer.depth, both.jitterBuffer.capacity), (5, 20))
+    val one = load("jitter-buffer { depth = 2 }")
+      .fold(failures => fail(failures.prettyPrint()), identity)
+    assertEquals((one.jitterBuffer.depth, one.jitterBuffer.capacity), (2, 12))
+    val none = load("").fold(failures => fail(failures.prettyPrint()), identity)
+    assertEquals(none.jitterBuffer, softphone4s.media.JitterConfig.Default)
+  }
+
+  test("a jitter buffer that cannot work is a configuration error") {
+    def load(extra: String) =
+      ConfigSource
+        .string(s"user = alice\npassword = pw\nrealm = example.com\n$extra")
+        .load[SoftphoneConfig]
+    assert(load("jitter-buffer { depth = 0 }").isLeft)
+    assert(load("jitter-buffer { depth = 8, capacity = 4 }").isLeft)
+  }
+
   test("a STUN server is read from configuration") {
     val parsed = ConfigSource
       .string(

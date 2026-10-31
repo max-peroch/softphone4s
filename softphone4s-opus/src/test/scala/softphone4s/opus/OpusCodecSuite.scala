@@ -10,7 +10,7 @@ import fs2.{Chunk, Stream}
 import munit.CatsEffectSuite
 import softphone4s.codec.RtpCodec
 import softphone4s.config.{CodecChoice, RtpLatching}
-import softphone4s.media.{AudioCodec, AudioCodecs}
+import softphone4s.media.{AudioCodec, AudioCodecs, JitterConfig}
 import softphone4s.model.{MediaDirection, PayloadType}
 import softphone4s.sdp.{
   Capabilities,
@@ -336,7 +336,13 @@ class OpusCodecSuite extends CatsEffectSuite {
         )
         for {
           media <- MediaSession
-            .create[IO](ip"127.0.0.1", ours.port, codecs, RtpLatching.Ignore)
+            .create[IO](
+              ip"127.0.0.1",
+              ours.port,
+              codecs,
+              RtpLatching.Ignore,
+              JitterConfig.Default
+            )
           _ <- media.start(plan, supervisor, _ => IO.unit)
           _ <- IO.sleep(500.millis)
           _ <- Stream

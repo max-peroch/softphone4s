@@ -10,7 +10,7 @@ import fs2.io.net.{Datagram, DatagramSocket, Network}
 import munit.CatsEffectSuite
 import softphone4s.codec.RtpCodec
 import softphone4s.config.RtpLatching
-import softphone4s.media.AudioCodecs
+import softphone4s.media.{AudioCodecs, JitterConfig}
 import softphone4s.model.MediaDirection
 import softphone4s.sdp.{Codec, MediaPlan}
 import softphone4s.transport.{RawPeer, RtpLatch}
@@ -62,7 +62,8 @@ class MediaLatchingSuite extends CatsEffectSuite {
             loopback,
             ours,
             AudioCodecs.Default,
-            latching
+            latching,
+            JitterConfig.Default
           )
           _ <- media.start(
             MediaPlan(

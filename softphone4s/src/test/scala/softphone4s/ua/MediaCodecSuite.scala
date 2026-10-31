@@ -10,7 +10,7 @@ import fs2.{Chunk, Stream}
 import munit.CatsEffectSuite
 import softphone4s.codec.{G711Codec, RtpCodec}
 import softphone4s.config.RtpLatching
-import softphone4s.media.{AudioCodecs, HalfByteCodec}
+import softphone4s.media.{AudioCodecs, HalfByteCodec, JitterConfig}
 import softphone4s.model.{
   DtmfDigit,
   MediaDirection,
@@ -58,7 +58,8 @@ class MediaCodecSuite extends CatsEffectSuite {
           loopback,
           ours.port,
           codecs,
-          RtpLatching.Ignore
+          RtpLatching.Ignore,
+          JitterConfig.Default
         )
       )
     } yield (media, ours, supervisor)
@@ -380,13 +381,14 @@ class MediaCodecSuite extends CatsEffectSuite {
       timestamp: Long,
       digit: DtmfDigit,
       end: Boolean,
-      duration: Int = 800
+      duration: Int = 800,
+      ssrc: Long = 9L
   ): Chunk[Byte] =
     RtpCodec.encode(
       pt(101),
       sequence,
       timestamp,
-      9L,
+      ssrc,
       SoftphoneEvent.encode(SoftphoneEvent(digit.code, end, 10, duration)),
       marker = false
     )
@@ -786,6 +788,157 @@ class MediaCodecSuite extends CatsEffectSuite {
           assert(failed.isLeft)
           assertEquals(started, MediaStart.Started)
         }
+    }
+  }
+
+  // ---- The jitter buffer in the media -------------------------------------------------
+
+  /** A packet of 160 samples that all have the value of μ-law code `code`. */
+  private def frameOfCode(
+      ours: SocketAddress[IpAddress],
+      sequence: Int,
+      code: Int
+  ) =
+    Datagram(
+      ours,
+      RtpCodec.encode(
+        pt(0),
+        sequence,
+        sequence * 160L,
+        7L,
+        Chunk.array(Array.fill[Byte](160)(code.toByte)),
+        marker = false
+      )
+    )
+
+  private def decoded(code: Int): Int = G711Codec.decode(code.toByte).toInt
+
+  /** The first sample of each 20 ms frame of `pcm`. */
+  private def firstSamples(pcm: Chunk[Byte]): List[Int] =
+    pcm.toArray
+      .grouped(320)
+      .map(f => ((f(1) << 8) | (f(0) & 0xff)).toShort.toInt)
+      .toList
+
+  private val full = noisePlan(comfort = None)
+
+  test("packets that arrive out of order are played in order") {
+    startedOn(full) { (media, ours, peer) =>
+      for {
+        _ <- List(1 -> 0x80, 3 -> 0x90, 2 -> 0xa0, 4 -> 0xb0).traverse_(
+          (n, c) => peer.write(frameOfCode(ours, n, c))
+        )
+        heard <- media.source.take(320 * 4).compile.to(Chunk).timeout(5.seconds)
+      } yield assertEquals(
+        firstSamples(heard),
+        List(0x80, 0xa0, 0x90, 0xb0).map(decoded)
+      )
+    }
+  }
+
+  test("a packet that is lost is concealed with the one before it, quieter") {
+    startedOn(full) { (media, ours, peer) =>
+      for {
+        _ <- List(1 -> 0x80, 2 -> 0x90, 4 -> 0xb0, 5 -> 0xc0).traverse_(
+          (n, c) => peer.write(frameOfCode(ours, n, c))
+        )
+        heard <- media.source.take(320 * 5).compile.to(Chunk).timeout(5.seconds)
+        stats <- media.jitterStats
+      } yield {
+        val got = firstSamples(heard)
+        assertEquals(got.take(2), List(0x80, 0x90).map(decoded))
+        assertEquals(got(2), decoded(0x90) * 2 / 3)
+        assertEquals(got.drop(3), List(0xb0, 0xc0).map(decoded))
+        assertEquals(stats.lost, 1L)
+      }
+    }
+  }
+
+  test(
+    "a duplicate and a packet that comes too late are counted and not played"
+  ) {
+    startedOn(full) { (media, ours, peer) =>
+      for {
+        _ <- List(1 -> 0x80, 2 -> 0x90, 2 -> 0x90, 4 -> 0xb0, 5 -> 0xc0)
+          .traverse_((n, c) => peer.write(frameOfCode(ours, n, c)))
+        _     <- media.source.take(320 * 5).compile.drain.timeout(5.seconds)
+        _     <- peer.write(frameOfCode(ours, 3, 0xa0)) // after its turn
+        _     <- IO.sleep(200.millis)
+        stats <- media.jitterStats
+      } yield {
+        assertEquals(stats.duplicates, 1L)
+        assertEquals(stats.late, 1L)
+        assertEquals(stats.lost, 1L)
+        assertEquals(stats.played, 4L)
+      }
+    }
+  }
+
+  test(
+    "a digit in the middle of the speech is heard at once, and its packets are not taken for loss"
+  ) {
+    val plan = (address: SocketAddress[IpAddress]) =>
+      MediaPlan(
+        address,
+        Codec.Pcmu,
+        pt(0),
+        Some(pt(101)),
+        MediaDirection.SendRecv,
+        MediaDirection.SendRecv
+      )
+    startedOn(plan) { (media, ours, peer) =>
+      val digit = (n: Int) =>
+        Datagram(
+          ours,
+          event(
+            n,
+            640L,
+            DtmfDigit.D8,
+            end = n >= 3,
+            duration = n * 160,
+            ssrc = 7L
+          )
+        )
+      for {
+        _     <- peer.write(frameOfCode(ours, 1, 0x80))
+        _     <- peer.write(digit(2))
+        _     <- peer.write(digit(3))
+        _     <- peer.write(frameOfCode(ours, 4, 0x90))
+        _     <- peer.write(frameOfCode(ours, 5, 0xa0))
+        heard <- media.source.take(320 * 2).compile.to(Chunk).timeout(5.seconds)
+        _     <- IO.sleep(200.millis)
+        stats <- media.jitterStats
+      } yield {
+        assertEquals(stats.lost, 0L)
+        assertEquals(stats.received, 5L)
+        // The speech either side of the digit.
+        assertEquals(firstSamples(heard), List(0x80, 0x90).map(decoded))
+      }
+    }
+  }
+
+  test(
+    "speech that was queued before the comfort noise is played first, and the noise follows it"
+  ) {
+    startedOn(noisePlan()) { (media, ours, peer) =>
+      for {
+        _ <- List(1, 2, 3).traverse_(n =>
+          peer.write(frameOfCode(ours, n, 0x80))
+        )
+        _     <- peer.write(noisePacket(ours, 4))
+        heard <- media.source.take(320 * 8).compile.to(Chunk).timeout(5.seconds)
+      } yield {
+        val frames = heard.toArray.grouped(320).map(f => Chunk.array(f)).toList
+        // The three frames of speech, then frames of noise, none of speech.
+        assertEquals(
+          frames.take(3).map(f => firstSamples(f).head),
+          List.fill(3)(decoded(0x80))
+        )
+        assert(
+          frames.drop(3).forall(f => loudness(f) > 100 && loudness(f) < 700),
+          frames.drop(3).map(loudness).toString
+        )
+      }
     }
   }
 }

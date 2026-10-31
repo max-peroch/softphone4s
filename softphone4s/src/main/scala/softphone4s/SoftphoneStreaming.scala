@@ -391,7 +391,8 @@ class SoftphoneStreaming[F[_]: Async: Network] private (
           first.endpoint.bindAddress,
           first.endpoint.rtpPort,
           codecs,
-          config.nat.rtpLatching
+          config.nat.rtpLatching,
+          config.jitterBuffer
         )
       )
       call <- Resource.eval(
@@ -549,7 +550,8 @@ class SoftphoneStreaming[F[_]: Async: Network] private (
             endpoint.bindAddress,
             endpoint.rtpPort,
             codecs,
-            config.nat.rtpLatching
+            config.nat.rtpLatching,
+            config.jitterBuffer
           )
       )
       call <- Resource.eval(

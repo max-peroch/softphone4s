@@ -15,7 +15,7 @@ import softphone4s.SipLiterals.*
 import softphone4s.codec.RtpCodec
 import softphone4s.config.{RtpLatching, SoftphoneConfig}
 import softphone4s.fsm.CallTimer
-import softphone4s.media.AudioCodecs
+import softphone4s.media.{AudioCodecs, JitterConfig}
 import softphone4s.model.*
 import softphone4s.runtime.{Entropy, Timers}
 import softphone4s.transaction.*
@@ -83,7 +83,8 @@ class OutboundCallSuite extends CatsEffectSuite {
           localIp,
           rtp,
           AudioCodecs.Default,
-          RtpLatching.Follow
+          RtpLatching.Follow,
+          JitterConfig.Default
         )
       )
       input <- Resource.eval(Queue.unbounded[IO, DialogInput[IO]])

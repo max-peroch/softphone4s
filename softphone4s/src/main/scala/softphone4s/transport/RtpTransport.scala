@@ -6,19 +6,21 @@ import com.comcast.ip4s.*
 import fs2.io.net.DatagramSocket
 import fs2.{Chunk, Stream}
 import softphone4s.codec.RtpCodec
+import softphone4s.media.JitterPacket
 import softphone4s.model.{DtmfDigit, PayloadType, SoftphoneEvent}
 
 object RtpTransport {
 
-  /** The payloads of the audio packets arriving on `socket`, a chunk for each
-    * packet: those of payload type `audioType`, and the telephone events (RFC
-    * 4733) on `eventType` and the comfort noise (RFC 3389) on `comfortType`, if
-    * there are any. `heardFrom` is told where each of them came from, and its
-    * SSRC; `onNoise` is given the payload of each comfort noise packet, which
-    * makes no audio of its own.
+  /** The packets of a stream arriving on `socket`: those of payload type
+    * `audioType`, the telephone events (RFC 4733) on `eventType` and the
+    * comfort noise (RFC 3389) on `comfortType`, if there are any. They share
+    * one run of sequence numbers, so all three go on to the jitter buffer,
+    * which would otherwise take the ones that are not audio for packets lost.
+    * `heardFrom` is told where each came from, and its SSRC.
     *
-    * DTMF end-bit packets are deduped by (timestamp, event) and delivered via
-    * `onDtmf`; they produce no payload in the returned stream.
+    * A telephone event is also acted on as it arrives, not when its turn comes
+    * to be played: DTMF end-bit packets are deduped by (timestamp, event) and
+    * delivered via `onDtmf`.
     */
   def receiveBytes[F[_]: Async](
       socket: DatagramSocket[F],
@@ -27,27 +29,29 @@ object RtpTransport {
       heardFrom: (SocketAddress[IpAddress], Long) => F[Unit],
       audioType: PayloadType,
       eventType: Option[PayloadType],
-      comfortType: Option[PayloadType],
-      onNoise: Chunk[Byte] => F[Unit]
-  ): Stream[F, Chunk[Byte]] =
+      comfortType: Option[PayloadType]
+  ): Stream[F, JitterPacket] =
     socket.reads.flatMap { datagram =>
       RtpCodec.decode(datagram.bytes) match {
         case None                    => Stream.empty
         case Some((header, payload)) =>
-          val pt = header.payloadType
-          if pt == audioType then
-            Stream.exec(heardFrom(datagram.remote, header.ssrc)) ++
-              Stream.emit(payload)
+          val pt     = header.payloadType
+          val packet = JitterPacket(
+            header.sequenceNumber,
+            header.timestamp,
+            header.ssrc,
+            header.marker,
+            pt,
+            payload
+          )
+          val heard = Stream.exec(heardFrom(datagram.remote, header.ssrc))
+          if pt == audioType || comfortType.contains(pt) then
+            heard ++ Stream.emit(packet)
           else if eventType.contains(pt) then
-            Stream.exec(heardFrom(datagram.remote, header.ssrc)) ++
-              Stream
-                .eval(
-                  handleSoftphoneEvent(header, payload, lastDtmfKey, onDtmf)
-                )
-                .drain
-          else if comfortType.contains(pt) then
-            Stream.exec(heardFrom(datagram.remote, header.ssrc)) ++
-              Stream.exec(onNoise(payload))
+            heard ++
+              Stream.exec(
+                handleSoftphoneEvent(header, payload, lastDtmfKey, onDtmf)
+              ) ++ Stream.emit(packet)
           else Stream.empty
       }
     }

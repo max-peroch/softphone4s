@@ -5,7 +5,7 @@ import com.comcast.ip4s.*
 import pureconfig.*
 import pureconfig.generic.semiauto.*
 import softphone4s.dns.DnsConfig
-import softphone4s.media.AudioCodecs
+import softphone4s.media.{AudioCodecs, JitterConfig}
 import softphone4s.model.TransportProtocol
 import softphone4s.sdp.Capabilities
 import softphone4s.transport.{StreamConfig, TlsConfig}
@@ -40,7 +40,8 @@ final case class SoftphoneConfig(
     tlsPort: Port = port"5061",
     maxUdpMessage: Int = 1300,
     nat: NatConfig = NatConfig(),
-    codecs: List[CodecChoice] = List(CodecChoice.Pcmu, CodecChoice.Pcma)
+    codecs: List[CodecChoice] = List(CodecChoice.Pcmu, CodecChoice.Pcma),
+    jitterBuffer: JitterConfig = JitterConfig.Default
 ) {
 
   /** What our offers and answers are made from: the codecs chosen, in order. */

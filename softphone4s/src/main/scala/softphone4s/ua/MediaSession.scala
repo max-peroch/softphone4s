@@ -9,7 +9,16 @@ import fs2.concurrent.Channel
 import fs2.{Chunk, Pipe, Stream}
 import fs2.io.net.Network
 import softphone4s.config.RtpLatching
-import softphone4s.media.{AudioCodecs, ComfortNoise}
+import softphone4s.media.{
+  AudioCodec,
+  AudioCodecs,
+  ComfortNoise,
+  Concealment,
+  JitterConfig,
+  JitterPlayout,
+  JitterStats,
+  Playout
+}
 import softphone4s.model.{DtmfDigit, MediaDirection, SoftphoneError}
 import softphone4s.sdp.{Capabilities, Codec, MediaPlan}
 
@@ -29,7 +38,10 @@ private[softphone4s] class MediaSession[F[_]: Async: Network] private (
     latching: RtpLatching,
     latch: Ref[F, RtpLatch],
     comfort: Ref[F, Option[ComfortNoise.Noise]],
-    remoteSends: Ref[F, Boolean]
+    remoteSends: Ref[F, Boolean],
+    jitterConfig: JitterConfig,
+    concealment: Ref[F, Concealment],
+    stats: Ref[F, JitterStats]
 ) {
 
   val source: Stream[F, Byte] =
@@ -84,6 +96,44 @@ private[softphone4s] class MediaSession[F[_]: Async: Network] private (
           )
       }
     )
+
+  /** What to play for one thing the jitter buffer gave. */
+  private def play(
+      plan: MediaPlan,
+      decode: AudioCodec.Session,
+      frameBytes: Int,
+      out: Playout
+  ): F[Unit] = {
+    val samples = frameBytes / 2
+    // Neither speech nor a loss to hide: noise if some is wanted.
+    val quiet = concealment.set(Concealment.Empty) >> playNoise(samples)
+    out match {
+      case Playout.Frame(packet) if packet.payloadType == plan.payloadType =>
+        val pcm = Chunk.array(decode(packet.payload.toArray))
+        // Speech again: the noise that stood in for it ends.
+        comfort.set(None) >> concealment.update(_.heard(pcm)) >>
+          audioChannel.send(pcm).void.whenA(pcm.nonEmpty)
+      case Playout.Frame(packet)
+          if plan.comfortNoiseType.contains(packet.payloadType) =>
+        noiseHeard(packet.payload) >> quiet
+      // A telephone event: its digit was acted on when it arrived.
+      case Playout.Frame(_) => quiet
+      case Playout.Lost     =>
+        comfort.get.flatMap {
+          case Some(_) => quiet
+          case None    =>
+            concealment
+              .modify(_.fill(frameBytes))
+              .flatMap(audioChannel.send(_).void)
+        }
+      case Playout.Waiting => quiet
+    }
+  }
+
+  /** How the jitter buffer stands: what it has received, played, concealed and
+    * dropped.
+    */
+  def jitterStats: F[JitterStats] = stats.get
 
   /** News of the other side's background noise: its level (RFC 3389), from now
     * on until speech comes or it is stale.
@@ -181,32 +231,30 @@ private[softphone4s] class MediaSession[F[_]: Async: Network] private (
               SocketAddress(bindAddress, localRtpPort)
             )
             .use { socket =>
+              // What arrives goes through the jitter buffer, and every 20 ms
+              // what it gives is played: the packet's audio, a concealment for
+              // one that is lost, or noise or nothing while there is nothing.
               val receiveF =
-                RtpTransport
-                  .receiveBytes(
-                    socket,
-                    lastDtmfKey,
-                    onDtmf,
-                    heardFrom,
-                    plan.payloadType,
-                    plan.telephoneEventType,
-                    plan.comfortNoiseType,
-                    noiseHeard
-                  )
-                  // Speech again: the noise that stood in for it ends.
-                  .evalTap(_ => comfort.set(None))
-                  .through(codec.decoder[F])
-                  .chunks
-                  .evalMap(audioChannel.send(_).void)
-                  .compile
-                  .drain
-
-              // While the other side is quiet and has told us how, a frame of
-              // noise for every 20 ms.
-              val noiseF =
                 Stream
-                  .awakeEvery[F](MediaSession.FramePeriod)
-                  .evalMap(_ => playNoise(codec.pcmPacketBytes / 2))
+                  .resource(codec.decoderSession[F])
+                  .flatMap { decode =>
+                    JitterPlayout(
+                      jitterConfig,
+                      MediaSession.FramePeriod,
+                      RtpTransport.receiveBytes(
+                        socket,
+                        lastDtmfKey,
+                        onDtmf,
+                        heardFrom,
+                        plan.payloadType,
+                        plan.telephoneEventType,
+                        plan.comfortNoiseType
+                      )
+                    ).evalMap((out, stats) =>
+                      this.stats.set(stats) >>
+                        play(plan, decode, codec.pcmPacketBytes, out)
+                    )
+                  }
                   .compile
                   .drain
 
@@ -223,7 +271,7 @@ private[softphone4s] class MediaSession[F[_]: Async: Network] private (
                     _.through(codec.encoder[F]).through(rtp.audio)
                   sender.complete(rtp) >>
                     sendPipeReady.complete(pcmToRtp) >>
-                    receiveF.both(noiseF).void.race(mediaStop.get.void).void
+                    receiveF.race(mediaStop.get.void).void
                 }
             } >> audioChannel.close.void
         }
@@ -251,7 +299,8 @@ private[softphone4s] object MediaSession {
       bindAddress: IpAddress,
       localRtpPort: Port,
       codecs: AudioCodecs,
-      latching: RtpLatching
+      latching: RtpLatching,
+      jitter: JitterConfig
   ): F[MediaSession[F]] =
     for {
       audioChannel  <- Channel.bounded[F, Chunk[Byte]](64)
@@ -263,6 +312,8 @@ private[softphone4s] object MediaSession {
       latch         <- Ref[F].of(RtpLatch.empty)
       comfort       <- Ref[F].of(Option.empty[ComfortNoise.Noise])
       remoteSends   <- Ref[F].of(true)
+      concealment   <- Ref[F].of(Concealment.Empty)
+      stats         <- Ref[F].of(JitterStats())
     } yield new MediaSession(
       bindAddress,
       localRtpPort,
@@ -276,6 +327,9 @@ private[softphone4s] object MediaSession {
       latching,
       latch,
       comfort,
-      remoteSends
+      remoteSends,
+      jitter,
+      concealment,
+      stats
     )
 }
