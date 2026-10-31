@@ -79,10 +79,8 @@ object OpusCodec {
     val description: Codec = OpusCodec.description(settings)
     val pcmRate: Int       = settings.sampleRate.hz
 
-    def encoder[F[_]: Sync]: Pipe[F, Byte, Chunk[Byte]] = {
-      val pipe = AudioCodec.encoding[F](pcmPacketBytes, encoding[F])
-      in => pipe(in).filter(_.nonEmpty)
-    }
+    def encoder[F[_]: Sync]: Pipe[F, Byte, Chunk[Byte]] =
+      AudioCodec.encoding[F](pcmPacketBytes, encoding[F])
 
     def decoder[F[_]: Sync]: Pipe[F, Chunk[Byte], Byte] =
       AudioCodec.decoding(decoding[F])

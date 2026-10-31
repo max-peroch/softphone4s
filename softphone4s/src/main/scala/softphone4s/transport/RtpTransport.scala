@@ -3,8 +3,8 @@ package softphone4s.transport
 import cats.effect.{Async, Ref}
 import cats.syntax.all.*
 import com.comcast.ip4s.*
-import fs2.io.net.{Datagram, DatagramSocket}
-import fs2.{Chunk, Pipe, Stream}
+import fs2.io.net.DatagramSocket
+import fs2.{Chunk, Stream}
 import softphone4s.codec.RtpCodec
 import softphone4s.model.{DtmfDigit, SoftphoneEvent}
 
@@ -44,41 +44,6 @@ object RtpTransport {
           else Stream.empty
       }
     }
-
-  /** Packs payloads into RTP packets of payload type `payloadType`, one payload
-    * to a packet, each `timestampStep` after the one before, and writes them to
-    * `socket`, to wherever `target` says at the time: it changes when the
-    * remote party moves its media, and is `None` while the call is on hold,
-    * when packets are dropped (their sequence numbers are skipped, as for
-    * silence).
-    */
-  def sendPipe[F[_]: Async](
-      socket: DatagramSocket[F],
-      target: F[Option[SocketAddress[IpAddress]]],
-      timestampStep: Int,
-      payloadType: Int
-  ): Pipe[F, Chunk[Byte], Unit] = upstream =>
-    Stream
-      .eval(Async[F].delay(scala.util.Random.nextLong() & 0xffffffffL))
-      .flatMap { ssrc =>
-        upstream.zipWithIndex
-          .evalMap { case (chunk, packetIndex) =>
-            target.map(_.map { remoteAddr =>
-              Datagram(
-                remoteAddr,
-                RtpCodec.encode(
-                  payloadType = payloadType,
-                  sequenceNumber = (packetIndex & 0xffff).toInt,
-                  timestamp = (packetIndex * timestampStep) & 0xffffffffL,
-                  ssrc = ssrc,
-                  payload = chunk,
-                  marker = packetIndex == 0
-                )
-              )
-            })
-          }
-          .evalMap(_.traverse_(socket.write))
-      }
 
   private def handleSoftphoneEvent[F[_]: Async](
       header: RtpCodec.RtpHeader,

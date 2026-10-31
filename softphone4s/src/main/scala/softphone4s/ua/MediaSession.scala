@@ -12,7 +12,9 @@ import softphone4s.config.RtpLatching
 import softphone4s.media.AudioCodecs
 import softphone4s.model.{DtmfDigit, MediaDirection, SoftphoneError}
 import softphone4s.sdp.{Capabilities, Codec, MediaPlan}
-import softphone4s.transport.{RtpLatch, RtpTransport}
+
+import scala.concurrent.duration.FiniteDuration
+import softphone4s.transport.{RtpLatch, RtpSender, RtpTransport}
 
 private[softphone4s] class MediaSession[F[_]: Async: Network] private (
     bindAddress: IpAddress,
@@ -20,6 +22,7 @@ private[softphone4s] class MediaSession[F[_]: Async: Network] private (
     codecs: AudioCodecs,
     audioChannel: Channel[F, Chunk[Byte]],
     sendPipeReady: Deferred[F, Pipe[F, Byte, Unit]],
+    sender: Deferred[F, RtpSender[F]],
     mediaStop: Deferred[F, Unit],
     target: Ref[F, Option[SocketAddress[IpAddress]]],
     agreed: Ref[F, Option[MediaPlan]],
@@ -129,23 +132,34 @@ private[softphone4s] class MediaSession[F[_]: Async: Network] private (
                   .compile
                   .drain
 
-              val pcmToRtp: Pipe[F, Byte, Unit] =
-                _.through(codec.encoder[F])
-                  .through(
-                    RtpTransport.sendPipe(
-                      socket,
-                      target.get,
-                      codec.timestampStep,
-                      plan.payloadType
-                    )
-                  )
-
-              sendPipeReady.complete(pcmToRtp) >>
-                receiveF.race(mediaStop.get.void).void
+              RtpSender
+                .make(
+                  socket,
+                  target.get,
+                  plan.payloadType,
+                  plan.telephoneEventType,
+                  codec.timestampStep
+                )
+                .flatMap { rtp =>
+                  val pcmToRtp: Pipe[F, Byte, Unit] =
+                    _.through(codec.encoder[F]).through(rtp.audio)
+                  sender.complete(rtp) >>
+                    sendPipeReady.complete(pcmToRtp) >>
+                    receiveF.race(mediaStop.get.void).void
+                }
             } >> audioChannel.close.void
         }
       )
       .void
+
+  /** Sends `digit` in the media stream as telephone events (RFC 4733), taking
+    * `duration`. False, and nothing sent, if media is not running, the other
+    * side did not agree to receive them, or the call is on hold.
+    */
+  def sendDtmf(digit: DtmfDigit, duration: FiniteDuration): F[Boolean] =
+    sender.tryGet.flatMap(
+      _.fold(Async[F].pure(false))(_.telephoneEvent(digit, duration))
+    )
 
   def stop(): F[Unit] = mediaStop.complete(()).void
 }
@@ -160,6 +174,7 @@ private[softphone4s] object MediaSession {
     for {
       audioChannel  <- Channel.bounded[F, Chunk[Byte]](64)
       sendPipeReady <- Deferred[F, Pipe[F, Byte, Unit]]
+      sender        <- Deferred[F, RtpSender[F]]
       mediaStop     <- Deferred[F, Unit]
       target        <- Ref[F].of(Option.empty[SocketAddress[IpAddress]])
       agreed        <- Ref[F].of(Option.empty[MediaPlan])
@@ -170,6 +185,7 @@ private[softphone4s] object MediaSession {
       codecs,
       audioChannel,
       sendPipeReady,
+      sender,
       mediaStop,
       target,
       agreed,

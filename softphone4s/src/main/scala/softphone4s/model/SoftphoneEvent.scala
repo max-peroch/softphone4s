@@ -19,6 +19,17 @@ object SoftphoneEvent {
 
   private val MinPayloadSize = 4
 
+  /** The four bytes of the payload. */
+  def encode(event: SoftphoneEvent): Chunk[Byte] =
+    Chunk.array(
+      Array[Byte](
+        event.event.toByte,
+        ((if event.endBit then 0x80 else 0) | (event.volume & 0x3f)).toByte,
+        (event.duration >> 8).toByte,
+        event.duration.toByte
+      )
+    )
+
   def decode(payload: Chunk[Byte]): Option[SoftphoneEvent] =
     if payload.size < MinPayloadSize then None
     else {

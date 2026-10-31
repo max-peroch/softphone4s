@@ -1,7 +1,8 @@
 package softphone4s.ua
 
 import cats.effect.std.Supervisor
-import cats.effect.{IO, Resource}
+import cats.effect.{IO, Ref, Resource}
+import cats.syntax.all.*
 import com.comcast.ip4s.*
 import fs2.io.net.{Datagram, DatagramSocket, Network}
 import fs2.{Chunk, Stream}
@@ -9,7 +10,7 @@ import munit.CatsEffectSuite
 import softphone4s.codec.{G711Codec, RtpCodec}
 import softphone4s.config.RtpLatching
 import softphone4s.media.{AudioCodecs, HalfByteCodec}
-import softphone4s.model.MediaDirection
+import softphone4s.model.{DtmfDigit, MediaDirection, SoftphoneEvent}
 import softphone4s.sdp.{Capabilities, Codec, MediaPlan}
 import softphone4s.transport.RawPeer
 
@@ -265,6 +266,211 @@ class MediaCodecSuite extends CatsEffectSuite {
           List.fill(160)(List[Byte](0, 7)).flatten
         )
       }
+    }
+  }
+
+  /** A codec that fails to make its second packet, as one can. */
+  private object DropsTheSecond extends softphone4s.media.AudioCodec {
+    val token: String      = "x-drops"
+    val description: Codec = Codec("x-drops", 8000, 1, None, None)
+    val pcmRate: Int       = 8000
+
+    def encoder[F[_]: cats.effect.Sync]: fs2.Pipe[F, Byte, Chunk[Byte]] =
+      softphone4s.media.AudioCodec.encoding(
+        pcmPacketBytes,
+        softphone4s.media.AudioCodec.stateful {
+          var seen = 0
+          pcm => {
+            seen += 1
+            if seen == 2 then Array.emptyByteArray else pcm.take(160)
+          }
+        }
+      )
+
+    def decoder[F[_]: cats.effect.Sync]: fs2.Pipe[F, Chunk[Byte], Byte] =
+      softphone4s.media.AudioCodec.decoding(
+        softphone4s.media.AudioCodec.stateless(payload => payload)
+      )
+  }
+
+  test(
+    "a packet the codec could not make leaves a gap in time, not a shorter timeline"
+  ) {
+    val codecs = AudioCodecs
+      .resolve(
+        cats.data.NonEmptyList
+          .one(softphone4s.config.CodecChoice.Named("x-drops")),
+        List(DropsTheSecond)
+      )
+      .fold(e => fail(e.getMessage), identity)
+    withPeer(DropsTheSecond.description, 96, codecs) { (media, _, peer) =>
+      for {
+        _ <- Stream
+          .chunk(Chunk.array(new Array[Byte](320 * 3)))
+          .through(media.sink)
+          .compile
+          .drain
+          .start
+        packets <- peer.reads.take(2).compile.toList.timeout(5.seconds)
+      } yield {
+        val decoded = packets.map(d => RtpCodec.decode(d.bytes).get._1)
+        // The first and the third of three: the second is missing and its 20 ms
+        // are not. Sequence numbers count packets sent, so they do not skip;
+        // the marker says that there was a gap.
+        assertEquals(decoded.map(_.timestamp), List(0L, 320L))
+        assertEquals(decoded.map(_.sequenceNumber), List(0, 1))
+        assertEquals(decoded.map(_.marker), List(true, true))
+      }
+    }
+  }
+
+  // ---- Digits, both ways --------------------------------------------------------------
+
+  /** A session started with telephone events on 101, handed with its RTP
+    * address, a socket that plays the other side, and the digits it has heard.
+    */
+  private def hearing[A](
+      use: (
+          MediaSession[IO],
+          SocketAddress[IpAddress],
+          DatagramSocket[IO],
+          IO[List[DtmfDigit]]
+      ) => IO[A]
+  ): IO[A] =
+    bound.use { (peer, peerAddress) =>
+      session(AudioCodecs.Default).use { (media, ours, supervisor) =>
+        Ref.of[IO, List[DtmfDigit]](Nil).flatMap { digits =>
+          val plan = MediaPlan(
+            peerAddress,
+            Codec.Pcmu,
+            0,
+            Some(101),
+            MediaDirection.SendRecv,
+            MediaDirection.SendRecv
+          )
+          media.start(plan, supervisor, d => digits.update(_ :+ d)) >>
+            IO.sleep(500.millis) >>
+            use(media, ours, peer, digits.get) <*
+            media.stop()
+        }
+      }
+    }
+
+  private def event(
+      sequence: Int,
+      timestamp: Long,
+      digit: DtmfDigit,
+      end: Boolean,
+      duration: Int = 800
+  ): Chunk[Byte] =
+    RtpCodec.encode(
+      101,
+      sequence,
+      timestamp,
+      9L,
+      SoftphoneEvent.encode(SoftphoneEvent(digit.code, end, 10, duration)),
+      marker = false
+    )
+
+  test(
+    "a digit we send is heard once by a session that gets all its packets, though the last comes three times"
+  ) {
+    hearing { (media, _, peer, _) =>
+      // The far end runs the same code as we do.
+      hearing { (_, otherAddress, _, heard) =>
+        for {
+          sent    <- media.sendDtmf(DtmfDigit.D7, 100.millis)
+          packets <- peer.reads.take(7).compile.toList.timeout(5.seconds)
+          _       <- packets.traverse_(d =>
+            peer.write(Datagram(otherAddress, d.bytes))
+          )
+          _      <- IO.sleep(300.millis)
+          digits <- heard
+        } yield {
+          assert(sent)
+          assertEquals(digits, List(DtmfDigit.D7))
+        }
+      }
+    }
+  }
+
+  test("a digit is heard if only the packets that end it get through") {
+    hearing { (_, ours, peer, heard) =>
+      for {
+        _ <- List(3, 4, 5).traverse_(i =>
+          peer.write(
+            Datagram(ours, event(i, 1000L, DtmfDigit.Hash, end = true))
+          )
+        )
+        _      <- IO.sleep(300.millis)
+        digits <- heard
+      } yield assertEquals(digits, List(DtmfDigit.Hash))
+    }
+  }
+
+  test(
+    "a digit is not heard until it ends, and not again for the packets that repeat the end"
+  ) {
+    hearing { (_, ours, peer, heard) =>
+      for {
+        _ <- List(1, 2).traverse_(i =>
+          peer.write(
+            Datagram(
+              ours,
+              event(i, 1000L, DtmfDigit.D4, end = false, duration = i * 160)
+            )
+          )
+        )
+        _      <- IO.sleep(200.millis)
+        before <- heard
+        _      <- List(3, 4, 5).traverse_(i =>
+          peer.write(Datagram(ours, event(i, 1000L, DtmfDigit.D4, end = true)))
+        )
+        _     <- IO.sleep(300.millis)
+        after <- heard
+      } yield {
+        assertEquals(before, Nil)
+        assertEquals(after, List(DtmfDigit.D4))
+      }
+    }
+  }
+
+  test("the same digit pressed twice is two digits, and two digits are two") {
+    hearing { (_, ours, peer, heard) =>
+      val ends = List(
+        (1, 1000L, DtmfDigit.D2),
+        (2, 1000L, DtmfDigit.D2), // a repeat of the end
+        (3, 3000L, DtmfDigit.D2), // pressed again, later
+        (4, 5000L, DtmfDigit.A)
+      )
+      for {
+        _ <- ends.traverse_((i, ts, d) =>
+          peer.write(Datagram(ours, event(i, ts, d, end = true)))
+        )
+        _      <- IO.sleep(300.millis)
+        digits <- heard
+      } yield assertEquals(
+        digits,
+        List(DtmfDigit.D2, DtmfDigit.D2, DtmfDigit.A)
+      )
+    }
+  }
+
+  test(
+    "a digit cannot be sent by a session that has not started, or whose peer did not agree"
+  ) {
+    session(AudioCodecs.Default).use { (media, _, _) =>
+      media.sendDtmf(DtmfDigit.D1, 100.millis).map(assertEquals(_, false))
+    } >> withPeer(Codec.Pcmu, 0) { (media, _, peer) =>
+      // Started with no telephone events in the plan.
+      media
+        .sendDtmf(DtmfDigit.D1, 100.millis)
+        .flatMap(sent =>
+          peer.reads.interruptAfter(300.millis).compile.toList.map { packets =>
+            assert(!sent)
+            assertEquals(packets, Nil)
+          }
+        )
     }
   }
 }
