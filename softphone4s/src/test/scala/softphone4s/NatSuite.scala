@@ -7,7 +7,13 @@ import com.comcast.ip4s.*
 import munit.CatsEffectSuite
 import org.typelevel.log4cats.noop.NoOpLogger
 import softphone4s.SipLiterals.*
-import softphone4s.config.{NatConfig, ObservedAddresses, SoftphoneConfig}
+import softphone4s.config.{
+  NatConfig,
+  ObservedAddresses,
+  SoftphoneConfig,
+  StunConfig
+}
+import softphone4s.stun.StunServer
 import softphone4s.model.*
 import softphone4s.transaction.TransactionMessages
 import softphone4s.transport.{Inbound, SipTransport, Transport}
@@ -26,7 +32,7 @@ class NatSuite extends CatsEffectSuite {
   private val target  = SocketAddress(ip"127.0.0.1", ours)
   private val outside = SocketAddress(ip"203.0.113.7", port"41000")
 
-  private def config(mode: ObservedAddresses) =
+  private def config(mode: ObservedAddresses, stun: Option[StunConfig]) =
     SoftphoneConfig(
       user = "test",
       password = "test",
@@ -36,14 +42,19 @@ class NatSuite extends CatsEffectSuite {
       baseRtpPort = port"19950",
       bindAddress = ip"127.0.0.1",
       hangupTimeout = 1.second,
-      nat = NatConfig(mode)
+      nat = NatConfig(mode, stun)
     )
 
   private def scenario(
-      mode: ObservedAddresses
+      mode: ObservedAddresses,
+      stun: Option[StunConfig] = None
   ): Resource[IO, (SoftphoneStreaming[IO], Transport[IO])] =
     (
-      SoftphoneStreaming.resource[IO](config(mode), audio, NoOpLogger.impl[IO]),
+      SoftphoneStreaming.resource[IO](
+        config(mode, stun),
+        audio,
+        NoOpLogger.impl[IO]
+      ),
       SipTransport.udp[IO](
         SocketAddress(ip"127.0.0.1", theirs),
         NoOpLogger.impl[IO]
@@ -78,6 +89,10 @@ class NatSuite extends CatsEffectSuite {
       seenAt
     )
   }
+
+  /** A 200 that says nothing about where the request came from. */
+  private def plainOk(request: SipRequest): SipResponse =
+    TransactionMessages.responseTo(request, 200, "OK", Some(tag("srv")))
 
   private val bob = Callee("bob").fold(err => fail(err), identity)
 
@@ -165,6 +180,47 @@ class NatSuite extends CatsEffectSuite {
           next.isLeft || next.exists(_.headers.cseq == first.headers.cseq),
           "no move is made"
         )
+      }
+    }
+  }
+
+  private val stunPort = port"19162"
+  private val stunAt   = SocketAddress(ip"127.0.0.1", stunPort)
+  private val stunConf = StunConfig("127.0.0.1", stunPort, refresh = 1.hour)
+
+  test(
+    "a STUN server's answer is registered as the Contact, though the registrar says nothing"
+  ) {
+    StunServer(stunAt, says = Some(outside)).surround(
+      scenario(ObservedAddresses.Use, Some(stunConf)).use { (phone, peer) =>
+        phone.register.use { registration =>
+          for {
+            // The registrar says nothing of where we are; only STUN knows. The
+            // first REGISTER may go out before its answer arrives, or after.
+            second <- requestOf(peer, SipMethod.Register)
+              .flatTap(r =>
+                peer
+                  .send(target, plainOk(r))
+              )
+              .iterateUntil(
+                _.headers.contacts.exists(_.uri.host == outside.host)
+              )
+            _ <- registration.awaitRegistered
+          } yield assertEquals(
+            second.headers.contacts.map(_.uri.render),
+            List("sip:test@203.0.113.7:41000")
+          )
+        }
+      }
+    )
+  }
+
+  test(
+    "a STUN server is not asked when the observed address is to be ignored"
+  ) {
+    StunServer(stunAt, says = Some(outside)).use { stun =>
+      scenario(ObservedAddresses.Ignore, Some(stunConf)).use { (_, _) =>
+        IO.sleep(500.millis) >> stun.requests.get.map(assertEquals(_, 0))
       }
     }
   }

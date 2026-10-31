@@ -306,9 +306,28 @@ class MultiAccountSuite extends CatsEffectSuite {
     )
     assertEquals(parsed.tcp.connectTimeout, 2.seconds)
     assertEquals(parsed.tcp.idleTimeout, 10.minutes)
+    assertEquals(parsed.nat.stun, None)
     assertEquals(
       parsed.tcp.keepAlive,
       Some(softphone4s.transport.KeepAlive(90.seconds, 5.seconds))
+    )
+  }
+
+  test("a STUN server is read from configuration") {
+    val parsed = ConfigSource
+      .string(
+        """user = alice
+          |password = pw
+          |realm = example.com
+          |nat { stun { host = "stun.example.com", port = 19302, attempts = 3 } }""".stripMargin
+      )
+      .load[SoftphoneConfig]
+      .fold(failures => fail(failures.prettyPrint()), identity)
+    assertEquals(
+      parsed.nat.stun.map(s =>
+        (s.host, s.port.value, s.attempts, s.retransmit)
+      ),
+      Some(("stun.example.com", 19302, 3, 500.millis))
     )
   }
 

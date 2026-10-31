@@ -10,7 +10,7 @@ import fs2.Stream
 import fs2.concurrent.{Channel, SignallingRef}
 import fs2.io.net.Network
 import org.typelevel.log4cats.StructuredLogger
-import softphone4s.config.{ObservedAddresses, SoftphoneConfig}
+import softphone4s.config.{ObservedAddresses, SoftphoneConfig, StunConfig}
 import softphone4s.dns.{
   DnsJavaRecords,
   DnsRecords,
@@ -21,6 +21,7 @@ import softphone4s.fsm.CallTimer
 import softphone4s.model.*
 import softphone4s.registration.Registration
 import softphone4s.runtime.{Entropy, Timers}
+import softphone4s.stun.StunClient
 import softphone4s.transaction.{
   ServerTransaction,
   TransactionConfig,
@@ -667,5 +668,58 @@ object SoftphoneStreaming {
       )
       _ <- Resource.eval(supervisor.supervise(softphone.routeIncoming))
       _ <- Resource.eval(supervisor.supervise(softphone.routeUnmatched))
+      _ <- config.nat.stun
+        .filter(_ => config.nat.observedAddress == ObservedAddresses.Use)
+        .traverse_(stun =>
+          Resource.eval(
+            supervisor.supervise(
+              askStun(stun, udp, records, publicSip, logger)
+            )
+          )
+        )
     } yield softphone
+
+  /** Asks the STUN server how we look from outside, and again every `refresh`;
+    * a round that fails is logged and tried again at the next.
+    */
+  private def askStun[F[_]: Async](
+      stun: StunConfig,
+      client: StunClient[F],
+      records: DnsRecords[F],
+      publicSip: SignallingRef[F, Option[SocketAddress[IpAddress]]],
+      logger: StructuredLogger[F]
+  ): F[Unit] = {
+    val round: F[Unit] =
+      Host.fromString(stun.host) match {
+        case None =>
+          logger.warn(Map("host" -> stun.host))("Not a valid STUN server name")
+        case Some(host) =>
+          records.addresses(host).flatMap {
+            case Nil =>
+              logger.warn(Map("host" -> stun.host))(
+                "The STUN server has no address"
+              )
+            case address :: _ =>
+              client
+                .bindingRequest(
+                  SocketAddress(address, stun.port),
+                  stun.retransmit,
+                  stun.attempts
+                )
+                .flatMap {
+                  case Right(seen) =>
+                    logger.debug(Map("address" -> seen.toString))(
+                      "STUN says we are seen at"
+                    ) >> publicSip.set(Some(seen))
+                  case Left(error) =>
+                    logger.warn(
+                      Map("host" -> stun.host, "error" -> error.toString)
+                    )("The STUN server did not tell us our address")
+                }
+          }
+      }
+    (round.handleErrorWith(e =>
+      logger.warn(Map("error" -> e.toString))("STUN round failed")
+    ) >> Async[F].sleep(stun.refresh)).foreverM
+  }
 }
