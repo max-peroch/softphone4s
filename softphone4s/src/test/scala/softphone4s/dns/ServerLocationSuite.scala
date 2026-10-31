@@ -4,7 +4,7 @@ import com.comcast.ip4s.*
 import munit.FunSuite
 import softphone4s.model.TransportProtocol
 
-class Rfc3263Suite extends FunSuite {
+class ServerLocationSuite extends FunSuite {
 
   import TransportProtocol.*
 
@@ -19,32 +19,32 @@ class Rfc3263Suite extends FunSuite {
 
   test("SRV names carry the service and transport, and end in a dot") {
     assertEquals(
-      Rfc3263.srvName(Udp, "example.com"),
+      ServerLocation.srvName(Udp, "example.com"),
       Some("_sip._udp.example.com.")
     )
     assertEquals(
-      Rfc3263.srvName(Tcp, "example.com."),
+      ServerLocation.srvName(Tcp, "example.com."),
       Some("_sip._tcp.example.com.")
     )
     assertEquals(
-      Rfc3263.srvName(Tls, "example.com"),
+      ServerLocation.srvName(Tls, "example.com"),
       Some("_sips._tcp.example.com.")
     )
-    assertEquals(Rfc3263.srvName(Ws, "example.com"), None)
+    assertEquals(ServerLocation.srvName(Ws, "example.com"), None)
   }
 
   test("default ports: 5061 for TLS, 5060 otherwise") {
-    assertEquals(Rfc3263.defaultPort(Tls), port"5061")
-    assertEquals(Rfc3263.defaultPort(Udp), port"5060")
-    assertEquals(Rfc3263.defaultPort(Tcp), port"5060")
+    assertEquals(ServerLocation.defaultPort(Tls), port"5061")
+    assertEquals(ServerLocation.defaultPort(Udp), port"5060")
+    assertEquals(ServerLocation.defaultPort(Tcp), port"5060")
   }
 
   test("NAPTR service tags map to transports, whatever their case") {
-    assertEquals(Rfc3263.transportOf("SIP+D2U"), Some(Udp))
-    assertEquals(Rfc3263.transportOf("sip+d2t"), Some(Tcp))
-    assertEquals(Rfc3263.transportOf("SIPS+D2T"), Some(Tls))
-    assertEquals(Rfc3263.transportOf("SIP+D2S"), None)
-    assertEquals(Rfc3263.transportOf("E2U+sip"), None)
+    assertEquals(ServerLocation.transportOf("SIP+D2U"), Some(Udp))
+    assertEquals(ServerLocation.transportOf("sip+d2t"), Some(Tcp))
+    assertEquals(ServerLocation.transportOf("SIPS+D2T"), Some(Tls))
+    assertEquals(ServerLocation.transportOf("SIP+D2S"), None)
+    assertEquals(ServerLocation.transportOf("E2U+sip"), None)
   }
 
   test("NAPTR records are taken by order, then preference") {
@@ -54,7 +54,7 @@ class Rfc3263Suite extends FunSuite {
       naptr(10, 2, "SIPS+D2T", "_sips._tcp.x.")
     )
     assertEquals(
-      Rfc3263.naptrTransports(records, Set(Udp, Tcp, Tls)).map(_._1),
+      ServerLocation.naptrTransports(records, Set(Udp, Tcp, Tls)).map(_._1),
       List(Tls, Tcp, Udp)
     )
   }
@@ -69,7 +69,7 @@ class Rfc3263Suite extends FunSuite {
       naptr(4, 1, "SIP+D2S", "_sip._sctp.x.")
     )
     assertEquals(
-      Rfc3263.naptrTransports(records, Set(Udp, Tcp)),
+      ServerLocation.naptrTransports(records, Set(Udp, Tcp)),
       List(Udp -> "_sip._udp.x.")
     )
   }
@@ -80,7 +80,7 @@ class Rfc3263Suite extends FunSuite {
       naptr(2, 1, "SIP+D2T", "_sip._tcp.second.")
     )
     assertEquals(
-      Rfc3263.naptrTransports(records, Set(Tcp)),
+      ServerLocation.naptrTransports(records, Set(Tcp)),
       List(Tcp -> "_sip._tcp.first.")
     )
   }
@@ -89,13 +89,13 @@ class Rfc3263Suite extends FunSuite {
     "without NAPTR the preferred transport is probed first, then secure, then the rest"
   ) {
     assertEquals(
-      Rfc3263.probeOrder(Udp, Set(Udp, Tcp, Tls)),
+      ServerLocation.probeOrder(Udp, Set(Udp, Tcp, Tls)),
       List(Udp, Tls, Tcp)
     )
     assertEquals(
-      Rfc3263.probeOrder(Tcp, Set(Udp, Tcp, Tls)),
+      ServerLocation.probeOrder(Tcp, Set(Udp, Tcp, Tls)),
       List(Tcp, Tls, Udp)
     )
-    assertEquals(Rfc3263.probeOrder(Udp, Set(Udp, Tcp)), List(Udp, Tcp))
+    assertEquals(ServerLocation.probeOrder(Udp, Set(Udp, Tcp)), List(Udp, Tcp))
   }
 }

@@ -6,7 +6,7 @@ import softphone4s.model.TransportProtocol
 /** The fixed parts of locating a SIP server (RFC 3263): the SRV names, the
   * NAPTR service tags, and the default ports.
   */
-object Rfc3263 {
+object ServerLocation {
 
   def defaultPort(transport: TransportProtocol): Port = transport match {
     case TransportProtocol.Tls | TransportProtocol.Wss => port"5061"
@@ -48,8 +48,8 @@ object Rfc3263 {
       supported: Set[TransportProtocol]
   ): List[(TransportProtocol, String)] =
     records
-      .sortBy(r => (r.order, r.preference))
       .filter(_.flags.equalsIgnoreCase("S"))
+      .sortBy(r => (r.order, r.preference))
       .flatMap(r =>
         transportOf(r.service)
           .filter(supported.contains)

@@ -59,9 +59,13 @@ final class TargetResolver[F[_]: Monad](
       preferred: TransportProtocol
   ): F[List[ResolvedTarget]] =
     dns.naptr(name.toString).flatMap { records =>
-      Rfc3263.naptrTransports(records, supported) match {
+      ServerLocation.naptrTransports(records, supported) match {
         case Nil =>
-          viaSrv(name, Rfc3263.probeOrder(preferred, supported), preferred)
+          viaSrv(
+            name,
+            ServerLocation.probeOrder(preferred, supported),
+            preferred
+          )
         case offered =>
           offered
             .flatTraverse((transport, srv) => fromSrv(transport, srv))
@@ -82,7 +86,7 @@ final class TargetResolver[F[_]: Monad](
   ): F[List[ResolvedTarget]] =
     transports
       .flatTraverse(transport =>
-        Rfc3263
+        ServerLocation
           .srvName(transport, name.toString)
           .fold(List.empty[ResolvedTarget].pure[F])(srv =>
             fromSrv(transport, srv)
@@ -113,7 +117,7 @@ final class TargetResolver[F[_]: Monad](
       name: Hostname,
       transport: TransportProtocol
   ): F[List[ResolvedTarget]] =
-    addressesOf(name, transport, Rfc3263.defaultPort(transport))
+    addressesOf(name, transport, ServerLocation.defaultPort(transport))
 
   private def addressesOf(
       name: Hostname,
@@ -134,7 +138,7 @@ object TargetResolver {
   ): ResolvedTarget =
     ResolvedTarget(
       transport,
-      SocketAddress(ip, port.getOrElse(Rfc3263.defaultPort(transport)))
+      SocketAddress(ip, port.getOrElse(ServerLocation.defaultPort(transport)))
     )
 
   /** The DNS name of a host; an internationalised name by its ASCII form. */
