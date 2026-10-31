@@ -319,7 +319,10 @@ class MultiAccountSuite extends CatsEffectSuite {
         """user = alice
           |password = pw
           |realm = example.com
-          |nat { stun { host = "stun.example.com", port = 19302, attempts = 3 } }""".stripMargin
+          |nat {
+          |  stun { host = "stun.example.com", port = 19302, attempts = 3 }
+          |  rtp-latching = "ignore"
+          |}""".stripMargin
       )
       .load[SoftphoneConfig]
       .fold(failures => fail(failures.prettyPrint()), identity)
@@ -329,6 +332,7 @@ class MultiAccountSuite extends CatsEffectSuite {
       ),
       Some(("stun.example.com", 19302, 3, 500.millis))
     )
+    assertEquals(parsed.nat.rtpLatching, softphone4s.config.RtpLatching.Ignore)
   }
 
   test("an unknown transport in configuration is an error") {

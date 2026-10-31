@@ -9,7 +9,7 @@ import munit.CatsEffectSuite
 import org.typelevel.log4cats.noop.NoOpLogger
 import softphone4s.DigestVerifier
 import softphone4s.SipLiterals.*
-import softphone4s.config.SoftphoneConfig
+import softphone4s.config.{RtpLatching, SoftphoneConfig}
 import softphone4s.fsm.CallTimer
 import softphone4s.model.*
 import softphone4s.runtime.{Entropy, Timers}
@@ -73,9 +73,11 @@ class OutboundCallSuite extends CatsEffectSuite {
       supervisor <- Supervisor[IO]
       random     <- Resource.eval(Random.scalaUtilRandom[IO])
       timers     <- Timers.resource[IO, CallTimer]
-      media      <- Resource.eval(MediaSession.create[IO](160, localIp, rtp))
-      input      <- Resource.eval(Queue.unbounded[IO, DialogInput[IO]])
-      call       <- Resource.eval(
+      media      <- Resource.eval(
+        MediaSession.create[IO](160, localIp, rtp, RtpLatching.Follow)
+      )
+      input <- Resource.eval(Queue.unbounded[IO, DialogInput[IO]])
+      call  <- Resource.eval(
         OutboundCall.create(
           callId("test@call"),
           uri("sip:bob@test.local"),

@@ -388,7 +388,8 @@ class SoftphoneStreaming[F[_]: Async: Network] private (
         MediaSession.create(
           pcmFrameBytes,
           first.endpoint.bindAddress,
-          first.endpoint.rtpPort
+          first.endpoint.rtpPort,
+          config.nat.rtpLatching
         )
       )
       call <- Resource.eval(
@@ -542,7 +543,12 @@ class SoftphoneStreaming[F[_]: Async: Network] private (
       )
       media <- Resource.eval(
         MediaSession
-          .create(pcmFrameBytes, endpoint.bindAddress, endpoint.rtpPort)
+          .create(
+            pcmFrameBytes,
+            endpoint.bindAddress,
+            endpoint.rtpPort,
+            config.nat.rtpLatching
+          )
       )
       call <- Resource.eval(
         InboundCall.create(

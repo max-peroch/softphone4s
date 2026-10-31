@@ -9,8 +9,9 @@ import fs2.concurrent.Channel
 import fs2.{Chunk, Pipe, Stream}
 import fs2.io.net.Network
 import softphone4s.codec.G711Codec
+import softphone4s.config.RtpLatching
 import softphone4s.model.{DtmfDigit, MediaDirection}
-import softphone4s.transport.RtpTransport
+import softphone4s.transport.{RtpLatch, RtpTransport}
 
 private[softphone4s] class MediaSession[F[_]: Async: Network] private (
     pcmFrameBytes: Int,
@@ -19,7 +20,9 @@ private[softphone4s] class MediaSession[F[_]: Async: Network] private (
     audioChannel: Channel[F, Chunk[Byte]],
     sendPipeReady: Deferred[F, Pipe[F, Byte, Unit]],
     mediaStop: Deferred[F, Unit],
-    target: Ref[F, Option[SocketAddress[IpAddress]]]
+    target: Ref[F, Option[SocketAddress[IpAddress]]],
+    latching: RtpLatching,
+    latch: Ref[F, RtpLatch]
 ) {
 
   val source: Stream[F, Byte] =
@@ -38,8 +41,26 @@ private[softphone4s] class MediaSession[F[_]: Async: Network] private (
       remotePort: Port,
       direction: MediaDirection
   ): F[Unit] =
-    target.set(
-      Option.when(direction.receives)(SocketAddress(remoteIp, remotePort))
+    latch.set(RtpLatch.empty) >>
+      target.set(
+        Option.when(direction.receives)(SocketAddress(remoteIp, remotePort))
+      )
+
+  /** Media arrived from `source`: if it keeps coming from somewhere other than
+    * the target, send there (see [[RtpLatch]]). The target is changed only if
+    * it is still the one the decision was made against.
+    */
+  private def heardFrom(source: SocketAddress[IpAddress], ssrc: Long): F[Unit] =
+    Async[F].whenA(latching == RtpLatching.Follow)(
+      target.get.flatMap { current =>
+        latch
+          .modify(RtpLatch.hear(_, current, source, ssrc))
+          .flatMap(
+            _.traverse_(moved =>
+              target.update(t => if t == current then Some(moved) else t)
+            )
+          )
+      }
     )
 
   def start(
@@ -65,7 +86,7 @@ private[softphone4s] class MediaSession[F[_]: Async: Network] private (
             .use { socket =>
               val receiveF =
                 RtpTransport
-                  .receiveBytes(socket, lastDtmfKey, onDtmf)
+                  .receiveBytes(socket, lastDtmfKey, onDtmf, heardFrom)
                   .through(G711Codec.mulawToPcmPipe)
                   .chunks
                   .evalMap(audioChannel.send(_).void)
@@ -91,13 +112,15 @@ private[softphone4s] object MediaSession {
   def create[F[_]: Async: Network](
       pcmFrameBytes: Int,
       bindAddress: IpAddress,
-      localRtpPort: Port
+      localRtpPort: Port,
+      latching: RtpLatching
   ): F[MediaSession[F]] =
     for {
       audioChannel  <- Channel.bounded[F, Chunk[Byte]](64)
       sendPipeReady <- Deferred[F, Pipe[F, Byte, Unit]]
       mediaStop     <- Deferred[F, Unit]
       target        <- Ref[F].of(Option.empty[SocketAddress[IpAddress]])
+      latch         <- Ref[F].of(RtpLatch.empty)
     } yield new MediaSession(
       pcmFrameBytes,
       bindAddress,
@@ -105,6 +128,8 @@ private[softphone4s] object MediaSession {
       audioChannel,
       sendPipeReady,
       mediaStop,
-      target
+      target,
+      latching,
+      latch
     )
 }

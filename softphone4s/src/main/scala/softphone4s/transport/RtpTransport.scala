@@ -16,7 +16,8 @@ object RtpTransport {
   /** Number of PCMU samples per 20ms packet at 8kHz. */
   val PacketSamples = 160
 
-  /** Decoded PCMU bytes from inbound RTP packets on `socket`.
+  /** Decoded PCMU bytes from inbound RTP packets on `socket`. `heardFrom` is
+    * told where each media packet came from, and its SSRC.
     *
     * DTMF RFC 4733 end-bit packets are deduped by (timestamp, event) and
     * delivered via `onDtmf`; they produce no bytes in the returned stream.
@@ -24,13 +25,17 @@ object RtpTransport {
   def receiveBytes[F[_]: Async](
       socket: DatagramSocket[F],
       lastDtmfKey: Ref[F, (Long, Int)],
-      onDtmf: DtmfDigit => F[Unit]
+      onDtmf: DtmfDigit => F[Unit],
+      heardFrom: (SocketAddress[IpAddress], Long) => F[Unit]
   ): Stream[F, Byte] =
     socket.reads.flatMap { datagram =>
       RtpCodec.decode(datagram.bytes) match {
         case None                    => Stream.empty
         case Some((header, payload)) =>
-          header.payloadType match {
+          Stream.exec(
+            heardFrom(datagram.remote, header.ssrc)
+              .whenA(isMedia(header.payloadType))
+          ) ++ (header.payloadType match {
             case PayloadTypePcmu =>
               Stream.chunk(payload)
             case PayloadTypeTelephoneEvent =>
@@ -40,9 +45,12 @@ object RtpTransport {
                 )
                 .drain
             case _ => Stream.empty
-          }
+          })
       }
     }
+
+  private def isMedia(payloadType: Int): Boolean =
+    payloadType == PayloadTypePcmu || payloadType == PayloadTypeTelephoneEvent
 
   /** Encodes incoming PCMU bytes as RTP and writes them to `socket`, to
     * wherever `target` says at the time: it changes when the remote party moves

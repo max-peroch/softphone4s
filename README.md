@@ -78,8 +78,14 @@ softphone4s handles outbound SIP calls end-to-end:
   the same way for the sender. `nat.observed-address = "ignore"` keeps to the
   address we bound. Once the new Contact is registered, the old binding is
   removed with a REGISTER of its own (`expires=0`, a new Call-ID, answered once
-  if challenged; best effort, as it expires anyway). The media port is assumed
-  not to be remapped.
+  if challenged; best effort, as it expires anyway). Media follows the remote
+  party: when their RTP keeps arriving from an address other than the one their
+  SDP named (a NAT has remapped the port), five packets in a row of one stream
+  from one new source move our media there (symmetric RTP, RFC 4961); stray
+  packets do not, and nothing moves while a call is on hold.
+  `nat.rtp-latching = "ignore"` sends only where the SDP says. Our own media
+  port is assumed not to be remapped on the way out, which latching makes
+  harmless when the other side does the same.
 - **STUN** (RFC 8489): with `nat.stun.host` set, the SIP UDP socket itself
   sends a Binding request to the server (repeated, waiting twice as long each
   time) and the answer is used like an address a SIP server reported, so the
@@ -324,6 +330,7 @@ account every call is taken. Two accounts cannot have the same user.
 | `tcp.framing.max-header-bytes` / `max-body-bytes` | `Int` | 16 KiB / 1 MiB | Largest message a TCP connection may carry before it is dropped |
 | `tls.trust-store` / `tls.client-certificate` | `{ path, password, store-type }` | JVM trust / none | Key stores for the certificates we trust and the one we present (`store-type` is `PKCS12` or `JKS`) |
 | `nat.stun.host` / `port` / `retransmit` / `attempts` / `refresh` | name, `Port`, `Duration`, `Int`, `Duration` | none / 3478 / 500 ms / 5 / 5 minutes | A STUN server to ask what address we have outside a NAT |
+| `nat.rtp-latching` | `follow`/`ignore` | `follow` | Send media to where the remote party's media comes from, when that is not where its SDP said |
 | `nat.observed-address` | `use`/`ignore` | `use` | Advertise the address servers say they see us at (Contact, SDP) |
 | `max-udp-message`   | `Int`       | `1300`       | An INVITE longer than this many bytes goes over TCP instead of UDP |
 | `listen`            | list of `tcp`/`tls` | empty | Transports we also accept connections on (UDP is always on) |
