@@ -520,4 +520,35 @@ class RegistrationFsmSuite extends FunSuite {
       TransactionFailed(TransactionFailure.TimedOut)
     ).foreach(e => assertEquals(step(Stopped, e), (Stopped, Nil)))
   }
+
+  // ---- Where we can be reached changes (RFC 3581) ------------------------------------
+
+  private val outside = uri("sip:test@203.0.113.7:41000")
+
+  test(
+    "a new Contact while registered is registered at once, with a higher CSeq"
+  ) {
+    val (state, actions) = step(registered, AddressChanged(outside))
+    val next             = context.copy(contact = outside).next
+    assertEquals(state, Registering(next, 1, RegistrationPhase.Refreshing))
+    assertEquals(actions, List(SendRegister(next, expires(3600), None)))
+  }
+
+  test("the Contact we already have is not registered again") {
+    assertEquals(step(registered, AddressChanged(contact)), (registered, Nil))
+  }
+
+  test(
+    "a new Contact between attempts changes nothing: the agent says so again after success"
+  ) {
+    assertEquals(step(registering, AddressChanged(outside)), (registering, Nil))
+    val backoff =
+      step(registering, TransactionFailed(TransactionFailure.TimedOut))._1
+    assertEquals(step(backoff, AddressChanged(outside)), (backoff, Nil))
+  }
+
+  test("a new Contact before registering, or once stopped, changes nothing") {
+    assertEquals(step(Idle, AddressChanged(outside)), (Idle, Nil))
+    assertEquals(step(Stopped, AddressChanged(outside)), (Stopped, Nil))
+  }
 }

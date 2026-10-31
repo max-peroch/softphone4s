@@ -63,6 +63,21 @@ object RegistrationFsm {
             List(SendRegister(next, next.requested, next.cached))
           )
 
+        // ---- Where we can be reached has changed --------------------------------
+        // Registered at the old Contact: register the new one now, rather than at
+        // the next refresh, which may be half an hour away.
+        case (Registered(context, _), AddressChanged(contact))
+            if contact != context.contact =>
+          val next = context.copy(contact = contact).next
+          go(
+            Registering(next, 1, RegistrationPhase.Refreshing),
+            List(SendRegister(next, next.requested, next.cached))
+          )
+
+        // Between attempts there is nothing to do: the next REGISTER carries the
+        // new Contact, and if one in flight did not, the agent says so again once
+        // it has succeeded.
+
         // ---- Waiting to retry -----------------------------------------------
         case (Backoff(context, attempt), TimerFired(RegistrationTimer.Retry)) =>
           val next = context.next

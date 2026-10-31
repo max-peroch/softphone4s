@@ -590,7 +590,7 @@ private[softphone4s] class OutboundCall[F[_]: Async] private (
         val ok = endpoint.buildSessionOk(
           request,
           offer.fold("")(
-            SdpCodec.buildAnswerTo(_, endpoint.ip, endpoint.rtpPort)
+            SdpCodec.buildAnswerTo(_, endpoint.mediaIp, endpoint.rtpPort)
           )
         )
         logger.debug("Answering a session change") >>
@@ -603,7 +603,7 @@ private[softphone4s] class OutboundCall[F[_]: Async] private (
             request,
             endpoint.buildSessionOk(
               request,
-              SdpCodec.buildOffer(endpoint.ip, endpoint.rtpPort)
+              SdpCodec.buildOffer(endpoint.mediaIp, endpoint.rtpPort)
             ),
             AckContent.Answer
           )

@@ -7,10 +7,10 @@ import cats.effect.syntax.all.*
 import cats.syntax.all.*
 import com.comcast.ip4s.*
 import fs2.Stream
-import fs2.concurrent.Channel
+import fs2.concurrent.{Channel, SignallingRef}
 import fs2.io.net.Network
 import org.typelevel.log4cats.StructuredLogger
-import softphone4s.config.SoftphoneConfig
+import softphone4s.config.{ObservedAddresses, SoftphoneConfig}
 import softphone4s.dns.{
   DnsJavaRecords,
   DnsRecords,
@@ -48,6 +48,7 @@ class SoftphoneStreaming[F[_]: Async: Network] private (
     config: SoftphoneConfig,
     accountList: NonEmptyList[Account],
     targets: TargetResolver[F],
+    publicSip: SignallingRef[F, Option[SocketAddress[IpAddress]]],
     layer: TransactionLayer[F],
     routes: Ref[F, Map[CallId, Channel[F, DialogInput[F]]]],
     nextCallIndex: Ref[F, Int],
@@ -109,9 +110,9 @@ class SoftphoneStreaming[F[_]: Async: Network] private (
         )
       )
       endpoint <- Resource.eval(
-        allocateEndpoint(account, localIp, protocol).flatMap(
-          secureIfNeeded(_, target.scheme)
-        )
+        allocateEndpoint(account, localIp, protocol)
+          .flatMap(secureIfNeeded(_, target.scheme))
+          .flatMap(seenFromOutside)
       )
       alternatives <- Resource.eval(alternativesTo(endpoint, found.tail))
       streamWay    <- Resource.eval(
@@ -172,6 +173,7 @@ class SoftphoneStreaming[F[_]: Async: Network] private (
       registration <- Registration.resource(
         layer,
         NonEmptyList(Uplink(endpoint, registrar), alternatives),
+        publicSip,
         registrarUri,
         entropy,
         Expires.of(account.config.registerExpires),
@@ -303,6 +305,19 @@ class SoftphoneStreaming[F[_]: Async: Network] private (
           .getOrElse(config.localIpFallback)
       )
       .handleError(_ => config.localIpFallback)
+
+  /** `endpoint` as the outside sees it, once a server has told us how that is
+    * (and unless we are set to ignore that): behind a NAT, the Contact and the
+    * media address of SDP are the public ones, which is where answers can reach
+    * us. Over a stream transport nothing changes.
+    */
+  private def seenFromOutside(endpoint: LocalEndpoint): F[LocalEndpoint] =
+    publicSip.get.flatMap {
+      case Some(address)
+          if config.nat.observedAddress == ObservedAddresses.Use =>
+        Async[F].fromEither(endpoint.mappedTo(address))
+      case _ => Async[F].pure(endpoint)
+    }
 
   /** `endpoint`, with a `sips:` Contact if the request it is for is `sips:`. */
   private def secureIfNeeded(
@@ -522,6 +537,7 @@ class SoftphoneStreaming[F[_]: Async: Network] private (
           localIp,
           invite.request.headers.topVia.transport
         ).flatMap(secureIfNeeded(_, invite.request.requestUri.scheme))
+          .flatMap(seenFromOutside)
       )
       media <- Resource.eval(
         MediaSession
@@ -603,10 +619,18 @@ object SoftphoneStreaming {
         logger
       )
       transport = RoutedTransport(udp, tcp, tls)
-      layer <- TransactionManager.resource[F](
+      publicSip <- Resource.eval(
+        SignallingRef.of[F, Option[SocketAddress[IpAddress]]](None)
+      )
+      layer <- TransactionManager.resourceObserving[F](
         transport,
         TransactionConfig(),
-        logger
+        logger,
+        // Believed unless we are told to keep to the address we bound.
+        observed =>
+          publicSip
+            .set(Some(observed.address))
+            .whenA(config.nat.observedAddress == ObservedAddresses.Use)
       )
       routes <- Resource.eval(
         Ref[F].of(Map.empty[CallId, Channel[F, DialogInput[F]]])
@@ -631,6 +655,7 @@ object SoftphoneStreaming {
             TransportProtocol.Tls
           )
         ),
+        publicSip,
         layer,
         routes,
         callIndex,

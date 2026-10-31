@@ -4,6 +4,7 @@ import cats.data.NonEmptyList
 import cats.effect.testkit.TestControl
 import cats.effect.std.Random
 import cats.effect.{IO, Resource}
+import fs2.concurrent.SignallingRef
 import com.comcast.ip4s.*
 import munit.CatsEffectSuite
 import org.typelevel.log4cats.noop.NoOpLogger
@@ -44,9 +45,15 @@ class RegistrationSuite extends CatsEffectSuite {
       requested: Int = 3600,
       stopTimeout: FiniteDuration = 5.seconds,
       uplinks: NonEmptyList[Uplink] = NonEmptyList.one(Uplink(endpoint, them)),
-      reach: Transport[IO] => Transport[IO] = identity
+      reach: Transport[IO] => Transport[IO] = identity,
+      seen: Option[SignallingRef[IO, Option[SocketAddress[IpAddress]]]] = None
   ): Resource[IO, (Registration[IO], Transport[IO])] =
     for {
+      outside <- Resource.eval(
+        seen.fold(SignallingRef.of[IO, Option[SocketAddress[IpAddress]]](None))(
+          IO.pure
+        )
+      )
       pair  <- Resource.eval(InMemoryTransport.pair[IO])
       layer <- TransactionManager.resource(
         reach(pair._1),
@@ -59,6 +66,7 @@ class RegistrationSuite extends CatsEffectSuite {
       reg <- Registration.resource(
         layer,
         uplinks,
+        outside,
         uri("sip:test.local"),
         Entropy.fromRandom(random),
         expires(requested),
@@ -532,6 +540,98 @@ class RegistrationSuite extends CatsEffectSuite {
         } yield assert(
           again.headers.cseq.seq.value > first.headers.cseq.seq.value
         )
+      }
+    )
+  }
+
+  // ---- Behind a NAT --------------------------------------------------------------------
+
+  private val outside = SocketAddress(ip"203.0.113.7", port"41000")
+
+  private def contactsOf(register: SipRequest) =
+    register.headers.contacts.map(_.uri.render)
+
+  private def withOutside[A](
+      initial: Option[SocketAddress[IpAddress]]
+  )(
+      use: (
+          Registration[IO],
+          Transport[IO],
+          SignallingRef[IO, Option[SocketAddress[IpAddress]]]
+      ) => IO[A]
+  ) =
+    SignallingRef.of[IO, Option[SocketAddress[IpAddress]]](initial).flatMap {
+      seen =>
+        agent(seen = Some(seen)).use((reg, peer) => use(reg, peer, seen))
+    }
+
+  test(
+    "once a server says how we look from outside, the public Contact is registered at once"
+  ) {
+    TestControl.executeEmbed(
+      withOutside(None) { (reg, peer, seen) =>
+        for {
+          first <- nextRegister(peer)
+          _     <- answer(peer, first, 200, granted = Some(3600))
+          _     <- reg.awaitRegistered
+          _     <- seen.set(Some(outside))
+          // No refresh is due for half an hour; this is the move.
+          second <- nextRegister(peer)
+          _      <- answer(peer, second, 200)
+        } yield {
+          assertEquals(contactsOf(first), List("sip:test@127.0.0.1:19060"))
+          assertEquals(contactsOf(second), List("sip:test@203.0.113.7:41000"))
+          assertEquals(second.headers.callId, first.headers.callId)
+          assert(second.headers.cseq.seq.value > first.headers.cseq.seq.value)
+        }
+      }
+    )
+  }
+
+  test("an outside address that is our own address changes nothing") {
+    TestControl.executeEmbed(
+      withOutside(None) { (reg, peer, seen) =>
+        for {
+          first <- nextRegister(peer)
+          _     <- answer(peer, first, 200, granted = Some(3600))
+          _     <- reg.awaitRegistered
+          _     <- seen.set(Some(SocketAddress(endpoint.ip, endpoint.sipPort)))
+          next  <- nextRegister(peer).timeout(10.minutes).attempt
+        } yield assert(next.isLeft, "no second REGISTER is due")
+      }
+    )
+  }
+
+  test(
+    "an outside address known before the first REGISTER is used from the start"
+  ) {
+    TestControl.executeEmbed(
+      withOutside(Some(outside)) { (_, peer, _) =>
+        nextRegister(peer).map(first =>
+          assertEquals(contactsOf(first), List("sip:test@203.0.113.7:41000"))
+        )
+      }
+    )
+  }
+
+  test(
+    "an outside address learned while the REGISTER is in flight is registered once it succeeds"
+  ) {
+    TestControl.executeEmbed(
+      withOutside(None) { (reg, peer, seen) =>
+        for {
+          first <- nextRegister(peer)
+          // The transaction layer learns it from the very answer that is on its
+          // way to the agent, so it can get there first.
+          _      <- seen.set(Some(outside))
+          _      <- answer(peer, first, 200, granted = Some(3600))
+          _      <- reg.awaitRegistered
+          second <- nextRegister(peer)
+          _      <- answer(peer, second, 200)
+        } yield {
+          assertEquals(contactsOf(first), List("sip:test@127.0.0.1:19060"))
+          assertEquals(contactsOf(second), List("sip:test@203.0.113.7:41000"))
+        }
       }
     )
   }

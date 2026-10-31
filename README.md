@@ -67,6 +67,17 @@ softphone4s handles outbound SIP calls end-to-end:
   Verification fails closed: a destination given as an IP address has no name
   to check, so use a host name, or switch verification off knowingly. A
   `sips:` URI selects TLS.
+- **Behind a NAT** (RFC 3581): our requests over UDP carry `rport`, and the
+  servers' answers carry `received` and `rport`, which is how we learn what we
+  look like from outside. That address is believed only from a response to one of
+  our own requests that came from the server it was sent to, and only over UDP.
+  Once known, our Contact and the media address in our SDP are the public ones,
+  for calls and for registrations (the Via keeps our own address, since answers
+  come back by `rport`); a registration that is up moves its binding to the new
+  Contact at once. When we answer a request we fill in `received` and `rport` in
+  the same way for the sender. `nat.observed-address = "ignore"` keeps to the
+  address we bound. The old binding at the registrar is left to expire, and the
+  media port is assumed not to be remapped.
 - **Accepting connections**: with `listen = [tcp, tls]` we also listen for TCP
   (on `local-sip-port`) and TLS (on `tls-port`, which needs
   `tls.server-certificate`; `tls.client-authentication` is `off`, `request` or
@@ -302,6 +313,7 @@ account every call is taken. Two accounts cannot have the same user.
 | `tcp.idle-timeout`  | `Duration`  | `5 minutes`  | A TCP connection with nothing sent or received for this long is closed |
 | `tcp.framing.max-header-bytes` / `max-body-bytes` | `Int` | 16 KiB / 1 MiB | Largest message a TCP connection may carry before it is dropped |
 | `tls.trust-store` / `tls.client-certificate` | `{ path, password, store-type }` | JVM trust / none | Key stores for the certificates we trust and the one we present (`store-type` is `PKCS12` or `JKS`) |
+| `nat.observed-address` | `use`/`ignore` | `use` | Advertise the address servers say they see us at (Contact, SDP) |
 | `max-udp-message`   | `Int`       | `1300`       | An INVITE longer than this many bytes goes over TCP instead of UDP |
 | `listen`            | list of `tcp`/`tls` | empty | Transports we also accept connections on (UDP is always on) |
 | `tls-port`          | `Port`      | `5061`       | Port for the TLS listener                           |

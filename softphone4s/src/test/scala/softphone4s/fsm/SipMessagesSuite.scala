@@ -374,4 +374,61 @@ class SipMessagesSuite extends FunSuite {
     val size = softphone4s.codec.SipCodec.encode(register).size
     assert(size < 1300 - 300, s"a REGISTER of $size bytes")
   }
+
+  // ---- Behind a NAT ---------------------------------------------------------------------
+
+  private val outsideAddress = SocketAddress(ip"203.0.113.7", port"41000")
+
+  test(
+    "a UDP endpoint seen at another address has the Contact and media address of that one"
+  ) {
+    val seen =
+      endpoint.mappedTo(outsideAddress).fold(e => fail(e.getMessage), identity)
+    assertEquals(seen.contact.render, "sip:alice@203.0.113.7:41000")
+    assertEquals(seen.mediaIp, ip"203.0.113.7")
+    // The Via stays our own: answers find us by rport.
+    assertEquals(seen.ip, endpoint.ip)
+  }
+
+  test(
+    "the INVITE of an endpoint seen from outside offers the outside address in its SDP and Contact"
+  ) {
+    val seen =
+      endpoint.mappedTo(outsideAddress).fold(e => fail(e.getMessage), identity)
+    val invite = seen.buildInvite(
+      uri("sip:bob@example.com"),
+      callId("n@h"),
+      tag("lt"),
+      cseqNumber(1),
+      branch("z9hG4bKn")
+    )
+    assert(invite.body.contains("c=IN IP4 203.0.113.7"), invite.body)
+    assertEquals(
+      invite.headers.contacts.map(_.uri.render),
+      List("sip:alice@203.0.113.7:41000")
+    )
+    assertEquals(invite.headers.topVia.host, endpoint.ip)
+    assert(invite.headers.topVia.rport.contains(RPort.Requested))
+  }
+
+  test(
+    "an endpoint seen at its own address, or over a stream, is left as it is"
+  ) {
+    val own = SocketAddress(endpoint.ip, endpoint.sipPort)
+    assertEquals(endpoint.mappedTo(own), Right(endpoint))
+    val tcp = endpoint
+      .via(endpoint.ip, TransportProtocol.Tcp)
+      .fold(e => fail(e.getMessage), identity)
+    assertEquals(tcp.mappedTo(outsideAddress), Right(tcp))
+  }
+
+  test("moving to another target forgets what the outside looked like") {
+    val seen =
+      endpoint.mappedTo(outsideAddress).fold(e => fail(e.getMessage), identity)
+    val moved = seen
+      .via(ip"10.9.8.7", TransportProtocol.Udp)
+      .fold(e => fail(e.getMessage), identity)
+    assertEquals(moved.mapping, None)
+    assertEquals(moved.mediaIp, ip"10.9.8.7")
+  }
 }

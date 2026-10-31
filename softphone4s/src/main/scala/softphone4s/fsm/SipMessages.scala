@@ -29,7 +29,7 @@ object SipMessages {
     // -----------------------------------------------------------------------
 
     /** The SDP offer an INVITE from this endpoint carries. */
-    def offerBody: String = SdpCodec.buildOffer(e.ip, e.rtpPort)
+    def offerBody: String = SdpCodec.buildOffer(e.mediaIp, e.rtpPort)
 
     def buildInvite(
         callee: SipUri,
@@ -53,7 +53,7 @@ object SipMessages {
           contentType = Some(MediaType.Sdp),
           others = authHeader.toList ++ extraHeaders
         ),
-        body = SdpCodec.buildOffer(e.ip, e.rtpPort)
+        body = SdpCodec.buildOffer(e.mediaIp, e.rtpPort)
       )
 
     /** The Authorization or Proxy-Authorization header answering `challenge` on
@@ -244,7 +244,7 @@ object SipMessages {
           contentType = Some(MediaType.Sdp),
           routes = dialog.route.routes
         ),
-        body = SdpCodec.buildOffer(e.ip, e.rtpPort, change.direction)
+        body = SdpCodec.buildOffer(e.mediaIp, e.rtpPort, change.direction)
       )
 
     def buildByeOk(req: SipRequest): SipResponse =
@@ -289,7 +289,7 @@ object SipMessages {
     // -----------------------------------------------------------------------
 
     def buildSdpAnswer: String =
-      SdpCodec.buildAnswer(e.ip, e.rtpPort)
+      SdpCodec.buildAnswer(e.mediaIp, e.rtpPort)
   }
 
   private val AllowedMethods: String =

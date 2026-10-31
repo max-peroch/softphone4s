@@ -184,7 +184,13 @@ private[softphone4s] final class InboundCall[F[_]: Async] private (
           200,
           "OK",
           ctx.localTag,
-          Some(SdpCodec.buildAnswerTo(ctx.offer, endpoint.ip, endpoint.rtpPort))
+          Some(
+            SdpCodec.buildAnswerTo(
+              ctx.offer,
+              endpoint.mediaIp,
+              endpoint.rtpPort
+            )
+          )
         )
         lastOk.set(Some(ok)) >> invite.respond(ok)
 
@@ -239,7 +245,7 @@ private[softphone4s] final class InboundCall[F[_]: Async] private (
         val ok = endpoint.buildSessionOk(
           request,
           offer.fold("")(
-            SdpCodec.buildAnswerTo(_, endpoint.ip, endpoint.rtpPort)
+            SdpCodec.buildAnswerTo(_, endpoint.mediaIp, endpoint.rtpPort)
           )
         )
         logger.debug("Answering a session change") >>
@@ -252,7 +258,7 @@ private[softphone4s] final class InboundCall[F[_]: Async] private (
             request,
             endpoint.buildSessionOk(
               request,
-              SdpCodec.buildOffer(endpoint.ip, endpoint.rtpPort)
+              SdpCodec.buildOffer(endpoint.mediaIp, endpoint.rtpPort)
             ),
             AckContent.Answer
           )

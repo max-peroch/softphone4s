@@ -1,6 +1,6 @@
 package softphone4s.model
 
-import com.comcast.ip4s.{Host, IpAddress, Port}
+import com.comcast.ip4s.{Host, IpAddress, Port, SocketAddress}
 import softphone4s.config.{AccountConfig, SoftphoneConfig}
 
 /** Where and as whom we speak SIP: the address we advertise (`ip`, `sipPort`,
@@ -17,8 +17,38 @@ final case class LocalEndpoint private (
     contact: SipUri,
     credentials: Credentials,
     transport: TransportProtocol,
-    scheme: SipScheme
+    scheme: SipScheme,
+    mapping: Option[SocketAddress[IpAddress]]
 ) {
+
+  /** The address media should be sent to: ours as the outside sees it when a
+    * server has told us what that is, else our own.
+    */
+  def mediaIp: IpAddress = mapping.fold(ip)(_.host)
+
+  /** This endpoint as the outside sees it at `address`, for a UDP endpoint that
+    * a NAT sits in front of: the Contact says where we can be reached from
+    * outside, and so does the media address in SDP. The Via keeps our own
+    * address, since responses come back by `rport`. Nothing changes if
+    * `address` is ours, or for a stream transport, whose connection already
+    * carries the answers.
+    */
+  def mappedTo(
+      address: SocketAddress[IpAddress]
+  ): Either[SoftphoneError, LocalEndpoint] =
+    if transport != TransportProtocol.Udp ||
+      (address.host == ip && address.port == sipPort)
+    then Right(this)
+    else
+      LocalEndpoint
+        .contactUri(
+          accountUri.userInfo,
+          address.host,
+          address.port,
+          transport,
+          scheme
+        )
+        .map(contact => copy(contact = contact, mapping = Some(address)))
 
   /** The same account and RTP port reached over `transport` from local address
     * `ip`: what another target of the same call needs, since a different route
@@ -31,7 +61,9 @@ final case class LocalEndpoint private (
   ): Either[SoftphoneError, LocalEndpoint] =
     LocalEndpoint
       .contactUri(accountUri.userInfo, ip, sipPort, transport, scheme)
-      .map(contact => copy(ip = ip, contact = contact, transport = transport))
+      .map(contact =>
+        copy(ip = ip, contact = contact, transport = transport, mapping = None)
+      )
 
   /** This endpoint with a `sips:` Contact, for a call whose Request-URI is
     * `sips:` (RFC 5630): the Contact must then be secure too. Nothing changes
@@ -93,14 +125,15 @@ object LocalEndpoint {
       contact,
       Credentials(config.user, config.password),
       transport,
-      SipScheme.Sip
+      SipScheme.Sip,
+      None
     )
 
   /** The Contact URI for reaching us at `ip`:`port`. A `sip:` one names the
     * transport unless it is UDP; a `sips:` one does not, since `sips:` means
     * TLS (RFC 5630 deprecates `transport=tls` on it).
     */
-  private def contactUri(
+  private[model] def contactUri(
       userInfo: Option[UserInfo],
       ip: IpAddress,
       port: Port,

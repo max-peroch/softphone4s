@@ -5,6 +5,7 @@ import cats.effect.std.Supervisor
 import cats.effect.syntax.all.*
 import cats.effect.{Async, Deferred, Ref, Resource}
 import cats.syntax.all.*
+import com.comcast.ip4s.{IpAddress, SocketAddress}
 import fs2.concurrent.{Channel, Signal, SignallingRef}
 import org.typelevel.log4cats.StructuredLogger
 import softphone4s.fsm.{TimerAction, TransactionFailure}
@@ -51,6 +52,7 @@ object Registration {
   def resource[F[_]: Async](
       layer: TransactionLayer[F],
       uplinks: NonEmptyList[Uplink],
+      publicAddress: Signal[F, Option[SocketAddress[IpAddress]]],
       registrarUri: SipUri,
       entropy: Entropy[F],
       requested: Expires,
@@ -64,6 +66,7 @@ object Registration {
         Agent.create(
           layer,
           uplinks,
+          publicAddress,
           registrarUri,
           entropy,
           requested,
@@ -73,13 +76,16 @@ object Registration {
         )
       )
       _ <- Resource.eval(supervisor.supervise(agent.run))
+      _ <- Resource.eval(supervisor.supervise(agent.followAddress))
       _ <- Resource.make(agent.start)(_ => agent.stop(stopTimeout))
     } yield agent
 
   private final class Agent[F[_]: Async] private (
       layer: TransactionLayer[F],
       uplinks: NonEmptyList[Uplink],
+      publicAddress: Signal[F, Option[SocketAddress[IpAddress]]],
       selected: Ref[F, Int],
+      sentContact: Ref[F, Option[SipUri]],
       registrarUri: SipUri,
       entropy: Entropy[F],
       requested: Expires,
@@ -136,6 +142,31 @@ object Registration {
       events.send(RegistrationEvent.Stop) >>
         stopped.get.timeoutTo(timeout, Async[F].unit)
 
+    /** The endpoint of `uplink` as the outside sees it, when a server has told
+      * us (a UDP registration behind a NAT); otherwise as it is.
+      */
+    private def asSeen(endpoint: LocalEndpoint): F[LocalEndpoint] =
+      publicAddress.get.map(
+        _.flatMap(endpoint.mappedTo(_).toOption).getOrElse(endpoint)
+      )
+
+    /** Tells the state machine whenever the address we are seen at changes, so
+      * that the binding is moved there at once.
+      */
+    def followAddress: F[Unit] =
+      publicAddress.discrete.changes
+        .evalMap(seen =>
+          (current, seen.pure[F]).flatMapN { (uplink, address) =>
+            address
+              .flatMap(uplink.endpoint.mappedTo(_).toOption)
+              .traverse_(mapped =>
+                events.send(RegistrationEvent.AddressChanged(mapped.contact))
+              )
+          }
+        )
+        .compile
+        .drain
+
     def run: F[Unit] =
       events.stream
         .merge(timers.fired.map(RegistrationEvent.TimerFired(_)))
@@ -153,6 +184,7 @@ object Registration {
         case RegistrationAction.Notify(newState) =>
           moveOn.whenA(isFailure(newState)) >>
             signal.set(newState) >>
+            reconcileContact.whenA(isRegistered(newState)) >>
             stopped
               .complete(())
               .void
@@ -170,10 +202,10 @@ object Registration {
               authorization
             ) =>
           for {
-            uplink <- current
-            endpoint = uplink.endpoint
-            branch <- entropy.branch
-            auth   <- authorization.traverse { (kind, challenge) =>
+            uplink   <- current
+            endpoint <- asSeen(uplink.endpoint)
+            branch   <- entropy.branch
+            auth     <- authorization.traverse { (kind, challenge) =>
               (entropy.cnonce, nextNonceCount(challenge.nonce)).mapN {
                 (cnonce, count) =>
                   endpoint.authorizationFor(
@@ -187,6 +219,7 @@ object Registration {
                   )
               }
             }
+            _ <- sentContact.set(Some(endpoint.contact))
             request = endpoint.buildRegister(
               registrarUri,
               context.callId,
@@ -218,6 +251,23 @@ object Registration {
                     .void
             }
           } yield ()
+      }
+
+    private def isRegistered(state: RegistrationState): Boolean = state match {
+      case RegistrationState.Registered(_) => true
+      case _                               => false
+    }
+
+    /** Registered, but at a Contact that is not the one we would send now: the
+      * outside address was learned from this very answer, or while it was in
+      * flight. Say so, and the state machine registers the new one.
+      */
+    private def reconcileContact: F[Unit] =
+      (current.flatMap(u => asSeen(u.endpoint)), sentContact.get).flatMapN {
+        (wanted, sent) =>
+          events
+            .send(RegistrationEvent.AddressChanged(wanted.contact))
+            .whenA(!sent.contains(wanted.contact))
       }
 
     private def isFailure(state: RegistrationState): Boolean = state match {
@@ -256,6 +306,7 @@ object Registration {
     def create[F[_]: Async](
         layer: TransactionLayer[F],
         uplinks: NonEmptyList[Uplink],
+        publicAddress: Signal[F, Option[SocketAddress[IpAddress]]],
         registrarUri: SipUri,
         entropy: Entropy[F],
         requested: Expires,
@@ -267,15 +318,18 @@ object Registration {
         signal <- SignallingRef.of[F, RegistrationState](
           RegistrationState.Unregistered
         )
-        selected <- Ref.of[F, Int](0)
-        fsm      <- Ref.of[F, RegistrationFsmState](RegistrationFsmState.Idle)
-        events   <- Channel.unbounded[F, RegistrationEvent]
+        selected    <- Ref.of[F, Int](0)
+        sentContact <- Ref.of[F, Option[SipUri]](None)
+        fsm    <- Ref.of[F, RegistrationFsmState](RegistrationFsmState.Idle)
+        events <- Channel.unbounded[F, RegistrationEvent]
         nonceCounts <- Ref.of[F, Map[Nonce, NonceCount]](Map.empty)
         stopped     <- Deferred[F, Unit]
       } yield new Agent(
         layer,
         uplinks,
+        publicAddress,
         selected,
+        sentContact,
         registrarUri,
         entropy,
         requested,
