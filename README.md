@@ -76,8 +76,10 @@ softphone4s handles outbound SIP calls end-to-end:
   come back by `rport`); a registration that is up moves its binding to the new
   Contact at once. When we answer a request we fill in `received` and `rport` in
   the same way for the sender. `nat.observed-address = "ignore"` keeps to the
-  address we bound. The old binding at the registrar is left to expire, and the
-  media port is assumed not to be remapped.
+  address we bound. Once the new Contact is registered, the old binding is
+  removed with a REGISTER of its own (`expires=0`, a new Call-ID, answered once
+  if challenged; best effort, as it expires anyway). The media port is assumed
+  not to be remapped.
 - **STUN** (RFC 8489): with `nat.stun.host` set, the SIP UDP socket itself
   sends a Binding request to the server (repeated, waiting twice as long each
   time) and the answer is used like an address a SIP server reported, so the

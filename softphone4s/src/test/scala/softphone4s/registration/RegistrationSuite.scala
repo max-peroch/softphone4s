@@ -635,4 +635,75 @@ class RegistrationSuite extends CatsEffectSuite {
       }
     )
   }
+
+  test(
+    "once the moved binding is registered, the old one is removed by a registration of its own"
+  ) {
+    TestControl.executeEmbed(
+      withOutside(None) { (reg, peer, seen) =>
+        for {
+          first <- nextRegister(peer)
+          _     <- answer(peer, first, 200, granted = Some(3600))
+          _     <- reg.awaitRegistered
+          _     <- seen.set(Some(outside))
+          moved <- nextRegister(peer)
+          _     <- answer(peer, moved, 200)
+          gone  <- nextRegister(peer)
+          _     <- answer(peer, gone, 200)
+        } yield {
+          assertEquals(contactsOf(moved), List("sip:test@203.0.113.7:41000"))
+          assertEquals(contactsOf(gone), List("sip:test@127.0.0.1:19060"))
+          assertEquals(gone.headers.expires, Some(Expires.Zero))
+          assertNotEquals(gone.headers.callId, first.headers.callId)
+          assertEquals(gone.headers.cseq.seq, CSeqNumber.One)
+        }
+      }
+    )
+  }
+
+  test("a refresh at the same Contact removes nothing") {
+    TestControl.executeEmbed(
+      withOutside(Some(outside)) { (_, peer, _) =>
+        for {
+          first   <- nextRegister(peer)
+          _       <- answer(peer, first, 200, granted = Some(600))
+          refresh <- nextRegister(peer)
+          _       <- answer(peer, refresh, 200, granted = Some(600))
+          other   <- nextRegister(peer).timeout(10.seconds).attempt
+        } yield {
+          assertEquals(refresh.headers.expires, Some(expires(3600)))
+          assert(other.isLeft, "no REGISTER but the refresh was sent")
+        }
+      }
+    )
+  }
+
+  test("a removal that is challenged is answered once") {
+    TestControl.executeEmbed(
+      withOutside(None) { (reg, peer, seen) =>
+        for {
+          first <- nextRegister(peer)
+          _     <- answer(peer, first, 200, granted = Some(3600))
+          _     <- reg.awaitRegistered
+          _     <- seen.set(Some(outside))
+          moved <- nextRegister(peer)
+          _     <- answer(peer, moved, 200)
+          gone  <- nextRegister(peer)
+          _ <- answer(peer, gone, 401, "Unauthorized", challenge = Some(digest))
+          again <- nextRegister(peer)
+          _     <- answer(peer, again, 200)
+        } yield {
+          assertEquals(contactsOf(again), List("sip:test@127.0.0.1:19060"))
+          assertEquals(again.headers.expires, Some(Expires.Zero))
+          assertEquals(again.headers.callId, gone.headers.callId)
+          assert(again.headers.cseq.seq.value > gone.headers.cseq.seq.value)
+          assert(
+            again.headers.others.exists(
+              _.name.matches("Authorization")
+            )
+          )
+        }
+      }
+    )
+  }
 }

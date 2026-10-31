@@ -50,6 +50,11 @@ final case class LocalEndpoint private (
         )
         .map(contact => copy(contact = contact, mapping = Some(address)))
 
+  /** This endpoint advertising `other` as its Contact: for a REGISTER that
+    * speaks of a binding made earlier, to remove it.
+    */
+  def advertising(other: SipUri): LocalEndpoint = copy(contact = other)
+
   /** The same account and RTP port reached over `transport` from local address
     * `ip`: what another target of the same call needs, since a different route
     * can mean a different local address and a different transport changes the

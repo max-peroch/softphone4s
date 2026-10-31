@@ -184,15 +184,14 @@ class NatSuite extends CatsEffectSuite {
     }
   }
 
-  private val stunPort = port"19162"
-  private val stunAt   = SocketAddress(ip"127.0.0.1", stunPort)
-  private val stunConf = StunConfig("127.0.0.1", stunPort, refresh = 1.hour)
+  private def stunAt(server: StunServer.Running) =
+    StunConfig("127.0.0.1", server.address.port, refresh = 1.hour)
 
   test(
     "a STUN server's answer is registered as the Contact, though the registrar says nothing"
   ) {
-    StunServer(stunAt, says = Some(outside)).surround(
-      scenario(ObservedAddresses.Use, Some(stunConf)).use { (phone, peer) =>
+    StunServer(says = Some(outside)).use(stun =>
+      scenario(ObservedAddresses.Use, Some(stunAt(stun))).use { (phone, peer) =>
         phone.register.use { registration =>
           for {
             // The registrar says nothing of where we are; only STUN knows. The
@@ -218,8 +217,8 @@ class NatSuite extends CatsEffectSuite {
   test(
     "a STUN server is not asked when the observed address is to be ignored"
   ) {
-    StunServer(stunAt, says = Some(outside)).use { stun =>
-      scenario(ObservedAddresses.Ignore, Some(stunConf)).use { (_, _) =>
+    StunServer(says = Some(outside)).use { stun =>
+      scenario(ObservedAddresses.Ignore, Some(stunAt(stun))).use { (_, _) =>
         IO.sleep(500.millis) >> stun.requests.get.map(assertEquals(_, 0))
       }
     }

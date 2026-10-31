@@ -86,6 +86,7 @@ object Registration {
       publicAddress: Signal[F, Option[SocketAddress[IpAddress]]],
       selected: Ref[F, Int],
       sentContact: Ref[F, Option[SipUri]],
+      bound: Ref[F, Option[(Int, SipUri)]],
       registrarUri: SipUri,
       entropy: Entropy[F],
       requested: Expires,
@@ -184,7 +185,9 @@ object Registration {
         case RegistrationAction.Notify(newState) =>
           moveOn.whenA(isFailure(newState)) >>
             signal.set(newState) >>
-            reconcileContact.whenA(isRegistered(newState)) >>
+            (retireOldBinding >> reconcileContact).whenA(
+              isRegistered(newState)
+            ) >>
             stopped
               .complete(())
               .void
@@ -205,21 +208,8 @@ object Registration {
             uplink   <- current
             endpoint <- asSeen(uplink.endpoint)
             branch   <- entropy.branch
-            auth     <- authorization.traverse { (kind, challenge) =>
-              (entropy.cnonce, nextNonceCount(challenge.nonce)).mapN {
-                (cnonce, count) =>
-                  endpoint.authorizationFor(
-                    kind,
-                    SipMethod.Register,
-                    registrarUri,
-                    "",
-                    challenge,
-                    cnonce,
-                    count
-                  )
-              }
-            }
-            _ <- sentContact.set(Some(endpoint.contact))
+            auth     <- authorization.traverse(authorize(endpoint, _, _))
+            _        <- sentContact.set(Some(endpoint.contact))
             request = endpoint.buildRegister(
               registrarUri,
               context.callId,
@@ -252,6 +242,113 @@ object Registration {
             }
           } yield ()
       }
+
+    private def authorize(
+        endpoint: LocalEndpoint,
+        kind: AuthKind,
+        challenge: DigestChallenge
+    ): F[ExtensionHeader] =
+      (entropy.cnonce, nextNonceCount(challenge.nonce)).mapN {
+        (cnonce, count) =>
+          endpoint.authorizationFor(
+            kind,
+            SipMethod.Register,
+            registrarUri,
+            "",
+            challenge,
+            cnonce,
+            count
+          )
+      }
+
+    /** Registered at a Contact other than the one registered before, on the
+      * same way to the registrar: the old binding would otherwise stay until it
+      * expires, and calls could be sent to where we no longer are.
+      */
+    private def retireOldBinding: F[Unit] =
+      (selected.get, sentContact.get).flatMapN { (index, sent) =>
+        sent.traverse_ { now =>
+          bound
+            .getAndSet(Some((index, now)))
+            .flatMap(
+              _.collect { case (i, old) if i == index && old != now => old }
+                .traverse_(old => supervisor.supervise(removeBinding(old)).void)
+            )
+        }
+      }
+
+    /** Removes the binding at `old` (RFC 3261 §10.2.2), as a registration of
+      * its own: a new Call-ID, so that its CSeq does not have to follow ours.
+      * Best effort: it is answered once if challenged, and otherwise only
+      * logged, since the binding expires on its own.
+      */
+    private def removeBinding(old: SipUri): F[Unit] =
+      for {
+        uplink   <- current
+        callId   <- entropy.callId(uplink.endpoint.ip)
+        localTag <- entropy.tag
+        _        <- removal(uplink, old, callId, localTag, CSeqNumber.One, None)
+      } yield ()
+
+    private def removal(
+        uplink: Uplink,
+        old: SipUri,
+        callId: CallId,
+        localTag: Tag,
+        cseq: CSeqNumber,
+        authorization: Option[(AuthKind, DigestChallenge)]
+    ): F[Unit] = {
+      val endpoint = uplink.endpoint.advertising(old)
+      for {
+        branch <- entropy.branch
+        auth   <- authorization.traverse(authorize(endpoint, _, _))
+        request = endpoint.buildRegister(
+          registrarUri,
+          callId,
+          localTag,
+          cseq,
+          branch,
+          Expires.Zero,
+          auth
+        )
+        started <- layer.client(request, uplink.peer)
+        answer  <- started.toOption.flatTraverse(
+          _.notices
+            .collectFirst {
+              case ClientNotice.Response(r) if r.statusCode >= 200 => r
+            }
+            .compile
+            .last
+        )
+        _ <- answer match {
+          case Some(r) if r.statusCode == 401 || r.statusCode == 407 =>
+            val (kind, challenges) =
+              if r.statusCode == 401 then
+                (AuthKind.Origin, r.headers.wwwAuthenticate)
+              else (AuthKind.Proxy, r.headers.proxyAuthenticate)
+            AuthChallenge
+              .best(challenges)
+              .filter(_ => authorization.isEmpty)
+              .traverse_(challenge =>
+                removal(
+                  uplink,
+                  old,
+                  callId,
+                  localTag,
+                  cseq.next,
+                  Some((kind, challenge))
+                )
+              )
+          case other =>
+            logger.debug(
+              Map(
+                "contact" -> old.render,
+                "status"  -> other.fold("none")(_.statusCode.toString)
+              )
+            )("Removed the old binding")
+        }
+      } yield ()
+    }
 
     private def isRegistered(state: RegistrationState): Boolean = state match {
       case RegistrationState.Registered(_) => true
@@ -320,6 +417,7 @@ object Registration {
         )
         selected    <- Ref.of[F, Int](0)
         sentContact <- Ref.of[F, Option[SipUri]](None)
+        bound       <- Ref.of[F, Option[(Int, SipUri)]](None)
         fsm    <- Ref.of[F, RegistrationFsmState](RegistrationFsmState.Idle)
         events <- Channel.unbounded[F, RegistrationEvent]
         nonceCounts <- Ref.of[F, Map[Nonce, NonceCount]](Map.empty)
@@ -330,6 +428,7 @@ object Registration {
         publicAddress,
         selected,
         sentContact,
+        bound,
         registrarUri,
         entropy,
         requested,
