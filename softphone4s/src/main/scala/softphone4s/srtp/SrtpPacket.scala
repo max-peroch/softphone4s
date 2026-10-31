@@ -49,7 +49,11 @@ private[srtp] object SrtpPacket {
     }
 
   /** The IV of §4.1.1: `(salt * 2^16) XOR (SSRC * 2^64) XOR (index * 2^16)`. */
-  private def iv(salt: Chunk[Byte], ssrc: Ssrc, index: Long): Array[Byte] = {
+  private[srtp] def iv(
+      salt: Chunk[Byte],
+      ssrc: Ssrc,
+      index: Long
+  ): Array[Byte] = {
     val block = new Array[Byte](16)
     salt.copyToArray(block, 0)
     Iterator
@@ -96,18 +100,22 @@ private[srtp] object SrtpPacket {
       authenticated: Array[Byte],
       roc: Long,
       length: Int
-  ): Array[Byte] = {
-    val mac = Mac.getInstance("HmacSHA1")
-    mac.init(new SecretKeySpec(keys.authKey.toArray, "HmacSHA1"))
-    mac.update(authenticated)
-    mac.update(
-      Array[Byte](
+  ): Array[Byte] =
+    mac(
+      keys,
+      authenticated ++ Array[Byte](
         (roc >>> 24).toByte,
         (roc >>> 16).toByte,
         (roc >>> 8).toByte,
         roc.toByte
-      )
+      ),
+      length
     )
-    mac.doFinal().take(length)
+
+  /** HMAC-SHA1 over `data`, cut to `length` bytes. */
+  def mac(keys: SessionKeys, data: Array[Byte], length: Int): Array[Byte] = {
+    val hmac = Mac.getInstance("HmacSHA1")
+    hmac.init(new SecretKeySpec(keys.authKey.toArray, "HmacSHA1"))
+    hmac.doFinal(data).take(length)
   }
 }

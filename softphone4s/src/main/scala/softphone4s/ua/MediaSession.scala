@@ -28,7 +28,14 @@ import softphone4s.media.{
 import softphone4s.media.RtcpPacket.ReportBlock
 import softphone4s.model.{DtmfDigit, MediaDirection, SoftphoneError, Ssrc}
 import softphone4s.sdp.{Capabilities, Codec, MediaPlan}
-import softphone4s.srtp.{SrtpError, SrtpInbound, SrtpOutbound, SrtpPlan}
+import softphone4s.srtp.{
+  SrtcpInbound,
+  SrtcpOutbound,
+  SrtpError,
+  SrtpInbound,
+  SrtpOutbound,
+  SrtpPlan
+}
 
 import scala.concurrent.duration.*
 import softphone4s.transport.{RtpLatch, RtpSender, RtpTransport}
@@ -53,6 +60,7 @@ private[softphone4s] class MediaSession[F[_]: Async: Network] private (
     peerBlock: Ref[F, Option[ReportBlock]],
     rtcp: RtcpSchedule
 ) {
+  import MediaSession.RtcpGuard
 
   val source: Stream[F, Byte] =
     audioChannel.stream.flatMap(Stream.chunk)
@@ -170,6 +178,7 @@ private[softphone4s] class MediaSession[F[_]: Async: Network] private (
   private def report(
       socket: DatagramSocket[F],
       rtp: RtpSender[F],
+      guard: Option[RtcpGuard[F]],
       leaving: Boolean
   ): F[Unit] =
     (Async[F].monotonic, rtp.senderInfo, rtcpTarget).flatMapN {
@@ -190,8 +199,10 @@ private[softphone4s] class MediaSession[F[_]: Async: Network] private (
                 if leaving then
                   RtcpReports.goodbye(rtp.source, info, blocks, name)
                 else RtcpReports.regular(rtp.source, info, blocks, name)
-              socket
-                .write(Datagram(address, RtcpCodec.encode(packets)))
+              onTheWire(guard, RtcpCodec.encode(packets))
+                .flatMap(
+                  _.traverse_(bytes => socket.write(Datagram(address, bytes)))
+                )
                 .attempt
                 .void
                 .whenA(!leaving || info.isDefined || blocks.nonEmpty)
@@ -223,23 +234,29 @@ private[softphone4s] class MediaSession[F[_]: Async: Network] private (
   /** Reports every so often, and hears the other side's, until cancelled. Only
     * what comes from the host we send media to is believed.
     */
-  private def reports(socket: DatagramSocket[F], rtp: RtpSender[F]): F[Unit] = {
+  private def reports(
+      socket: DatagramSocket[F],
+      rtp: RtpSender[F],
+      guard: Option[RtcpGuard[F]]
+  ): F[Unit] = {
     val wait: (Double => FiniteDuration) => F[Unit] = pick =>
       Async[F]
         .delay(scala.util.Random.nextDouble())
         .flatMap(r => Async[F].sleep(pick(r)))
     val sending =
-      wait(rtcp.first) >> report(socket, rtp, leaving = false) >>
-        (wait(rtcp.next) >> report(socket, rtp, leaving = false)).foreverM[Unit]
+      wait(rtcp.first) >> report(socket, rtp, guard, leaving = false) >>
+        (wait(rtcp.next) >> report(socket, rtp, guard, leaving = false))
+          .foreverM[Unit]
     val receiving =
       socket.reads
         .evalMap(datagram =>
           target.get.flatMap(media =>
-            RtcpCodec
-              .decode(datagram.bytes)
-              .toOption
-              .filter(_ => media.exists(_.host == datagram.remote.host))
-              .traverse_(_.traverse_(hear(rtp.source, _)))
+            fromTheWire(guard, datagram.bytes)
+              .map(
+                _.flatMap(RtcpCodec.decode(_).toOption)
+                  .filter(_ => media.exists(_.host == datagram.remote.host))
+              )
+              .flatMap(_.traverse_(_.traverse_(hear(rtp.source, _))))
           )
         )
         .compile
@@ -247,6 +264,44 @@ private[softphone4s] class MediaSession[F[_]: Async: Network] private (
     // A side channel: whatever goes wrong with it does not end the call.
     sending.both(receiving).attempt.void
   }
+
+  /** `rtcp` as it goes on the wire: encrypted, if the call is. None if it could
+    * not be, which an RTCP packet of ours never cannot.
+    */
+  private def onTheWire(
+      guard: Option[RtcpGuard[F]],
+      rtcp: Chunk[Byte]
+  ): F[Option[Chunk[Byte]]] =
+    guard.fold(Async[F].pure(Option(rtcp)))(g =>
+      g.out.modify(out =>
+        out.protect(rtcp) match {
+          case Right((next, bytes)) => (next, Some(bytes))
+          case Left(_)              => (out, None)
+        }
+      )
+    )
+
+  /** Takes SRTCP off what came: the RTCP in it, or nothing if it does not
+    * authenticate, or has been seen. As for media, a packet from another source
+    * starts a new count if it is authentic with the key we were given.
+    */
+  private def fromTheWire(
+      guard: Option[RtcpGuard[F]],
+      bytes: Chunk[Byte]
+  ): F[Option[Chunk[Byte]]] =
+    guard.fold(Async[F].pure(Option(bytes)))(g =>
+      g.in.modify { current =>
+        current.unprotect(bytes) match {
+          case Right((next, rtcp))              => (next, Some(rtcp))
+          case Left(SrtpError.SourceChanged(_)) =>
+            SrtcpInbound(g.keys.receive).unprotect(bytes) match {
+              case Right((next, rtcp)) => (next, Some(rtcp))
+              case Left(_)             => (current, None)
+            }
+          case Left(_) => (current, None)
+        }
+      }
+    )
 
   /** Media as it came, when it is not encrypted. */
   private val plain: Chunk[Byte] => F[Option[Chunk[Byte]]] =
@@ -394,8 +449,14 @@ private[softphone4s] class MediaSession[F[_]: Async: Network] private (
           Ref[F].of((-1L, -1)),
           plan.srtp.traverse(keys =>
             Ref[F].of(SrtpInbound(keys.suite, keys.receive)).map(keys -> _)
+          ),
+          plan.srtp.traverse(keys =>
+            (
+              Ref[F].of(SrtcpOutbound(keys.send)),
+              Ref[F].of(SrtcpInbound(keys.receive))
+            ).mapN(RtcpGuard(keys, _, _))
           )
-        ).flatMapN { (lastDtmfKey, inbound) =>
+        ).flatMapN { (lastDtmfKey, inbound, guard) =>
           Network[F]
             .bindDatagramSocket(address =
               SocketAddress(bindAddress, localRtpPort)
@@ -451,8 +512,13 @@ private[softphone4s] class MediaSession[F[_]: Async: Network] private (
                       case Some(rtcpSocket) =>
                         receiveF
                           .race(mediaStop.get.void)
-                          .race(reports(rtcpSocket, rtp))
-                          .void >> report(rtcpSocket, rtp, leaving = true)
+                          .race(reports(rtcpSocket, rtp, guard))
+                          .void >> report(
+                          rtcpSocket,
+                          rtp,
+                          guard,
+                          leaving = true
+                        )
                     }
                 }
             } >> audioChannel.close.void
@@ -473,6 +539,15 @@ private[softphone4s] class MediaSession[F[_]: Async: Network] private (
 }
 
 private[softphone4s] object MediaSession {
+
+  /** What an encrypted call protects its RTCP with: the keys, and the state of
+    * each direction.
+    */
+  private[ua] final case class RtcpGuard[F[_]](
+      keys: SrtpPlan,
+      out: Ref[F, SrtcpOutbound],
+      in: Ref[F, SrtcpInbound]
+  )
 
   /** What the receiving end plays when it has no speech to play, kept together
     * because the two are decided together: the background noise the other side

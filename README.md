@@ -202,7 +202,8 @@ softphone4s handles outbound SIP calls end-to-end:
   log. Not supported: master key identifiers, key lifetimes (read and ignored),
   `KDR=` and other session parameters (a line with one is not used), and a key
   change in mid-call (the other side must keep its key over a re-INVITE). RTCP
-  is not encrypted yet (SRTCP is to come); AES-GCM and DTLS-SRTP are not
+  is encrypted too (SRTCP, with keys of its own derived from the same master key; reports
+  that do not authenticate are ignored); AES-GCM and DTLS-SRTP are not
   offered.
 - **Comfort noise** (RFC 3389), received: we offer `CN/8000` (payload type 13)
   beside the codecs, and answer it when it is offered (on the number it was

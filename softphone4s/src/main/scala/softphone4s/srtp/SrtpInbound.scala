@@ -5,18 +5,16 @@ import softphone4s.model.Ssrc
 
 import java.security.MessageDigest
 
-/** The receiving end of an SRTP stream of one source: the keys, the highest
-  * index opened (whose high bits are the rollover counter, §3.3.1) and the
-  * replay window of the 64 indexes up to it (§3.3.2).
+/** The receiving end of an SRTP stream of one source: the keys and the replay
+  * window, whose highest index has the rollover counter in its high bits
+  * (§3.3.1).
   */
 final class SrtpInbound private (
     suite: SrtpSuite,
     keys: SessionKeys,
     source: Option[Ssrc],
-    highest: Option[Long],
-    window: Long
+    window: ReplayWindow
 ) {
-  import SrtpInbound.*
 
   /** `packet`, authenticated and decrypted, and the context for the next. A
     * packet is counted once it has been authenticated, never before, so that
@@ -36,7 +34,7 @@ final class SrtpInbound private (
         .filter(_ != header.ssrc)
         .fold(Right(()))(_ => Left(SrtpError.SourceChanged(header.ssrc)))
       index = estimate(header.sequence)
-      _ <- unseen(index)
+      _ <- window.admits(index)
       authenticated = packet.take(packet.size - suite.tagLength).toArray
       expected      = SrtpPacket.tag(
         keys,
@@ -63,7 +61,7 @@ final class SrtpInbound private (
     * (§3.3.1).
     */
   private def estimate(sequence: Int): Long =
-    highest.fold(sequence.toLong) { top =>
+    window.highest.fold(sequence.toLong) { top =>
       val roc     = top >>> 16
       val last    = (top & 0xffff).toInt
       val counter =
@@ -74,48 +72,16 @@ final class SrtpInbound private (
       (counter << 16) | sequence
     }
 
-  /** Whether the packet of this index may be opened: not one that is in the
-    * window already, and not one behind it.
-    */
-  private def unseen(index: Long): Either[SrtpError, Unit] =
-    highest match {
-      case Some(top) if index <= top =>
-        val behind = top - index
-        if behind >= WindowSize then Left(SrtpError.TooOld)
-        else if ((window >>> behind) & 1L) != 0 then Left(SrtpError.Replayed)
-        else Right(())
-      case _ => Right(())
-    }
-
   private def counted(ssrc: Ssrc, index: Long): SrtpInbound =
-    highest match {
-      case Some(top) if index <= top =>
-        new SrtpInbound(
-          suite,
-          keys,
-          Some(ssrc),
-          highest,
-          window | (1L << (top - index))
-        )
-      case Some(top) =>
-        val shift = index - top
-        new SrtpInbound(
-          suite,
-          keys,
-          Some(ssrc),
-          Some(index),
-          if shift >= WindowSize then 1L else (window << shift) | 1L
-        )
-      case None => new SrtpInbound(suite, keys, Some(ssrc), Some(index), 1L)
-    }
+    new SrtpInbound(suite, keys, Some(ssrc), window.counted(index))
 }
 
 object SrtpInbound {
 
   /** How many indexes the replay window covers. */
-  val WindowSize: Int = 64
+  val WindowSize: Int = ReplayWindow.Size
 
   /** A stream that has received nothing, with the keys that `master` gives. */
   def apply(suite: SrtpSuite, master: MasterKey): SrtpInbound =
-    new SrtpInbound(suite, SessionKeys.srtp(master), None, None, 0L)
+    new SrtpInbound(suite, SessionKeys.srtp(master), None, ReplayWindow.Empty)
 }
