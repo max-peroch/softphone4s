@@ -17,5 +17,9 @@ enum SubscriptionStatus {
   /** We have asked to end it. */
   case Leaving
 
+  /** The dialog ended in a way that allows another, which begins after `in`. */
+  case Retrying(because: Ending, in: FiniteDuration)
+
+  /** Over for good: the subscription was ended, or will not be had again. */
   case Ended(ending: Ending)
 }
