@@ -22,6 +22,7 @@ lazy val softphone4s = project
   .in(file("softphone4s"))
   .settings(
     name                := "softphone4s",
+    scalacOptions       ++= Seq("-release", "17"),
     libraryDependencies ++= Seq(
       munit,
       munitCatsEffect,
@@ -43,6 +44,7 @@ lazy val softphone4sOtel4s = project
   .dependsOn(softphone4s)
   .settings(
     name                := "softphone4s-otel4s",
+    scalacOptions       ++= Seq("-release", "17"),
     libraryDependencies ++= Seq(
       otel4sCoreTrace,
       opentelemetryApi

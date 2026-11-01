@@ -9,8 +9,16 @@ on:
 
 jobs:
   build:
-    name: Build and Test
+    # The library runs on Java 17 and later (it is compiled with -release 17),
+    # so it is tested on 17. Everything else, the Opus module included, needs
+    # the Foreign Function & Memory API of Java 22 and later, and is built and
+    # tested on 25. Zulu, for a release that has the fix for CVE-2026-91403.
+    name: Build and Test (Java ${{ matrix.java }})
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        java: ['17', '25']
     steps:
       - name: Checkout current branch (full)
         uses: actions/checkout@v6
@@ -21,19 +29,26 @@ jobs:
         uses: actions/setup-java@v5
         with:
           distribution: zulu
-          java-version: '17'
+          java-version: ${{ matrix.java }}
           cache: sbt
 
       - name: Setup sbt
         uses: sbt/setup-sbt@v1
 
       - name: Check formatting
+        if: matrix.java == '25'
         run: sbt "scalafmtSbtCheck;scalafmtCheckAll"
 
-      - name: Test
+      - name: Test the library
+        if: matrix.java == '17'
+        run: sbt "softphone4s/testFull;softphone4sOtel4s/testFull"
+
+      - name: Test everything
+        if: matrix.java == '25'
         run: sbt testFull
 
       - name: Generate documentation
+        if: matrix.java == '25'
         run: sbt doc
 
   publish:
@@ -51,7 +66,7 @@ jobs:
         uses: actions/setup-java@v5
         with:
           distribution: zulu
-          java-version: '17'
+          java-version: '25'
           cache: sbt
 
       - name: Setup sbt
