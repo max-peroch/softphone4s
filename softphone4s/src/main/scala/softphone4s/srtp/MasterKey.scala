@@ -21,15 +21,17 @@ object MasterKey {
   val KeyLength: Int  = 16
   val SaltLength: Int = 14
 
-  /** A key and a salt of random bytes from `random`, which must be a secure
-    * one.
+  /** The key and salt in the first 30 bytes of `bytes`, which are to come from
+    * a strong source of randomness (see `Entropy.masterKey`). Shorter input is
+    * filled out with zeros, so that the function is total; no caller gives
+    * less.
     */
-  def random(random: java.security.SecureRandom): MasterKey = {
-    val key  = new Array[Byte](KeyLength)
-    val salt = new Array[Byte](SaltLength)
-    random.nextBytes(key)
-    random.nextBytes(salt)
-    new MasterKey(Chunk.array(key), Chunk.array(salt))
+  def fromEntropy(bytes: Chunk[Byte]): MasterKey = {
+    val all = bytes.toArray.padTo(KeyLength + SaltLength, 0.toByte)
+    new MasterKey(
+      Chunk.array(all.take(KeyLength)),
+      Chunk.array(all.slice(KeyLength, KeyLength + SaltLength))
+    )
   }
 
   /** A key of 16 bytes and a salt of 14. */

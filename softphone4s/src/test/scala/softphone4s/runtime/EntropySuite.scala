@@ -57,4 +57,27 @@ class EntropySuite extends CatsEffectSuite {
       assertEquals(xs, ys)
     }
   }
+
+  test("a master key is 30 bytes, and the same seed gives the same key") {
+    for {
+      a <- seeded(7)
+      b <- seeded(7)
+      c <- seeded(8)
+      x <- a.masterKey
+      y <- b.masterKey
+      z <- c.masterKey
+    } yield {
+      assertEquals(x.bytes.size, 30)
+      assertEquals(x.bytes, y.bytes)
+      assertNotEquals(x.bytes, z.bytes)
+    }
+  }
+
+  test("two keys from one source differ") {
+    seeded(3).flatMap(e =>
+      (e.masterKey, e.masterKey).tupled.map((a, b) =>
+        assertNotEquals(a.bytes, b.bytes)
+      )
+    )
+  }
 }

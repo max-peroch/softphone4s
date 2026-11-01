@@ -1,9 +1,6 @@
 package softphone4s.sdp
 
-import cats.effect.Sync
 import softphone4s.srtp.{MasterKey, SrtpPolicy, SrtpSuite}
-
-import java.security.SecureRandom
 
 /** What we offer, or answer with, for the encryption of a stream: the policy,
   * and a line of our own for each suite we speak, in order of preference, each
@@ -17,20 +14,21 @@ object LocalCrypto {
   /** Plain RTP. */
   val Off: LocalCrypto = LocalCrypto(SrtpPolicy.Off, Nil)
 
-  /** The keys for one call under `policy`: a line for each suite, numbered from
-    * 1 in order of preference, each with a key of its own from a secure random
-    * source. Under `Off` there is nothing to make.
+  /** How many keys a call needs: one for each suite. */
+  def keysNeeded: Int = SrtpSuite.values.length
+
+  /** The lines for one call under `policy`, from `keys` (see [[keysNeeded]]):
+    * one for each suite, numbered from 1 in order of preference, each with a
+    * key of its own. Under `Off` there is nothing to offer.
     */
-  def generate[F[_]: Sync](policy: SrtpPolicy): F[LocalCrypto] =
-    if policy == SrtpPolicy.Off then Sync[F].pure(Off)
+  def numbered(policy: SrtpPolicy, keys: List[MasterKey]): LocalCrypto =
+    if policy == SrtpPolicy.Off then Off
     else
-      Sync[F].delay {
-        val random = new SecureRandom
-        LocalCrypto(
-          policy,
-          SrtpSuite.values.toList.zipWithIndex.map((suite, i) =>
-            CryptoAttribute(i + 1, suite, MasterKey.random(random))
-          )
-        )
-      }
+      LocalCrypto(
+        policy,
+        SrtpSuite.values.toList
+          .zip(keys)
+          .zipWithIndex
+          .map { case ((suite, key), i) => CryptoAttribute(i + 1, suite, key) }
+      )
 }

@@ -11,42 +11,26 @@ import fs2.concurrent.{Channel, SignallingRef}
 import fs2.io.net.Network
 import org.typelevel.log4cats.StructuredLogger
 import softphone4s.config.{ObservedAddresses, SoftphoneConfig, StunConfig}
-import softphone4s.dns.{
-  DnsJavaRecords,
-  DnsRecords,
-  ResolvedTarget,
-  TargetResolver
-}
+import softphone4s.dns.{DnsJavaRecords, DnsRecords, TargetResolver}
 import softphone4s.fsm.CallTimer
 import softphone4s.model.*
 import softphone4s.registration.Registration
-import softphone4s.sdp.LocalCrypto
 import softphone4s.media.{AudioCodec, AudioCodecs, RtpPortRange, RtpPorts}
 import softphone4s.runtime.{Entropy, Timers}
 import softphone4s.stun.StunClient
 import softphone4s.transaction.{
-  ServerTransaction,
   TransactionConfig,
   TransactionLayer,
-  TransactionManager,
-  TransactionMessages
+  TransactionManager
 }
 import softphone4s.transport.{
-  Inbound,
   RoutedTransport,
   SipTransport,
   TcpTransport,
   TlsTransport
 }
-import softphone4s.fsm.SipMessages
 import softphone4s.messaging.{IncomingMessage, MessageContent, MessageFailure}
-import softphone4s.ua.{
-  DialogInput,
-  InboundCall,
-  MediaSession,
-  MessageSender,
-  OutboundCall
-}
+import softphone4s.ua.{DialogInput, MediaSession, MessageSender, OutboundCall}
 
 import javax.sound.sampled.AudioFormat
 
@@ -57,37 +41,29 @@ import javax.sound.sampled.AudioFormat
 class SoftphoneStreaming[F[_]: Async: Network] private (
     config: SoftphoneConfig,
     accountList: NonEmptyList[Account],
-    targets: TargetResolver[F],
+    uplinks: Uplinks[F],
+    endpoints: EndpointFactory[F],
     publicSip: SignallingRef[F, Option[SocketAddress[IpAddress]]],
     layer: TransactionLayer[F],
     routes: Ref[F, Map[CallId, Channel[F, DialogInput[F]]]],
-    rtpPorts: RtpPorts[F],
     entropy: Entropy[F],
     codecs: AudioCodecs,
-    supervisor: Supervisor[F],
-    incomingCalls: Queue[F, IncomingCall[F]],
-    messageQueue: Queue[F, IncomingMessage],
+    router: IncomingRouter[F],
     logger: StructuredLogger[F]
 ) extends Softphone[F] {
 
   override val accounts: NonEmptyList[AccountId] = accountList.map(_.id)
+
+  override def incoming: Stream[F, IncomingCall[F]] = router.calls
+
+  override def incomingMessages: Stream[F, IncomingMessage] =
+    router.incomingMessages
 
   private def accountNamed(id: AccountId): F[Account] =
     Async[F].fromOption(
       accountList.find(_.id == id),
       SoftphoneError.UnknownAccount(id.render)
     )
-
-  /** The account an incoming request is for: the one whose user is in the
-    * Request-URI. With a single account every call is for it, whatever it
-    * names.
-    */
-  private def accountFor(request: SipRequest): Option[Account] =
-    if accountList.tail.isEmpty then Some(accountList.head)
-    else
-      request.requestUri.user.flatMap(user =>
-        accountList.find(_.config.user == user.value)
-      )
 
   private def toExtensionHeaders(
       headers: Map[String, List[String]]
@@ -111,21 +87,26 @@ class SoftphoneStreaming[F[_]: Async: Network] private (
       target <- Resource.eval(
         Async[F].fromEither(callee.toSipUri(account.config.realm))
       )
-      found <- Resource.eval(allTargets(account, target))
+      found <- Resource.eval(uplinks.allTargets(account, target))
       resolved = found.head
-      protocol <- Resource.eval(available(resolved.transport))
+      protocol <- Resource.eval(endpoints.available(resolved.transport))
       calleeAddr = resolved.address
       localIp <- Resource.eval(
-        localIpFor(calleeAddr).flatTap(ip =>
-          logger.info(Map("address" -> ip.toString))("Advertising local IP")
-        )
+        endpoints
+          .localIpFor(calleeAddr)
+          .flatTap(ip =>
+            logger.info(Map("address" -> ip.toString))("Advertising local IP")
+          )
       )
-      endpoint <- allocateEndpoint(account, localIp, protocol)
-        .evalMap(secureIfNeeded(_, target.scheme))
-        .evalMap(seenFromOutside)
-      alternatives <- Resource.eval(alternativesTo(endpoint, found.tail))
-      streamWay    <- Resource.eval(
-        streamWayTo(account, target, endpoint, calleeAddr)
+      endpoint <- endpoints
+        .allocateEndpoint(account, localIp, protocol)
+        .evalMap(endpoints.secureIfNeeded(_, target.scheme))
+        .evalMap(endpoints.seenFromOutside)
+      alternatives <- Resource.eval(
+        uplinks.alternativesTo(endpoint, found.tail)
+      )
+      streamWay <- Resource.eval(
+        uplinks.streamWayTo(account, target, endpoint, calleeAddr)
       )
       callId <- Resource.eval(entropy.callId(localIp))
       sipCh  <- Resource.make(
@@ -160,14 +141,18 @@ class SoftphoneStreaming[F[_]: Async: Network] private (
             .leftMap(SoftphoneError.InvalidSipUri(account.config.realm, _))
         )
       )
-      found <- Resource.eval(allTargets(account, registrarUri))
+      found <- Resource.eval(uplinks.allTargets(account, registrarUri))
       resolved = found.head
-      protocol <- Resource.eval(available(resolved.transport))
+      protocol <- Resource.eval(endpoints.available(resolved.transport))
       registrar = resolved.address
-      localIp <- Resource.eval(localIpFor(registrar))
+      localIp <- Resource.eval(endpoints.localIpFor(registrar))
       // A REGISTER carries no media, so the RTP port is not used.
-      endpoint <- Resource.eval(signallingEndpoint(account, localIp, protocol))
-      alternatives <- Resource.eval(alternativesTo(endpoint, found.tail))
+      endpoint <- Resource.eval(
+        endpoints.signallingEndpoint(account, localIp, protocol)
+      )
+      alternatives <- Resource.eval(
+        uplinks.alternativesTo(endpoint, found.tail)
+      )
       registration <- Registration.resource(
         layer,
         NonEmptyList(Uplink(endpoint, registrar), alternatives),
@@ -180,203 +165,6 @@ class SoftphoneStreaming[F[_]: Async: Network] private (
       )
     } yield registration
 
-  /** Where a request within a dialog that runs over `transport` goes when its
-    * next hop is `uri`: the Contact or the first Route, located as RFC 3263
-    * says (an address or a port in it is used as it is, otherwise SRV and NAPTR
-    * records decide). The request carries a Via for `transport`, so only a
-    * target reached that way will do; for any other the caller falls back to
-    * the server it dialled.
-    */
-  private def nextHopOver(
-      transport: TransportProtocol
-  )(uri: SipUri): F[SocketAddress[IpAddress]] =
-    targets
-      .resolve(uri, transport)
-      .flatMap(found =>
-        Async[F].fromOption(
-          found.find(_.transport == transport).map(_.address),
-          SoftphoneError.HostResolutionFailed(uri.host.toString)
-        )
-      )
-
-  /** The first place to send a request for `uri` (RFC 3263): SRV and NAPTR
-    * records decide where and over what, unless the URI or the account's server
-    * port says so. Fails if nothing resolves.
-    */
-  /** Every place to try for `uri`, best first, at most
-    * `SoftphoneStreaming.MaxTargets`.
-    */
-  private def allTargets(
-      account: Account,
-      uri: SipUri
-  ): F[NonEmptyList[ResolvedTarget]] =
-    targets
-      .resolve(aimed(account, uri), account.config.transport)
-      .flatMap(found =>
-        Async[F].fromOption(
-          NonEmptyList.fromList(found.take(SoftphoneStreaming.MaxTargets)),
-          SoftphoneError.HostResolutionFailed(uri.host.toString)
-        )
-      )
-
-  /** The way over TCP to the server that `endpoint` reaches over UDP: where a
-    * request too big for a datagram goes (RFC 3261 §18.1.1). The server is
-    * looked up for TCP, as RFC 3263 says, so a domain that serves TCP on
-    * another port, or elsewhere, is found; with no answer it is the UDP address
-    * again. None for a call that is not over UDP.
-    */
-  private def streamWayTo(
-      account: Account,
-      target: SipUri,
-      endpoint: LocalEndpoint,
-      peer: SocketAddress[IpAddress]
-  ): F[Option[Uplink]] =
-    if endpoint.transport != TransportProtocol.Udp then Async[F].pure(None)
-    else
-      (for {
-        found <- targets.resolve(
-          aimed(account, target).withTransport(TransportProtocol.Tcp),
-          TransportProtocol.Tcp
-        )
-        address = found
-          .find(_.transport == TransportProtocol.Tcp)
-          .fold(peer)(_.address)
-        ip     <- localIpFor(address)
-        stream <- Async[F].fromEither(endpoint.via(ip, TransportProtocol.Tcp))
-      } yield Option(Uplink(stream, address))).handleError(_ => None)
-
-  /** The other ways to reach the server, each as `endpoint` over that target's
-    * transport and from the local address that routes to it, keeping the RTP
-    * port. A target we cannot speak to, or cannot build an endpoint for, is
-    * left out.
-    */
-  private def alternativesTo(
-      endpoint: LocalEndpoint,
-      others: List[ResolvedTarget]
-  ): F[List[Uplink]] =
-    others.flatTraverse { other =>
-      (for {
-        transport <- available(other.transport)
-        ip        <- localIpFor(other.address)
-        rebased   <- Async[F].fromEither(endpoint.via(ip, transport))
-      } yield List(Uplink(rebased, other.address))).handleErrorWith(error =>
-        logger
-          .debug(
-            Map(
-              "target" -> other.address.toString,
-              "error"  -> String.valueOf(error.getMessage)
-            )
-          )("Not using this target as a fallback")
-          .as(Nil)
-      )
-    }
-
-  /** `uri`, at the account's server port if that is set to something other than
-    * the default 5060 and the URI names no port: a port given is taken as it is
-    * and skips the SRV lookup, while the default leaves DNS to say.
-    */
-  private def aimed(account: Account, uri: SipUri): SipUri =
-    if uri.port.isEmpty && account.config.serverPort != port"5060" then
-      uri.withPort(account.config.serverPort)
-    else uri
-
-  /** The address the OS would send from to reach `remote`: what the SDP and
-    * Contact must advertise for replies to come back. Connecting a UDP socket
-    * only picks the route; nothing is sent. (The first network interface would
-    * not do: on macOS it can be Docker Desktop's bridge, 192.168.65.1.) The SDP
-    * advertises IN IP4, so anything but IPv4 falls back.
-    */
-  private def localIpFor(remote: SocketAddress[IpAddress]): F[IpAddress] =
-    Resource
-      .fromAutoCloseable(Async[F].blocking(new java.net.DatagramSocket()))
-      .use(socket =>
-        Async[F].blocking {
-          socket.connect(remote.toInetSocketAddress)
-          socket.getLocalAddress
-        }
-      )
-      .map(address =>
-        Option(address)
-          .filterNot(_.isAnyLocalAddress)
-          .map(IpAddress.fromInetAddress)
-          .collect { case v4: Ipv4Address => v4: IpAddress }
-          .getOrElse(config.localIpFallback)
-      )
-      .handleError(_ => config.localIpFallback)
-
-  /** `endpoint` as the outside sees it, once a server has told us how that is
-    * (and unless we are set to ignore that): behind a NAT, the Contact and the
-    * media address of SDP are the public ones, which is where answers can reach
-    * us. Over a stream transport nothing changes.
-    */
-  private def seenFromOutside(endpoint: LocalEndpoint): F[LocalEndpoint] =
-    publicSip.get.flatMap {
-      case Some(address)
-          if config.nat.observedAddress == ObservedAddresses.Use =>
-        Async[F].fromEither(endpoint.mappedTo(address))
-      case _ => Async[F].pure(endpoint)
-    }
-
-  /** `endpoint`, with a `sips:` Contact if the request it is for is `sips:`. */
-  private def secureIfNeeded(
-      endpoint: LocalEndpoint,
-      scheme: SipScheme
-  ): F[LocalEndpoint] =
-    Async[F].fromEither(endpoint.forScheme(scheme))
-
-  /** The port our messages over `transport` say they come from, and our Contact
-    * says to reach us at: where we listen for it, if we do.
-    */
-  private def sipPortFor(transport: TransportProtocol): Port =
-    if transport == TransportProtocol.Tls &&
-      config.listen.contains(TransportProtocol.Tls)
-    then config.tlsPort
-    else config.localSipPort
-
-  /** `transport` itself, if we can speak it. */
-  private def available(transport: TransportProtocol): F[TransportProtocol] =
-    transport match {
-      case TransportProtocol.Udp | TransportProtocol.Tcp |
-          TransportProtocol.Tls =>
-        transport.pure[F]
-      case other =>
-        Async[F].raiseError(SoftphoneError.TransportUnavailable(other.token))
-    }
-
-  /** An endpoint for a request that carries no media, such as REGISTER or
-    * MESSAGE, which has no use for an RTP port.
-    */
-  private def signallingEndpoint(
-      account: Account,
-      localIp: IpAddress,
-      transport: TransportProtocol
-  ): F[LocalEndpoint] =
-    Async[F].fromEither(
-      LocalEndpoint.from(
-        account.config,
-        config.bindAddress,
-        localIp,
-        sipPortFor(transport),
-        config.baseRtpPort,
-        transport,
-        codecs.capabilities
-      )
-    )
-
-  /** The way to reach `resolved`, as `account`, for a request to `target`. */
-  private def uplinkTo(
-      account: Account,
-      target: SipUri,
-      resolved: ResolvedTarget
-  ): F[Uplink] =
-    for {
-      protocol <- available(resolved.transport)
-      localIp  <- localIpFor(resolved.address)
-      endpoint <- signallingEndpoint(account, localIp, protocol)
-        .flatMap(secureIfNeeded(_, target.scheme))
-        .flatMap(seenFromOutside)
-    } yield Uplink(endpoint, resolved.address)
-
   private val messages = new MessageSender[F](layer, entropy)
 
   override def sendMessageAs(
@@ -387,41 +175,13 @@ class SoftphoneStreaming[F[_]: Async: Network] private (
     for {
       account <- accountNamed(id)
       target  <- Async[F].fromEither(to.toSipUri(account.config.realm))
-      found   <- allTargets(account, target)
+      found   <- uplinks.allTargets(account, target)
       result  <- messages.deliver(
-        found.toList.map(uplinkTo(account, target, _)),
+        found.toList.map(uplinks.uplinkTo(account, target, _)),
         target,
         content
       )
     } yield result
-
-  /** The endpoint of a call, with a pair of RTP ports that goes back to the
-    * pool when the call's resources are released, and keys of its own.
-    */
-  private def allocateEndpoint(
-      account: Account,
-      localIp: IpAddress,
-      transport: TransportProtocol
-  ): Resource[F, LocalEndpoint] =
-    for {
-      rtpPort <- rtpPorts.allocate
-      // The keys of a call are made once, and are the same over its session
-      // changes and its uplinks.
-      crypto   <- Resource.eval(LocalCrypto.generate[F](config.srtp))
-      endpoint <- Resource.eval(
-        Async[F].fromEither(
-          LocalEndpoint.from(
-            account.config,
-            config.bindAddress,
-            localIp,
-            sipPortFor(transport),
-            rtpPort,
-            transport,
-            codecs.capabilities.copy(crypto = crypto)
-          )
-        )
-      )
-    } yield endpoint
 
   private def buildCall(
       callId: CallId,
@@ -453,7 +213,7 @@ class SoftphoneStreaming[F[_]: Async: Network] private (
           alternatives,
           streamWay,
           config.maxUdpMessage,
-          (transport, uri) => nextHopOver(transport)(uri),
+          (transport, uri) => uplinks.nextHopOver(transport)(uri),
           supervisor,
           entropy,
           media,
@@ -472,204 +232,6 @@ class SoftphoneStreaming[F[_]: Async: Network] private (
 
   // ---- Incoming calls ----------------------------------------------------------
 
-  override def incoming: Stream[F, IncomingCall[F]] =
-    Stream.fromQueueUnterminated(incomingCalls)
-
-  /** Hands each request to the call it belongs to. An INVITE with no To-tag and
-    * a new Call-ID starts an incoming call; anything else for a call that is
-    * gone, or never was, gets `481 Call/Transaction Does Not Exist` (RFC 3261
-    * §12.2.2), and a new INVITE reusing a live Call-ID gets
-    * `482 Loop Detected`.
-    */
-  private[softphone4s] def routeIncoming: F[Unit] =
-    layer.incoming.evalMap(route).compile.drain
-
-  private def isNewInvite(request: SipRequest): Boolean =
-    request.method == SipMethod.Invite && request.headers.to.tag.isEmpty
-
-  private def route(transaction: ServerTransaction[F]): F[Unit] = {
-    val request = transaction.request
-    routes.get.flatMap(_.get(request.headers.callId) match {
-      case Some(_) if isNewInvite(request) =>
-        transaction.respond(
-          TransactionMessages.responseTo(request, 482, "Loop Detected")
-        )
-      case Some(channel) => channel.send(DialogInput.Request(transaction)).void
-      case None if isNewInvite(request) =>
-        accountFor(request).fold(
-          transaction.respond(
-            TransactionMessages.responseTo(
-              request,
-              FailureStatus.NotFound.value,
-              FailureStatus.NotFound.reason
-            )
-          )
-        )(acceptInbound(transaction, _))
-      case None if request.method == SipMethod.Message =>
-        acceptMessage(transaction)
-      case None =>
-        logger.debug(Map("callId" -> request.headers.callId.value))(
-          "Request for a call that does not exist"
-        ) >>
-          transaction.respond(
-            TransactionMessages.responseTo(
-              request,
-              FailureStatus.CallDoesNotExist.value,
-              FailureStatus.CallDoesNotExist.reason
-            )
-          )
-    })
-  }
-
-  override def incomingMessages: Stream[F, IncomingMessage] =
-    Stream.fromQueueUnterminated(messageQueue)
-
-  /** A MESSAGE outside any dialog (RFC 3428). It is answered 404 if no account
-    * is the one it is for, 400 if it has a body and does not say what it is,
-    * 415 if it is not text we can read, and 503 if nobody is reading and the
-    * queue is full; otherwise it is held for `incomingMessages` and answered
-    * 200, in that order, so that 200 means the program has it.
-    */
-  private def acceptMessage(transaction: ServerTransaction[F]): F[Unit] = {
-    val request                       = transaction.request
-    def refuse(status: FailureStatus) =
-      transaction.respond(
-        TransactionMessages.responseTo(request, status.value, status.reason)
-      )
-    accountFor(request) match {
-      case None          => refuse(FailureStatus.NotFound)
-      case Some(account) =>
-        request.headers.contentType match {
-          case None if request.body.nonEmpty =>
-            refuse(FailureStatus.BadRequest)
-          case Some(contentType) if !MessageContent.canRead(contentType) =>
-            transaction.respond(
-              SipMessages.unsupportedMessage(request, MessageContent.Accepted)
-            )
-          case contentType =>
-            val message = IncomingMessage(
-              account.id,
-              request.headers.from,
-              MessageContent(
-                contentType.getOrElse(MediaType.Plain),
-                request.body
-              )
-            )
-            messageQueue.tryOffer(message).flatMap {
-              case true  => transaction.respond(SipMessages.messageOk(request))
-              case false =>
-                logger.warn(Map("account" -> account.id.render))(
-                  "A message was refused: nobody is reading them"
-                ) >> refuse(FailureStatus.ServiceUnavailable)
-            }
-        }
-    }
-  }
-
-  /** Hands messages no transaction claimed (the ACK of a 2xx, a retransmitted
-    * 2xx) to their call.
-    */
-  private[softphone4s] def routeUnmatched: F[Unit] =
-    layer.unmatched
-      .evalMap { (inbound: Inbound) =>
-        routes.get.flatMap(_.get(inbound.message.headers.callId) match {
-          case Some(channel) =>
-            channel.send(DialogInput.Unmatched(inbound)).void
-          case None =>
-            logger.debug(Map("callId" -> inbound.message.headers.callId.value))(
-              "Dropping a message for a call that does not exist"
-            )
-        })
-      }
-      .compile
-      .drain
-
-  /** Registers the route first, so a CANCEL or ACK right behind the INVITE
-    * finds its call, then runs the call on its own fiber for as long as it
-    * lasts.
-    */
-  private def acceptInbound(
-      invite: ServerTransaction[F],
-      account: Account
-  ): F[Unit] = {
-    val callId = invite.request.headers.callId
-    Channel.bounded[F, DialogInput[F]](128).flatMap { channel =>
-      // Registered and handed to a fiber that unregisters it, or neither.
-      Async[F].uncancelable(_ =>
-        routes.update(_ + (callId -> channel)) >>
-          supervisor
-            .supervise(
-              inboundCall(invite, account, channel)
-                .handleErrorWith { error =>
-                  logger
-                    .error(Map("error" -> String.valueOf(error.getMessage)))(
-                      "Could not take the incoming call"
-                    ) >> invite.respond(
-                    TransactionMessages.responseTo(
-                      invite.request,
-                      FailureStatus.ServerInternalError.value,
-                      FailureStatus.ServerInternalError.reason
-                    )
-                  )
-                }
-                .guarantee(routes.update(_ - callId))
-            )
-            .void
-            .onError(_ => routes.update(_ - callId))
-      )
-    }
-  }
-
-  /** Builds the call's resources, offers the call to the application if it can
-    * be answered, and runs it to its end.
-    */
-  private def inboundCall(
-      invite: ServerTransaction[F],
-      account: Account,
-      channel: Channel[F, DialogInput[F]]
-  ): F[Unit] =
-    (for {
-      callSupervisor <- Supervisor[F](await = false)
-      timers         <- Timers.resource[F, CallTimer]
-      localIp        <- Resource.eval(localIpFor(invite.from))
-      endpoint       <- allocateEndpoint(
-        account,
-        localIp,
-        invite.request.headers.topVia.transport
-      ).evalMap(secureIfNeeded(_, invite.request.requestUri.scheme))
-        .evalMap(seenFromOutside)
-      media <- Resource.eval(
-        MediaSession
-          .create(
-            endpoint.bindAddress,
-            endpoint.rtpPort,
-            codecs,
-            config.nat.rtpLatching,
-            config.jitterBuffer
-          )
-      )
-      call <- Resource.eval(
-        InboundCall.create(
-          invite,
-          account.id,
-          layer,
-          (transport, uri) => nextHopOver(transport)(uri),
-          config.maxUdpMessage,
-          endpoint,
-          callSupervisor,
-          entropy,
-          media,
-          timers,
-          TransactionConfig(),
-          config.answerTimeout,
-          config.hangupTimeout,
-          logger
-        )
-      )
-    } yield call).use { call =>
-      call.isOpen.flatMap(incomingCalls.offer(call).whenA(_)) >>
-        call.run(channel.stream)
-    }
 }
 
 object SoftphoneStreaming {
@@ -767,9 +329,14 @@ object SoftphoneStreaming {
       rtpPorts <- Resource.eval(RtpPorts.binding[F](range, config.bindAddress))
       entropy  <- Resource.eval(Entropy.secure[F])
       records  <- Resource.eval(dns)
-      softphone = new SoftphoneStreaming(
+      endpoints = new EndpointFactory[F](
         config,
-        accounts,
+        publicSip,
+        rtpPorts,
+        entropy,
+        codecs
+      )
+      uplinks = new Uplinks[F](
         new TargetResolver[F](
           records,
           entropy,
@@ -779,19 +346,38 @@ object SoftphoneStreaming {
             TransportProtocol.Tls
           )
         ),
-        publicSip,
+        endpoints,
+        logger
+      )
+      router = new IncomingRouter[F](
+        config,
+        accounts,
         layer,
         routes,
-        rtpPorts,
+        endpoints,
+        uplinks,
         entropy,
-        codecs = codecs,
+        codecs,
         supervisor,
         incomingCalls,
         messageQueue,
         logger
       )
-      _ <- Resource.eval(supervisor.supervise(softphone.routeIncoming))
-      _ <- Resource.eval(supervisor.supervise(softphone.routeUnmatched))
+      softphone = new SoftphoneStreaming(
+        config,
+        accounts,
+        uplinks,
+        endpoints,
+        publicSip,
+        layer,
+        routes,
+        entropy,
+        codecs,
+        router,
+        logger
+      )
+      _ <- Resource.eval(supervisor.supervise(router.routeIncoming))
+      _ <- Resource.eval(supervisor.supervise(router.routeUnmatched))
       _ <- config.nat.stun
         .filter(_ => config.nat.observedAddress == ObservedAddresses.Use)
         .traverse_(stun =>

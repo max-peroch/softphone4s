@@ -5,7 +5,9 @@ import cats.effect.Sync
 import cats.effect.std.{Random, SecureRandom}
 import cats.syntax.all.*
 import com.comcast.ip4s.Host
+import fs2.Chunk
 import softphone4s.model.*
+import softphone4s.srtp.MasterKey
 
 /** Where the identifiers of a SIP exchange come from, so the code that needs
   * them stays deterministic given an instance: tests pass a seeded one.
@@ -15,6 +17,9 @@ trait Entropy[F[_]] {
   def branch: F[Branch]
   def callId(host: Host): F[CallId]
   def cnonce: F[Cnonce]
+
+  /** A key and salt for SRTP. */
+  def masterKey: F[MasterKey]
 
   /** A number in [0, 1), for jittering timers. */
   def fraction: F[Double]
@@ -28,7 +33,11 @@ object Entropy {
       def branch: F[Branch] = random.nextBytes(8).map(Branch.fromBytes)
       def callId(host: Host): F[CallId] =
         random.nextBytes(10).map(CallId.fromBytes(_, host))
-      def cnonce: F[Cnonce]   = random.nextBytes(8).map(Cnonce.fromBytes)
+      def cnonce: F[Cnonce]       = random.nextBytes(8).map(Cnonce.fromBytes)
+      def masterKey: F[MasterKey] =
+        random
+          .nextBytes(MasterKey.KeyLength + MasterKey.SaltLength)
+          .map(bytes => MasterKey.fromEntropy(Chunk.array(bytes)))
       def fraction: F[Double] = random.nextDouble
     }
 

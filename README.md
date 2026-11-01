@@ -552,19 +552,30 @@ times out before being answered.
 ## Architecture
 
 ```
-SoftphoneStreaming
-├─ SipTransport           — shared UDP socket
-├─ TransactionManager     — RFC 3261 §17 client and server transactions
-│                           (retransmission, matching, ACK for failures)
-├─ routes in-dialog requests and strays to calls by Call-ID
+SoftphoneStreaming          — the public API; a thin facade over the parts below
+├─ IncomingRouter           — what arrives: to its call, to a new call (INVITE),
+│                             to the message queue (MESSAGE), or refused
+├─ Uplinks                  — where a name leads (RFC 3263), the next way to try,
+│                             the way over TCP for a big request
+├─ EndpointFactory          — the endpoint of a request: local address as the
+│                             network sees it, RTP ports, SRTP keys
+├─ RoutedTransport          — UDP / TCP / TLS, chosen by the top Via
+├─ TransactionManager       — RFC 3261 §17 client and server transactions
+├─ Registration             — RegistrationFsm, refresh, backoff, NAT follow
+├─ MessageSender            — MESSAGE, over StandaloneRequest (one challenge)
 └─ per call
-   └─ OutboundCall
-      ├─ CallFsm          — pure state machine (cats State)
-      ├─ SipMessages      — constructs INVITE / ACK / BYE / CANCEL
-      └─ MediaSession
-         ├─ RtpTransport  — per-call UDP socket
-         └─ G711Codec     — μ-law ↔ 16-bit PCM
+   ├─ OutboundCall / InboundCall — CallFsm / InboundCallFsm
+   └─ MediaSession
+      ├─ RtpTransport, RtpSender  — RTP (SRTP when negotiated), digits
+      ├─ JitterBuffer, Concealment — playout; comfort noise
+      ├─ RtpReception, reports     — RTCP (SRTCP when negotiated)
+      └─ AudioCodec                — G.711, G.722, Opus (plug-in)
 ```
+
+The packages `model`, `codec`, `fsm`, `sdp`, `srtp` and `messaging` are pure:
+they import no `cats.effect` and no `fs2` stream, pipe or I/O (`fs2.Chunk` is
+data and is allowed). A test (`PuritySuite`) scans them and fails if that
+changes.
 
 `CallFsm` is pure: given an event and the current state it returns a new
 state and a list of `SipAction` values. `OutboundCall` interprets those

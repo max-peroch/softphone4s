@@ -149,7 +149,7 @@ class OutboundCallSuite extends CatsEffectSuite {
     received(peer, _.method == method)
 
   private def sdp =
-    "v=0\r\no=- 1 1 IN IP4 127.0.0.1\r\ns=-\r\nc=IN IP4 127.0.0.1\r\nt=0 0\r\nm=audio 40000 RTP/AVP 0\r\n"
+    "v=0\r\no=- 1 1 IN IP4 127.0.0.1\r\ns=-\r\nc=IN IP4 127.0.0.1\r\nt=0 0\r\nm=audio 41000 RTP/AVP 0\r\n"
 
   private def answerTo(
       request: SipRequest,
@@ -644,7 +644,7 @@ class OutboundCallSuite extends CatsEffectSuite {
   // ---- Our own hold and resume -----------------------------------------------
 
   private def sdpAnswering(direction: String) =
-    s"v=0\r\no=- 1 1 IN IP4 127.0.0.1\r\ns=-\r\nc=IN IP4 127.0.0.1\r\nt=0 0\r\nm=audio 40000 RTP/AVP 0\r\na=$direction\r\n"
+    s"v=0\r\no=- 1 1 IN IP4 127.0.0.1\r\ns=-\r\nc=IN IP4 127.0.0.1\r\nt=0 0\r\nm=audio 41000 RTP/AVP 0\r\na=$direction\r\n"
 
   private def okTo(reinvite: SipRequest, direction: String): SipResponse = {
     val base = TransactionMessages.responseTo(reinvite, 200, "OK")
@@ -1158,7 +1158,7 @@ class OutboundCallSuite extends CatsEffectSuite {
 
   private val sdpWithEvents =
     "v=0\r\no=- 1 1 IN IP4 127.0.0.1\r\ns=-\r\nc=IN IP4 127.0.0.1\r\nt=0 0\r\n" +
-      "m=audio 40000 RTP/AVP 0 101\r\na=rtpmap:101 telephone-event/8000\r\n"
+      "m=audio 41000 RTP/AVP 0 101\r\na=rtpmap:101 telephone-event/8000\r\n"
 
   private def infoOk(info: SipRequest) =
     TransactionMessages.responseTo(info, 200, "OK")
@@ -1197,7 +1197,7 @@ class OutboundCallSuite extends CatsEffectSuite {
     "a digit goes as telephone events, and in no INFO, when the other side agreed to them"
   ) {
     val rtpPeer = Network[IO].bindDatagramSocket(
-      address = SocketAddress(ip"127.0.0.1", port"40000")
+      address = SocketAddress(ip"127.0.0.1", port"41000")
     )
     (fixture(port"19038"), rtpPeer).tupled.use { (f, media) =>
       for {
@@ -1255,7 +1255,7 @@ class OutboundCallSuite extends CatsEffectSuite {
   private def mediaPeer(port: Port) =
     Network[IO].bindDatagramSocket(address = SocketAddress(ip"127.0.0.1", port))
 
-  private def sdpAt(port: Int) = sdp.replace("40000", port.toString)
+  private def sdpAt(port: Int) = sdp.replace("41000", port.toString)
 
   private val silenceOf0x80 = Chunk.array(Array.fill[Byte](160)(0x80.toByte))
 
@@ -1279,7 +1279,7 @@ class OutboundCallSuite extends CatsEffectSuite {
   test(
     "what the other side plays before it answers is heard, and what we say is heard by it"
   ) {
-    (fixture(port"19041"), mediaPeer(port"40000")).tupled.use { (f, media) =>
+    (fixture(port"19041"), mediaPeer(port"41000")).tupled.use { (f, media) =>
       for {
         invite <- nextOf(f.peer, SipMethod.Invite)
         _      <- reply(f.peer, progress(invite, sdp))
@@ -1314,7 +1314,7 @@ class OutboundCallSuite extends CatsEffectSuite {
   ) {
     (
       fixture(port"19042"),
-      mediaPeer(port"40000"),
+      mediaPeer(port"41000"),
       mediaPeer(port"40002")
     ).tupled.use { (f, early, answering) =>
       for {
@@ -1342,7 +1342,7 @@ class OutboundCallSuite extends CatsEffectSuite {
   }
 
   test("a call refused after early media lets go of its media") {
-    (fixture(port"19043"), mediaPeer(port"40000")).tupled.use { (f, _) =>
+    (fixture(port"19043"), mediaPeer(port"41000")).tupled.use { (f, _) =>
       def bindable(attempts: Int): IO[Boolean] =
         Network[IO]
           .bindDatagramSocket(address =
@@ -1396,13 +1396,13 @@ class OutboundCallSuite extends CatsEffectSuite {
 
   private def answerSdp(protocol: String, lines: String*) =
     ("v=0\r\no=- 1 1 IN IP4 127.0.0.1\r\ns=-\r\nc=IN IP4 127.0.0.1\r\nt=0 0\r\n" +
-      s"m=audio 40000 $protocol 0\r\n") + lines.map(_ + "\r\n").mkString
+      s"m=audio 41000 $protocol 0\r\n") + lines.map(_ + "\r\n").mkString
 
   test(
     "with encryption required the INVITE offers secure media with our keys, and what follows the answer is encrypted"
   ) {
     val rtpPeer = Network[IO].bindDatagramSocket(
-      address = SocketAddress(ip"127.0.0.1", port"40000")
+      address = SocketAddress(ip"127.0.0.1", port"41000")
     )
     val theirs =
       CryptoAttribute(1, SrtpSuite.AesCm128HmacSha1_80, masterKey(30))
@@ -1454,7 +1454,7 @@ class OutboundCallSuite extends CatsEffectSuite {
     "with encryption required, an answer in plain RTP ends the call, and nothing goes out in the clear"
   ) {
     val rtpPeer = Network[IO].bindDatagramSocket(
-      address = SocketAddress(ip"127.0.0.1", port"40000")
+      address = SocketAddress(ip"127.0.0.1", port"41000")
     )
     (
       fixture(

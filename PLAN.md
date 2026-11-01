@@ -136,7 +136,7 @@ Phase 5 has begun with item 4, MESSAGE (RFC 3428): `SipMethod.Message` is read, 
 | `softphone4s-demo` | Example app |
 | `softphone4s-bench` | JMH benchmarks (not published) |
 
-A split of the pure core was tried and reverted. The idea was to make the "no effects" boundary compiler-enforced, but `ip4s-core` (which provides `Host`, `Port` and `IpAddress`) depends on `cats-effect` at compile scope, so a core module would still have it on its classpath and the rule would rest on a source-scan test. Until a second consumer needs the protocol without the runtime, the pure packages (`model`, `codec`, `fsm`) stay in `softphone4s` and are kept free of `cats.effect` and `fs2` imports (the exceptions are the media codecs, which are being rewritten in Phase 4).
+A split of the pure core was tried and reverted. The idea was to make the "no effects" boundary compiler-enforced, but `ip4s-core` (which provides `Host`, `Port` and `IpAddress`) depends on `cats-effect` at compile scope, so a core module would still have it on its classpath and the rule would rest on a source-scan test. Until a second consumer needs the protocol without the runtime, the pure packages (`model`, `codec`, `fsm`, `sdp`, `srtp`, `messaging`) stay in `softphone4s`. They import no `cats.effect` and no `fs2` stream, pipe or I/O (`fs2.Chunk` is data and is allowed), and `PuritySuite` scans them and fails if one does.
 
 ## Order and sizing
 

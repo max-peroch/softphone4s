@@ -1,7 +1,5 @@
 package softphone4s.codec
 
-import fs2.{Chunk, Pipe, Stream}
-
 // PCM format: 16-bit signed little-endian at 8kHz (javax.sound.sampled default)
 object G711Codec {
 
@@ -61,13 +59,6 @@ object G711Codec {
     }
     out
   }
-
-  def mulawToPcmPipe[F[_]]: Pipe[F, Byte, Byte] =
-    _.chunks.flatMap(c => Stream.chunk(Chunk.array(mulawToPcm(c.toArray))))
-
-  def pcmToMulawPipe[F[_]](frameBytes: Int): Pipe[F, Byte, Byte] =
-    _.chunkN(frameBytes, allowFewer = false)
-      .flatMap(c => Stream.chunk(Chunk.array(pcmToMulaw(c.toArray))))
 
   def mulawToPcm(mulaw: Array[Byte]): Array[Byte] = {
     val out   = Array.ofDim[Byte](mulaw.length * 2)
