@@ -5,6 +5,7 @@ import munit.FunSuite
 import softphone4s.SipLiterals.*
 import softphone4s.config.{AccountConfig, SoftphoneConfig}
 import softphone4s.fsm.SipMessages.*
+import softphone4s.messaging.MessageContent
 import softphone4s.model.*
 
 import scala.concurrent.duration.*
@@ -450,5 +451,116 @@ class SipMessagesSuite extends FunSuite {
       .fold(e => fail(e.getMessage), identity)
     assertEquals(moved.mapping, None)
     assertEquals(moved.mediaIp, ip"10.9.8.7")
+  }
+
+  // ---- MESSAGE ----------------------------------------------------------------------
+
+  private def message(
+      content: MessageContent = MessageContent.plain("hello"),
+      auth: Option[ExtensionHeader] = None
+  ) =
+    endpoint.buildMessage(
+      uri("sip:bob@sip.example.com"),
+      callId("msg@host"),
+      tag("ltag"),
+      cseqNumber(1),
+      branch("z9hG4bKmsg"),
+      content,
+      auth
+    )
+
+  test(
+    "buildMessage is a request outside any dialog, from us to them, with the text in the body"
+  ) {
+    val m = message()
+    assertEquals(m.method, SipMethod.Message)
+    assertEquals(m.requestUri.render, "sip:bob@sip.example.com")
+    assertEquals(m.headers.from.render, "<sip:alice@sip.example.com>;tag=ltag")
+    // The To has no tag: there is no dialog.
+    assertEquals(m.headers.to.render, "<sip:bob@sip.example.com>")
+    assertEquals(m.headers.cseq, cseq(1, SipMethod.Message))
+    assertEquals(m.headers.contentType, Some(MediaType.Plain))
+    assertEquals(m.headers.contacts, Nil)
+    assertEquals(m.body, "hello")
+  }
+
+  test(
+    "buildMessage carries the authorization of a retry, and a later CSeq keeps the Call-ID"
+  ) {
+    val auth  = ExtensionHeader(FieldName.Authorization, "Digest x")
+    val retry = endpoint.buildMessage(
+      uri("sip:bob@sip.example.com"),
+      callId("msg@host"),
+      tag("ltag"),
+      cseqNumber(2),
+      branch("z9hG4bKmsg2"),
+      MessageContent.plain("hello"),
+      Some(auth)
+    )
+    assertEquals(retry.headers.others, List(auth))
+    assertEquals(retry.headers.callId, message().headers.callId)
+    assertEquals(retry.headers.cseq, cseq(2, SipMethod.Message))
+  }
+
+  test(
+    "a message goes over the wire as UTF-8, with its length in bytes, and is read back"
+  ) {
+    val text = "héllo ✓ 日本"
+    val wire =
+      softphone4s.codec.SipCodec.encode(message(MessageContent.plain(text)))
+    val read = softphone4s.codec.SipCodec
+      .decode(wire)
+      .fold(e => fail(e.message), identity)
+    read match {
+      case request: SipRequest =>
+        assertEquals(request.method, SipMethod.Message)
+        assertEquals(request.body, text)
+      case other => fail(s"expected a request: $other")
+    }
+    val raw = new String(wire.toArray, "UTF-8")
+    assert(raw.startsWith("MESSAGE sip:bob@sip.example.com SIP/2.0"), raw)
+    assert(
+      raw.contains(s"Content-Length: ${text.getBytes("UTF-8").length}"),
+      raw
+    )
+  }
+
+  test("a type other than text/plain is carried as it is") {
+    val html =
+      MediaType.parse("text/html;charset=utf-8").fold(e => fail(e), identity)
+    assertEquals(
+      message(MessageContent(html, "<b>hi</b>")).headers.contentType
+        .map(_.render),
+      Some("text/html;charset=utf-8")
+    )
+  }
+
+  test("the 200 to a MESSAGE answers it and carries no body") {
+    val ok200 = endpoint.buildMessageOk(message())
+    assertEquals((ok200.statusCode, ok200.body), (200, ""))
+    assertEquals(ok200.headers.cseq, cseq(1, SipMethod.Message))
+  }
+
+  test("the 415 to a MESSAGE we cannot read says what we can") {
+    val refusal = endpoint.buildUnsupportedMessage(
+      message(),
+      List(MediaType.Plain, MediaType.Sdp)
+    )
+    assertEquals(refusal.statusCode, 415)
+    assertEquals(
+      refusal.headers.others.map(h => (h.name.value, h.value)),
+      List(("Accept", "text/plain, application/sdp"))
+    )
+  }
+
+  test("the answer to OPTIONS lists MESSAGE among what we take") {
+    val options = message().copy(method = SipMethod.Options)
+    val allow   = endpoint
+      .buildOptionsOk(options)
+      .headers
+      .others
+      .find(_.name.matches("Allow"))
+      .map(_.value)
+    assert(allow.exists(_.contains("MESSAGE")), allow)
   }
 }

@@ -2,6 +2,7 @@ package softphone4s.fsm
 
 import cats.data.NonEmptyList
 import softphone4s.codec.{DigestAuth, SdpCodec}
+import softphone4s.messaging.MessageContent
 import softphone4s.model.*
 import softphone4s.transaction.TransactionMessages
 
@@ -299,6 +300,64 @@ object SipMessages {
         req.headers.copy(contacts = contacts(e), contentType = None)
       )
 
+    // -----------------------------------------------------------------------
+    // MESSAGE
+    // -----------------------------------------------------------------------
+
+    /** A pager-mode instant message (RFC 3428) to `recipient`: a request
+      * outside any dialog, with the text in its body. Resending it after a
+      * challenge keeps the Call-ID and tag and raises the CSeq.
+      */
+    def buildMessage(
+        recipient: SipUri,
+        callId: CallId,
+        localTag: Tag,
+        cseq: CSeqNumber,
+        branch: Branch,
+        content: MessageContent,
+        authHeader: Option[ExtensionHeader] = None
+    ): SipRequest =
+      SipRequest(
+        method = SipMethod.Message,
+        requestUri = recipient,
+        headers = SipHeaders(
+          callId = callId,
+          from = NameAddr.withTag(e.accountUri, localTag),
+          to = NameAddr(recipient),
+          vias = vias(e, branch),
+          cseq = CSeq(cseq, SipMethod.Message),
+          contentType = Some(content.contentType),
+          others = authHeader.toList
+        ),
+        body = content.text
+      )
+
+    /** The 200 to a MESSAGE we take. */
+    def buildMessageOk(req: SipRequest): SipResponse =
+      TransactionMessages.responseTo(req, 200, "OK")
+
+    /** The 415 to a MESSAGE whose content we cannot take, saying what we can
+      * (RFC 3261 §21.4.13).
+      */
+    def buildUnsupportedMessage(
+        req: SipRequest,
+        accepted: List[MediaType]
+    ): SipResponse = {
+      val refusal = TransactionMessages.responseTo(
+        req,
+        415,
+        "Unsupported Media Type"
+      )
+      refusal.copy(headers =
+        refusal.headers.copy(others =
+          ExtensionHeader(
+            FieldName.Accept,
+            accepted.map(_.render).mkString(", ")
+          ) :: refusal.headers.others
+        )
+      )
+    }
+
     /** The 200 to an OPTIONS query: what we can do (RFC 3261 §11.2). */
     def buildOptionsOk(req: SipRequest): SipResponse = {
       val ok = buildInfoOk(req)
@@ -332,7 +391,7 @@ object SipMessages {
   }
 
   private val AllowedMethods: String =
-    "INVITE, ACK, BYE, CANCEL, OPTIONS, INFO, UPDATE"
+    "INVITE, ACK, BYE, CANCEL, OPTIONS, INFO, UPDATE, MESSAGE"
 
   private def remoteParty(dialog: SipDialog): NameAddr =
     NameAddr(

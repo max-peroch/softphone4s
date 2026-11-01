@@ -19,6 +19,7 @@ object FieldName {
   val WwwAuthenticate: FieldName    = "WWW-Authenticate"
   val ProxyAuthenticate: FieldName  = "Proxy-Authenticate"
   val Allow: FieldName              = "Allow"
+  val Accept: FieldName             = "Accept"
 
   extension (n: FieldName) {
     def value: String                   = n

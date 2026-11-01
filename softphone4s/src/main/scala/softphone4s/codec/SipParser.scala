@@ -504,6 +504,7 @@ object SipParser {
       case "INFO"     => Right(SipMethod.Info)
       case "REGISTER" => Right(SipMethod.Register)
       case "UPDATE"   => Right(SipMethod.Update)
+      case "MESSAGE"  => Right(SipMethod.Message)
       case other      => Left(ParseError.UnknownMethod(other))
     }
 }

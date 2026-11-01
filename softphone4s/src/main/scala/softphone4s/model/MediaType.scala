@@ -30,6 +30,9 @@ object MediaType {
 
   val Sdp: MediaType = MediaType("application", "sdp", ListMap.empty)
 
+  /** The text of an instant message (RFC 3428). */
+  val Plain: MediaType = MediaType("text", "plain", ListMap.empty)
+
   /** A digit sent in SIP INFO, the way most phones do. */
   val DtmfRelay: MediaType =
     MediaType("application", "dtmf-relay", ListMap.empty)
