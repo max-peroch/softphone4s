@@ -29,7 +29,7 @@ import softphone4s.transport.{
   TcpTransport,
   TlsTransport
 }
-import softphone4s.messaging.{IncomingMessage, MessageContent, MessageFailure}
+import softphone4s.messaging.IncomingMessage
 import softphone4s.ua.{DialogInput, MediaSession, MessageSender, OutboundCall}
 
 import javax.sound.sampled.AudioFormat
@@ -56,8 +56,14 @@ class SoftphoneStreaming[F[_]: Async: Network] private (
 
   override def incoming: Stream[F, IncomingCall[F]] = router.calls
 
-  override def incomingMessages: Stream[F, IncomingMessage] =
-    router.incomingMessages
+  override val messages: Messaging[F] =
+    new MessagingService[F](
+      accounts,
+      accountNamed,
+      uplinks,
+      new MessageSender[F](layer, entropy),
+      router.incomingMessages
+    )
 
   private def accountNamed(id: AccountId): F[Account] =
     Async[F].fromOption(
@@ -164,24 +170,6 @@ class SoftphoneStreaming[F[_]: Async: Network] private (
         logger
       )
     } yield registration
-
-  private val messages = new MessageSender[F](layer, entropy)
-
-  override def sendMessageAs(
-      id: AccountId,
-      to: Callee,
-      content: MessageContent
-  ): F[Either[MessageFailure, Unit]] =
-    for {
-      account <- accountNamed(id)
-      target  <- Async[F].fromEither(to.toSipUri(account.config.realm))
-      found   <- uplinks.allTargets(account, target)
-      result  <- messages.deliver(
-        found.toList.map(uplinks.uplinkTo(account, target, _)),
-        target,
-        content
-      )
-    } yield result
 
   private def buildCall(
       callId: CallId,

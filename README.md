@@ -403,13 +403,13 @@ phone.register.use { registration =>
 
 ### Sending a message
 
-`phone.sendMessage(callee, MessageContent.plain("hello"))` sends an instant
+`phone.messages.send(callee, MessageContent.plain("hello"))` sends an instant
 message (RFC 3428) as a MESSAGE outside any dialog and says whether it was
 delivered. A 2xx is delivery; anything else is a `MessageFailure`, a value and
 not an exception:
 
 ```scala
-phone.sendMessage(callee, MessageContent.plain("hello")).flatMap {
+phone.messages.send(callee, MessageContent.plain("hello")).flatMap {
   case Right(())                                  => IO.println("delivered")
   case Left(MessageFailure.Rejected(404, _))      => IO.println("no such user")
   case Left(MessageFailure.UnsupportedContent(t)) => IO.println(s"takes only $t")
@@ -421,17 +421,17 @@ A challenge (401 or 407) is answered once with the account's credentials; if
 that is refused too the result is `Unauthorized`. When a way of reaching the
 recipient gets no answer or cannot be used, the next one found by DNS is tried; a
 refusal is final. The content is text, sent as UTF-8; `MessageContent` takes any
-type (`text/plain` is the one every phone reads). `sendMessageAs` sends as one of
+type (`text/plain` is the one every phone reads). `messages.sendAs` sends as one of
 several accounts.
 
 ### Receiving messages
 
-`phone.incomingMessages` is the stream of instant messages that arrive for any of
+`phone.messages.incoming` is the stream of instant messages that arrive for any of
 the accounts, in order; `IncomingMessage.account` says which, `from` who sent it
 and `content` what it says:
 
 ```scala
-phone.incomingMessages
+phone.messages.incoming
   .evalMap(m => IO.println(s"${m.from.uri.render}: ${m.content.text}"))
   .compile
   .drain

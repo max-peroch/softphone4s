@@ -4,7 +4,6 @@ import cats.data.NonEmptyList
 import cats.effect.Resource
 import fs2.{Pipe, Stream}
 import softphone4s.fsm.SessionChange
-import softphone4s.messaging.{IncomingMessage, MessageContent, MessageFailure}
 import softphone4s.model.{AccountId, Callee, Dtmf, DtmfDigit, DtmfMethod}
 import softphone4s.registration.Registration
 
@@ -91,34 +90,8 @@ trait Softphone[F[_]] {
   /** Registers the default account. */
   def register: Resource[F, Registration[F]] = registerAs(accounts.head)
 
-  /** Sends an instant message (RFC 3428) to `to` as `account`, and says whether
-    * it was delivered: a 2xx is delivery, and anything else is a
-    * [[MessageFailure]]. A challenge for credentials is answered once. Each way
-    * of reaching the recipient is tried in turn when one gets no answer. Fails
-    * with `UnknownAccount` if `account` is not one of [[accounts]], and with
-    * `InvalidSipUri` if `to` names no address.
-    */
-  def sendMessageAs(
-      account: AccountId,
-      to: Callee,
-      content: MessageContent
-  ): F[Either[MessageFailure, Unit]]
-
-  /** Sends an instant message as the default account. */
-  def sendMessage(
-      to: Callee,
-      content: MessageContent
-  ): F[Either[MessageFailure, Unit]] =
-    sendMessageAs(accounts.head, to, content)
-
-  /** Instant messages (RFC 3428) that arrive for any of the accounts, in the
-    * order they come; `IncomingMessage.account` says which. Each is answered
-    * 200 once it is held here, so that a message seen as delivered is a message
-    * the program has. Up to 64 wait for a reader; beyond that the sender is
-    * told 503. A message whose type we cannot read is answered 415 and does not
-    * appear.
-    */
-  def incomingMessages: Stream[F, IncomingMessage]
+  /** Instant messages: sending them, and the ones that arrive (RFC 3428). */
+  def messages: Messaging[F]
 
   /** Calls placed to any of the accounts, as they arrive;
     * `IncomingCall.account` says which. Each is answered with

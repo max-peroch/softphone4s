@@ -207,7 +207,7 @@ class MultiAccountSuite extends CatsEffectSuite {
       for {
         _      <- peer.send(target, messageTo("alt", "ma1"))
         status <- finalStatus(peer)
-        got    <- phone.incomingMessages.head.compile.lastOrError
+        got    <- phone.messages.incoming.head.compile.lastOrError
           .timeout(5.seconds)
       } yield {
         assertEquals(status, 200)
@@ -222,7 +222,7 @@ class MultiAccountSuite extends CatsEffectSuite {
       for {
         _      <- peer.send(target, messageTo("nobody", "ma2"))
         status <- finalStatus(peer)
-        none   <- phone.incomingMessages.head.compile.last
+        none   <- phone.messages.incoming.head.compile.last
           .timeout(300.millis)
           .attempt
       } yield {

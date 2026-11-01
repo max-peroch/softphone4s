@@ -7,6 +7,7 @@ import fs2.{Pipe, Stream}
 import io.opentelemetry.context.ContextStorage
 import org.typelevel.otel4s.Attribute
 import org.typelevel.otel4s.trace.{SpanKind, SpanOps, Tracer}
+import softphone4s.Messaging
 import softphone4s.messaging.{IncomingMessage, MessageContent, MessageFailure}
 import softphone4s.{Call, IncomingCall, Softphone}
 import softphone4s.fsm.SessionChange
@@ -56,6 +57,30 @@ private final class TracedCall[F[_]: Async](
     tracer
       .span("softphone4s.call.changeSession")
       .surround(underlying.changeSession(change))
+}
+
+/** `Messaging` with a span around each message sent. */
+final class TracedMessaging[F[_]](
+    underlying: Messaging[F],
+    tracer: Tracer[F]
+) extends Messaging[F] {
+
+  def accounts: NonEmptyList[AccountId] = underlying.accounts
+
+  def sendAs(
+      account: AccountId,
+      to: Callee,
+      content: MessageContent
+  ): F[Either[MessageFailure, Unit]] =
+    tracer
+      .spanBuilder("softphone4s.message")
+      .withSpanKind(SpanKind.Client)
+      .addAttribute(Attribute("telephony.callee", to.value))
+      .addAttribute(Attribute("softphone4s.account", account.render))
+      .build
+      .surround(underlying.sendAs(account, to, content))
+
+  def incoming: Stream[F, IncomingMessage] = underlying.incoming
 }
 
 /** `Softphone` decorator adding OpenTelemetry spans around call setup, media,
@@ -122,21 +147,7 @@ final class TracedSoftphone[F[_]: Async](
 
   def incoming: Stream[F, IncomingCall[F]] = underlying.incoming
 
-  def incomingMessages: Stream[F, IncomingMessage] =
-    underlying.incomingMessages
-
-  def sendMessageAs(
-      account: AccountId,
-      to: Callee,
-      content: MessageContent
-  ): F[Either[MessageFailure, Unit]] =
-    tracer
-      .spanBuilder("softphone4s.message")
-      .withSpanKind(SpanKind.Client)
-      .addAttribute(Attribute("telephony.callee", to.value))
-      .addAttribute(Attribute("softphone4s.account", account.render))
-      .build
-      .surround(underlying.sendMessageAs(account, to, content))
+  val messages: Messaging[F] = new TracedMessaging(underlying.messages, tracer)
 
   def registerAs(account: AccountId): Resource[F, Registration[F]] =
     tracer

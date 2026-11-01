@@ -193,8 +193,8 @@ class SoftphoneStreamingSuite extends CatsEffectSuite {
   ) {
     (phone, remote).tupled.use { (softphone, peer) =>
       for {
-        sending <- softphone
-          .sendMessage(callee, MessageContent.plain("hi bob, é ✓"))
+        sending <- softphone.messages
+          .send(callee, MessageContent.plain("hi bob, é ✓"))
           .start
         message <- requestOf(peer, SipMethod.Message)
         _ <- peer.send(us, TransactionMessages.responseTo(message, 200, "OK"))
@@ -214,8 +214,8 @@ class SoftphoneStreamingSuite extends CatsEffectSuite {
   test("a message that is refused says why") {
     (phone, remote).tupled.use { (softphone, peer) =>
       for {
-        sending <- softphone
-          .sendMessage(callee, MessageContent.plain("hi"))
+        sending <- softphone.messages
+          .send(callee, MessageContent.plain("hi"))
           .start
         message <- requestOf(peer, SipMethod.Message)
         _       <- peer.send(
@@ -264,13 +264,13 @@ class SoftphoneStreamingSuite extends CatsEffectSuite {
       .timeout(5.seconds)
 
   test(
-    "a message that arrives is answered 200 and read from incomingMessages"
+    "a message that arrives is answered 200 and read from messages.incoming"
   ) {
     (phone, remote).tupled.use { (softphone, peer) =>
       for {
         _        <- peer.send(us, messageRequest("m1", "hi there, é ✓"))
         answer   <- finalResponse(peer)
-        received <- softphone.incomingMessages.head.compile.lastOrError
+        received <- softphone.messages.incoming.head.compile.lastOrError
           .timeout(5.seconds)
       } yield {
         assertEquals(answer.statusCode, 200)
@@ -288,7 +288,7 @@ class SoftphoneStreamingSuite extends CatsEffectSuite {
         _ <- List("one", "two", "three").zipWithIndex.traverse_((text, i) =>
           peer.send(us, messageRequest(s"o$i", text)) >> finalResponse(peer)
         )
-        got <- softphone.incomingMessages
+        got <- softphone.messages.incoming
           .take(3)
           .compile
           .toList
@@ -305,7 +305,7 @@ class SoftphoneStreamingSuite extends CatsEffectSuite {
       for {
         _      <- peer.send(us, messageRequest("h1", "<b>hi</b>", Some(html)))
         answer <- finalResponse(peer)
-        none   <- softphone.incomingMessages.head.compile.last
+        none   <- softphone.messages.incoming.head.compile.last
           .timeout(300.millis)
           .attempt
       } yield {
@@ -344,7 +344,7 @@ class SoftphoneStreamingSuite extends CatsEffectSuite {
         _     <- finalResponse(peer)
         _     <- peer.send(us, request)
         again <- finalResponse(peer)
-        got   <- softphone.incomingMessages
+        got   <- softphone.messages.incoming
           .take(2)
           .compile
           .toList
@@ -378,7 +378,7 @@ class SoftphoneStreamingSuite extends CatsEffectSuite {
         )
         statuses <- collected.joinWithNever.map(_.map(_.statusCode))
         // A message read makes room for the next.
-        _     <- softphone.incomingMessages.head.compile.lastOrError
+        _     <- softphone.messages.incoming.head.compile.lastOrError
         _     <- peer.send(us, messageRequest("b-after", "after"))
         after <- finalResponse(peer)
       } yield {
