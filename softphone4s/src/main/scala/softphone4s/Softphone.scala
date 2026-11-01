@@ -93,6 +93,9 @@ trait Softphone[F[_]] {
   /** Instant messages: sending them, and the ones that arrive (RFC 3428). */
   def messages: Messaging[F]
 
+  /** Subscriptions to the state of a resource elsewhere (RFC 6665). */
+  def subscriptions: Subscriptions[F]
+
   /** Calls placed to any of the accounts, as they arrive;
     * `IncomingCall.account` says which. Each is answered with
     * `IncomingCall.accept` or turned away with `reject`; one that is neither is

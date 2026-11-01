@@ -9,10 +9,18 @@ import org.typelevel.otel4s.Attribute
 import org.typelevel.otel4s.trace.{SpanKind, SpanOps, Tracer}
 import softphone4s.Messaging
 import softphone4s.messaging.{IncomingMessage, MessageContent, MessageFailure}
-import softphone4s.{Call, IncomingCall, Softphone}
+import softphone4s.{Call, IncomingCall, Softphone, Subscription, Subscriptions}
 import softphone4s.fsm.SessionChange
-import softphone4s.model.{AccountId, Callee, DtmfDigit, DtmfMethod}
+import softphone4s.model.{
+  AccountId,
+  Callee,
+  DtmfDigit,
+  DtmfMethod,
+  Expires,
+  MediaType
+}
 import softphone4s.registration.Registration
+import softphone4s.subscription.EventHeader
 
 import scala.concurrent.duration.FiniteDuration
 
@@ -83,6 +91,36 @@ final class TracedMessaging[F[_]](
   def incoming: Stream[F, IncomingMessage] = underlying.incoming
 }
 
+/** `Subscriptions` with a span around each subscription, for as long as it is
+  * held.
+  */
+final class TracedSubscriptions[F[_]](
+    underlying: Subscriptions[F],
+    tracer: Tracer[F]
+) extends Subscriptions[F] {
+
+  def accounts: NonEmptyList[AccountId] = underlying.accounts
+
+  def subscribeAs(
+      account: AccountId,
+      target: Callee,
+      event: EventHeader,
+      accept: List[MediaType],
+      expires: Expires
+  ): Resource[F, Subscription[F]] =
+    tracer
+      .spanBuilder("softphone4s.subscription")
+      .withSpanKind(SpanKind.Client)
+      .addAttribute(Attribute("telephony.callee", target.value))
+      .addAttribute(Attribute("softphone4s.account", account.render))
+      .addAttribute(Attribute("softphone4s.event", event.render))
+      .build
+      .resource
+      .flatMap(_ =>
+        underlying.subscribeAs(account, target, event, accept, expires)
+      )
+}
+
 /** `Softphone` decorator adding OpenTelemetry spans around call setup, media,
   * and DTMF, and propagating the active trace context as a `traceparent` header
   * on outbound INVITEs.
@@ -148,6 +186,9 @@ final class TracedSoftphone[F[_]: Async](
   def incoming: Stream[F, IncomingCall[F]] = underlying.incoming
 
   val messages: Messaging[F] = new TracedMessaging(underlying.messages, tracer)
+
+  val subscriptions: Subscriptions[F] =
+    new TracedSubscriptions(underlying.subscriptions, tracer)
 
   def registerAs(account: AccountId): Resource[F, Registration[F]] =
     tracer

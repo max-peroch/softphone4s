@@ -180,7 +180,9 @@ class MediaRtcpSuite extends CatsEffectSuite {
           .compile
           .drain
         sent <- reportsFrom(peerRtcp)
-          .collectFirst { case RtcpPacket.SenderReport(_, info, _) => info }
+          // Every sender report, not only the first, which may come before the
+          // three frames have all gone out.
+          .collect { case RtcpPacket.SenderReport(_, info, _) => info }
           .find(_.packets >= 3)
           .compile
           .lastOrError

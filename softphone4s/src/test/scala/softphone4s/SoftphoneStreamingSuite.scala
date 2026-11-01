@@ -10,6 +10,7 @@ import softphone4s.SipLiterals.*
 import softphone4s.config.{CodecChoice, SoftphoneConfig}
 import softphone4s.media.HalfByteCodec
 import softphone4s.messaging.{MessageContent, MessageFailure}
+import softphone4s.subscription.{Ending, EventHeader}
 import softphone4s.model.*
 import softphone4s.transaction.TransactionMessages
 import softphone4s.transport.{Inbound, SipTransport, Transport}
@@ -388,6 +389,149 @@ class SoftphoneStreamingSuite extends CatsEffectSuite {
         )
         assertEquals(statuses.count(_ == 503), 1)
         assertEquals(after.statusCode, 200)
+      }
+    }
+  }
+
+  // ---- Subscriptions ---------------------------------------------------------------------
+
+  private val presence = EventHeader("presence").fold(e => fail(e), identity)
+  private val pidf     =
+    MediaType.parse("application/pidf+xml").fold(e => fail(e), identity)
+
+  private def subscribeRequest(
+      peer: Transport[IO],
+      wanted: SipRequest => Boolean = _ => true
+  ) =
+    peer.messages
+      .collectFirst {
+        case Inbound(_, r: SipRequest)
+            if r.method == SipMethod.Subscribe && wanted(r) =>
+          r
+      }
+      .compile
+      .lastOrError
+      .timeout(5.seconds)
+
+  private def acceptedSubscribe(subscribe: SipRequest, lifetime: Int) = {
+    val base =
+      TransactionMessages.responseTo(subscribe, 200, "OK", Some(tag("srv")))
+    base.copy(headers =
+      base.headers.copy(
+        contacts = List(nameAddr("<sip:bob@127.0.0.1:19071>")),
+        expires = Some(Expires(lifetime).fold(e => fail(e), identity))
+      )
+    )
+  }
+
+  private def notifyFor(
+      subscribe: SipRequest,
+      number: Int,
+      state: String,
+      body: String = ""
+  ): SipRequest =
+    SipRequest(
+      SipMethod.Notify,
+      uri("sip:test@127.0.0.1:19070"),
+      SipHeaders(
+        callId = subscribe.headers.callId,
+        from = nameAddr("<sip:bob@127.0.0.1>;tag=srv"),
+        to = subscribe.headers.from,
+        vias = NonEmptyList.one(
+          via(s"SIP/2.0/UDP 127.0.0.1:19071;branch=z9hG4bKn$number")
+        ),
+        cseq = cseq(number, SipMethod.Notify),
+        contacts = List(nameAddr("<sip:bob@127.0.0.1:19071>")),
+        contentType = Option.when(body.nonEmpty)(pidf),
+        others = List(
+          ExtensionHeader(
+            FieldName("Event").fold(e => fail(e), identity),
+            "presence"
+          ),
+          ExtensionHeader(
+            FieldName("Subscription-State").fold(e => fail(e), identity),
+            state
+          )
+        )
+      ),
+      body
+    )
+
+  private def answerTo(peer: Transport[IO], request: SipRequest) =
+    peer.messages
+      .collectFirst {
+        case Inbound(_, r: SipResponse)
+            if r.headers.cseq == request.headers.cseq && r.statusCode >= 200 =>
+          r
+      }
+      .compile
+      .lastOrError
+      .timeout(5.seconds)
+
+  test(
+    "a subscription over UDP: the SUBSCRIBE, the NOTIFY, a refresh in the dialog, and the end on release"
+  ) {
+    (phone, remote).tupled.use { (softphone, peer) =>
+      softphone.subscriptions
+        .subscribe(callee, presence, List(pidf))
+        .allocated
+        .flatMap { (subscription, release) =>
+          for {
+            first <- subscribeRequest(peer)
+            _     <- peer.send(us, acceptedSubscribe(first, 3600))
+            notice = notifyFor(first, 1, "active;expires=3600", "<presence/>")
+            _      <- peer.send(us, notice)
+            answer <- answerTo(peer, notice)
+            got    <- subscription.notifications.head.compile.lastOrError
+              .timeout(5.seconds)
+            active <- subscription.awaitActive.timeout(5.seconds)
+            // Releasing it ends the subscription in its dialog.
+            releasing <- release.start
+            leave <- subscribeRequest(peer, _.headers.expires.exists(_.isZero))
+            _     <- peer.send(us, acceptedSubscribe(leave, 0))
+            _ <- peer.send(us, notifyFor(first, 2, "terminated;reason=timeout"))
+            _ <- releasing.joinWithNever.timeout(10.seconds)
+          } yield {
+            // The resource is addressed as given; the port only decides where it goes.
+            assertEquals(first.requestUri.render, "sip:bob@127.0.0.1")
+            assertEquals(first.headers.from.uri.render, "sip:test@127.0.0.1")
+            assertEquals(
+              first.headers.others.find(_.name.matches("Event")).map(_.value),
+              Some("presence")
+            )
+            assertEquals(answer.statusCode, 200)
+            assertEquals(got.body, "<presence/>")
+            assertEquals(active, Right(()))
+            assertEquals(leave.headers.callId, first.headers.callId)
+            assertEquals(leave.headers.to.tag, Some(tag("srv")))
+            assertEquals(leave.requestUri.render, "sip:bob@127.0.0.1:19071")
+          }
+        }
+    }
+  }
+
+  test(
+    "a subscription that is refused for good says so, and a NOTIFY for no subscription is answered 481"
+  ) {
+    (phone, remote).tupled.use { (softphone, peer) =>
+      softphone.subscriptions.subscribe(callee, presence).use { subscription =>
+        for {
+          first <- subscribeRequest(peer)
+          _     <- peer.send(
+            us,
+            TransactionMessages.responseTo(first, 403, "Forbidden")
+          )
+          ended <- subscription.awaitActive.timeout(5.seconds)
+          stray = notifyFor(first, 1, "active").copy(headers =
+            notifyFor(first, 1, "active").headers
+              .copy(callId = callId("nobody@nowhere"))
+          )
+          _      <- peer.send(us, stray)
+          answer <- answerTo(peer, stray)
+        } yield {
+          assertEquals(ended, Left(Ending.Rejected(403, "Forbidden")))
+          assertEquals(answer.statusCode, 481)
+        }
       }
     }
   }

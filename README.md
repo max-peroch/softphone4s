@@ -444,6 +444,40 @@ does not say what it is, `415` (listing `text/plain`) for any other type or for 
 character set other than UTF-8 or US-ASCII, and `503` if 64 are already waiting
 for a reader. A retransmission is answered again and appears once.
 
+### Subscribing
+
+`phone.subscriptions.subscribe(target, event)` subscribes to the state of a
+resource (RFC 6665) for as long as the resource is held. Acquiring it sends the
+SUBSCRIBE and returns at once; `awaitActive` says when the notifier has agreed:
+
+```scala
+val presence = EventHeader("presence")            // Either[String, EventHeader]
+
+phone.subscriptions.subscribe(bob, presence, accept = List(pidf)).use { sub =>
+  sub.awaitActive >>
+    sub.notifications                             // what each NOTIFY brings
+      .evalMap(n => IO.println(s"${n.state}: ${n.body}"))
+      .compile
+      .drain
+}
+```
+
+The subscription is refreshed at half its lifetime (a refresh that fails is
+retried while the lifetime runs). When it ends it is begun again, in a new
+dialog, if the way it ended allows: at once after `deactivated`, `timeout`, an
+expired lifetime or a lost dialog; after the `retry-after` for `probation` and
+`giveup`; after a growing wait (5 s, doubling) when it could not be had; never
+after a refusal, `rejected` or `noresource`. `sub.status` says where it stands,
+including `Retrying(because, in)`, and `awaitActive` gives `Left(ending)` if it
+ended for good first. `notifications` keeps the 64 most recent for a slow reader
+and ends when the subscription does. Releasing the resource ends the
+subscription with a SUBSCRIBE for nothing and waits for the last NOTIFY.
+
+`subscribeAs` subscribes as one of several accounts, and `expires` asks for a
+lifetime other than an hour. The body of a NOTIFY is text for the program to
+decode as the event package says; typed packages (presence, message-summary) are
+the next piece.
+
 ### Receiving DTMF
 
 ```scala

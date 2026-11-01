@@ -65,6 +65,18 @@ class SoftphoneStreaming[F[_]: Async: Network] private (
       router.incomingMessages
     )
 
+  override val subscriptions: Subscriptions[F] =
+    new SubscriptionService[F](
+      accounts,
+      accountNamed,
+      uplinks,
+      layer,
+      routes,
+      entropy,
+      config.hangupTimeout,
+      logger
+    )
+
   private def accountNamed(id: AccountId): F[Account] =
     Async[F].fromOption(
       accountList.find(_.id == id),
