@@ -73,12 +73,20 @@ final class RtpSender[F[_]: Async] private (
       timestamp <- clock.getAndUpdate(_ + timestampStep)
       now       <- Async[F].monotonic
       _         <- anchor.set(Some(RtpSender.Anchor(timestamp, now)))
-      held      <- sendingDigit.get
       previous  <- talking.get
       to        <- target
-      sent      <- to
-        .filter(_ => payload.nonEmpty && !held)
-        .traverse(transmit(_, audioType, timestamp, !previous, payload))
+      // Whether a digit is being sent is asked in the same step as the sending,
+      // so that no audio gets in between the packets of a digit by having asked
+      // a moment before.
+      sent <- inOrder.permit.surround(
+        sendingDigit.get.flatMap(held =>
+          to
+            .filter(_ => payload.nonEmpty && !held)
+            .traverse(
+              transmitNow(_, audioType, timestamp, !previous, payload)
+            )
+        )
+      )
       _ <- talking.set(sent.isDefined)
     } yield ()
 
@@ -148,30 +156,41 @@ final class RtpSender[F[_]: Async] private (
       marker: Boolean,
       payload: Chunk[Byte]
   ): F[Unit] =
-    // The number, the encryption (whose rollover counter goes up as the number
-    // wraps) and the sending are one step, so that packets are protected in the
-    // order they are numbered, whichever of audio and digits sends them.
     inOrder.permit.surround(
-      sequence
-        .getAndUpdate(s => (s + 1) & 0xffff)
-        .flatMap(number =>
-          secured(
-            RtpCodec.encode(
-              payloadType = payloadType,
-              sequenceNumber = number,
-              timestamp = timestamp & 0xffffffffL,
-              ssrc = ssrc,
-              payload = payload,
-              marker = marker
-            )
-          ).flatMap(
-            _.traverse_(bytes =>
-              socket.write(Datagram(to, bytes)) >>
-                counts.update(_.add(payload.size))
-            )
+      transmitNow(to, payloadType, timestamp, marker, payload)
+    )
+
+  /** The number, the encryption (whose rollover counter goes up as the number
+    * wraps) and the sending are one step, so that packets are protected in the
+    * order they are numbered, whichever of audio and digits sends them. The
+    * caller holds `inOrder`.
+    */
+  private def transmitNow(
+      to: SocketAddress[IpAddress],
+      payloadType: PayloadType,
+      timestamp: Long,
+      marker: Boolean,
+      payload: Chunk[Byte]
+  ): F[Unit] =
+    sequence
+      .getAndUpdate(s => (s + 1) & 0xffff)
+      .flatMap(number =>
+        secured(
+          RtpCodec.encode(
+            payloadType = payloadType,
+            sequenceNumber = number,
+            timestamp = timestamp & 0xffffffffL,
+            ssrc = ssrc,
+            payload = payload,
+            marker = marker
+          )
+        ).flatMap(
+          _.traverse_(bytes =>
+            socket.write(Datagram(to, bytes)) >>
+              counts.update(_.add(payload.size))
           )
         )
-    )
+      )
 
   /** `packet` as it goes on the wire: encrypted, if the stream is. None if it
     * could not be, which an RTP packet of ours never cannot.

@@ -308,4 +308,53 @@ class RtpSenderSuite extends CatsEffectSuite {
       } yield assertEquals(got.map(_.header.ssrc), List(rtp.source))
     }
   }
+
+  test(
+    "no audio gets between the packets of a digit, when it is sent at the very moment the digit begins"
+  ) {
+    fixture().use { (rtp, receiver, _) =>
+      // A frame and a digit set off together, again and again: whichever asks
+      // first whether a digit is being sent, the other is on its heels, which
+      // is the only way audio can slip in.
+      val rounds          = 40
+      val round: IO[Unit] =
+        IO.both(
+          Stream.emit(frame).through(rtp.audio).compile.drain,
+          rtp.telephoneEvent(DtmfDigit.D2, 20.millis).start.void
+        ).void
+      val drive = Stream
+        .awakeEvery[IO](60.millis)
+        .take(rounds.toLong)
+        .evalMap(_ => round)
+        .compile
+        .drain
+      // Audio between the digits, as a stream would send.
+      val steady = Stream
+        .awakeEvery[IO](20.millis)
+        .map(_ => frame)
+        .through(rtp.audio)
+        .compile
+        .drain
+      (steady.background, drive.background).tupled.use { _ =>
+        received(receiver, (rounds * 60 + 600).millis).map { packets =>
+          val kinds = packets.map(_.header.payloadType)
+          // Three end packets for each digit.
+          assertEquals(kinds.count(_ == pt(101)), rounds * 3)
+          // The packets of one digit share the time it began. Audio between the
+          // first and the last of them is audio in a digit.
+          val digits = packets.zipWithIndex
+            .filter(_._1.header.payloadType == pt(101))
+            .groupBy(_._1.header.timestamp)
+            .values
+          val intruded = digits.count { group =>
+            val places = group.map(_._2)
+            packets
+              .slice(places.min, places.max + 1)
+              .exists(_.header.payloadType != pt(101))
+          }
+          assertEquals(intruded, 0, kinds.mkString(","))
+        }
+      }
+    }
+  }
 }
