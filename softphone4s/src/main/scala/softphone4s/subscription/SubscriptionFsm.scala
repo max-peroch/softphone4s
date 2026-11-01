@@ -125,8 +125,12 @@ object SubscriptionFsm {
           end(Ending.Expired)
 
         // ---- Ending it --------------------------------------------------------
+        // Only the answer to the SUBSCRIBE that ends it counts. One to an earlier
+        // SUBSCRIBE, still in flight when it was asked to end, is not that answer.
         case (Unsubscribing(context), Response(response)) =>
-          unsubscribed(context, response)
+          if response.headers.cseq.seq == context.cseq then
+            unsubscribed(context, response)
+          else State.pure(Nil)
 
         case (Unsubscribing(_), TransactionFailed(_)) =>
           end(Ending.Unsubscribed)

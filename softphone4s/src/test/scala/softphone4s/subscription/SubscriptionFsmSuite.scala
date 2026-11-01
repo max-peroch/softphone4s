@@ -46,6 +46,7 @@ class SubscriptionFsmSuite extends FunSuite {
       code: Int,
       reason: String = "Reason",
       lifetime: Option[Int] = None,
+      sequence: Int = 1,
       minimum: Option[Int] = None,
       www: List[String] = Nil,
       proxy: List[String] = Nil
@@ -61,7 +62,7 @@ class SubscriptionFsmSuite extends FunSuite {
           vias = NonEmptyList.one(
             via("SIP/2.0/UDP 192.0.2.10:5060;branch=z9hG4bKs")
           ),
-          cseq = cseq(1, SipMethod.Subscribe),
+          cseq = cseq(sequence, SipMethod.Subscribe),
           expires = lifetime.map(expires),
           minExpires = minimum.map(expires),
           wwwAuthenticate = www.map(challenge),
@@ -659,7 +660,7 @@ class SubscriptionFsmSuite extends FunSuite {
   ) {
     val unsubscribing      = step(subscribed(), Stop)._1
     val (leaving, actions) =
-      step(unsubscribing, answer(200, lifetime = Some(0)))
+      step(unsubscribing, answer(200, lifetime = Some(0), sequence = 2))
     assert(leaving.isInstanceOf[Leaving])
     assertEquals(
       timersStarted(actions),
@@ -673,7 +674,10 @@ class SubscriptionFsmSuite extends FunSuite {
 
   test("if the last NOTIFY does not come, the wait for it is the end") {
     val leaving =
-      step(step(subscribed(), Stop)._1, answer(200, lifetime = Some(0)))._1
+      step(
+        step(subscribed(), Stop)._1,
+        answer(200, lifetime = Some(0), sequence = 2)
+      )._1
     assertEquals(
       step(leaving, TimerFired(SubscriptionTimer.LeaveWait))._1,
       Ended(Ending.Unsubscribed)
@@ -704,13 +708,34 @@ class SubscriptionFsmSuite extends FunSuite {
     "the last NOTIFY of a subscription we ended is answered, ends it, and is not delivered"
   ) {
     val leaving =
-      step(step(subscribed(), Stop)._1, answer(200, lifetime = Some(0)))._1
+      step(
+        step(subscribed(), Stop)._1,
+        answer(200, lifetime = Some(0), sequence = 2)
+      )._1
     val last =
       notification("terminated;reason=timeout", 2, body = "<presence/>")
     val (state, actions) = step(leaving, last)
     assertEquals(state, Ended(Ending.Unsubscribed))
     assert(!actions.exists { case Deliver(_) => true; case _ => false })
     assertEquals(actions.head, okTo(last))
+  }
+
+  test(
+    "the answer to an earlier SUBSCRIBE, late, is not the answer to the one that ends it"
+  ) {
+    // Asked to end while the first SUBSCRIBE is still unanswered, but a NOTIFY
+    // has come and given the dialog.
+    val early        = notification("active", 1)
+    val (noted, _)   = step(establishing, early)
+    val (leaving, _) = step(noted, Stop)
+    assert(leaving.isInstanceOf[Unsubscribing])
+    // The 2xx to the first SUBSCRIBE arrives now: it is not the end accepted.
+    assertEquals(step(leaving, answer(200, sequence = 1)), (leaving, Nil))
+    // The 2xx to the one that ends it is.
+    assert(
+      step(leaving, answer(200, lifetime = Some(0), sequence = 2))._1
+        .isInstanceOf[Leaving]
+    )
   }
 
   test("a failure to end it still ends it") {
@@ -720,20 +745,21 @@ class SubscriptionFsmSuite extends FunSuite {
       Ended(Ending.Unsubscribed)
     )
     assertEquals(
-      step(unsubscribing, answer(500))._1,
+      step(unsubscribing, answer(500, sequence = 2))._1,
       Ended(Ending.Unsubscribed)
     )
   }
 
   test("a challenge to the end is answered once, and then it is over") {
     val unsubscribing    = step(subscribed(), Stop)._1
-    val (again, actions) = step(unsubscribing, answer(401, www = List(digest)))
+    val (again, actions) =
+      step(unsubscribing, answer(401, www = List(digest), sequence = 2))
     assert(again.isInstanceOf[Unsubscribing])
     assert(actions.exists {
       case SendSubscribe(_, e, Some(_)) => e.isZero; case _ => false
     })
     assertEquals(
-      step(again, answer(401, www = List(digest)))._1,
+      step(again, answer(401, www = List(digest), sequence = 3))._1,
       Ended(Ending.Unsubscribed)
     )
   }
