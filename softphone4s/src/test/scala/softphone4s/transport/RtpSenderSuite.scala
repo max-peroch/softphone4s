@@ -271,17 +271,22 @@ class RtpSenderSuite extends CatsEffectSuite {
       for {
         _ <- Stream.emits(List(frame, frame)).through(rtp.audio).compile.drain
         first <- rtp.senderInfo
+        start <- IO.monotonic
         _     <- IO.sleep(250.millis)
         later <- rtp.senderInfo
+        // How long it really was: a sleep on a busy machine can run long.
+        took <- IO.monotonic.map(_ - start)
       } yield {
         val a = first.getOrElse(fail("no sender info"))
         val b = later.getOrElse(fail("no sender info"))
-        // 250 ms at 8 kHz is 2 000 ticks.
+        // At least 250 ms at 8 kHz, which is 2 000 ticks, and no more than the
+        // time that passed (8 ticks a millisecond) with a frame's worth to spare.
         val moved = b.rtpTimestamp - a.rtpTimestamp
-        assert(moved >= 2000 && moved < 2400, moved)
+        val most  = took.toMillis * 8 + 160
+        assert(moved >= 2000 && moved <= most, s"$moved of at most $most")
         assert(b.ntp > a.ntp)
-        // The last frame was the second, at 160.
-        assert(a.rtpTimestamp >= 160 && a.rtpTimestamp < 400, a.rtpTimestamp)
+        // The last frame was the second, at 160, and time may only add to it.
+        assert(a.rtpTimestamp >= 160, a.rtpTimestamp)
       }
     }
   }

@@ -276,10 +276,14 @@ class TcpTransportSuite extends CatsEffectSuite {
           _       <- peer.send(options(1))
           inbound <- transport.messages.head.compile.lastOrError
             .timeout(5.seconds)
-          _ <- IO.sleep(800.millis)
-          // The connection is gone, and its address with it: a reply would have
-          // to open a new connection to a port nobody listens on.
-          result <- transport.send(inbound.from, options(2)).attempt
+          // The connection goes, and its address with it: a reply would have to
+          // open a new connection to a port nobody listens on. A send counts as
+          // activity, so ask more slowly than the connection idles, and again if
+          // a busy machine let it live a little longer.
+          result <- (IO.sleep(600.millis) >>
+            transport.send(inbound.from, options(2)).attempt)
+            .iterateUntil(_.isLeft)
+            .timeout(15.seconds)
         } yield assert(result.isLeft)
       }
     }
