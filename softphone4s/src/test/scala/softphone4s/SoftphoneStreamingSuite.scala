@@ -131,8 +131,9 @@ class SoftphoneStreamingSuite extends CatsEffectSuite {
     // One pair of ports for the whole phone.
     val small = SoftphoneStreaming.resource[IO](
       config.copy(
-        baseRtpPort = port"19120",
-        maxRtpPort = Some(port"19121")
+        // A pair no other suite binds: they run side by side.
+        baseRtpPort = port"19180",
+        maxRtpPort = Some(port"19181")
       ),
       audio,
       NoOpLogger.impl[IO]
@@ -159,10 +160,10 @@ class SoftphoneStreamingSuite extends CatsEffectSuite {
       } yield {
         assertEquals(
           first._2.left.toOption,
-          Some(SoftphoneError.RtpPortsExhausted(19120, 19121))
+          Some(SoftphoneError.RtpPortsExhausted(19180, 19181))
         )
-        assert(first._1.body.contains("m=audio 19120"), first._1.body)
-        assert(second.body.contains("m=audio 19120"), second.body)
+        assert(first._1.body.contains("m=audio 19180"), first._1.body)
+        assert(second.body.contains("m=audio 19180"), second.body)
       }
     }
   }

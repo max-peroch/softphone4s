@@ -23,6 +23,9 @@ lazy val softphone4s = project
   .settings(
     name                := "softphone4s",
     scalacOptions       ++= Seq("-release", "17"),
+    // Many suites bind real sockets on fixed ports, and the ports of one are
+    // another's. They run one after the other.
+    Test / parallelExecution := false,
     libraryDependencies ++= Seq(
       munit,
       munitCatsEffect,
