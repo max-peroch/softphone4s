@@ -401,6 +401,29 @@ phone.register.use { registration =>
 `register` does not fail if the registrar is unreachable: the state reports
 `Failed(reason, retryIn)` and the agent keeps trying.
 
+### Sending a message
+
+`phone.sendMessage(callee, MessageContent.plain("hello"))` sends an instant
+message (RFC 3428) as a MESSAGE outside any dialog and says whether it was
+delivered. A 2xx is delivery; anything else is a `MessageFailure`, a value and
+not an exception:
+
+```scala
+phone.sendMessage(callee, MessageContent.plain("hello")).flatMap {
+  case Right(())                                  => IO.println("delivered")
+  case Left(MessageFailure.Rejected(404, _))      => IO.println("no such user")
+  case Left(MessageFailure.UnsupportedContent(t)) => IO.println(s"takes only $t")
+  case Left(other)                                => IO.println(other.message)
+}
+```
+
+A challenge (401 or 407) is answered once with the account's credentials; if
+that is refused too the result is `Unauthorized`. When a way of reaching the
+recipient gets no answer or cannot be used, the next one found by DNS is tried; a
+refusal is final. The content is text, sent as UTF-8; `MessageContent` takes any
+type (`text/plain` is the one every phone reads). `sendMessageAs` sends as one of
+several accounts.
+
 ### Receiving DTMF
 
 ```scala

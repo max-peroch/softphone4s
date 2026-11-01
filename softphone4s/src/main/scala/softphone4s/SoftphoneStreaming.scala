@@ -38,7 +38,14 @@ import softphone4s.transport.{
   TcpTransport,
   TlsTransport
 }
-import softphone4s.ua.{DialogInput, InboundCall, MediaSession, OutboundCall}
+import softphone4s.messaging.{MessageContent, MessageFailure}
+import softphone4s.ua.{
+  DialogInput,
+  InboundCall,
+  MediaSession,
+  MessageSender,
+  OutboundCall
+}
 
 import javax.sound.sampled.AudioFormat
 
@@ -157,19 +164,7 @@ class SoftphoneStreaming[F[_]: Async: Network] private (
       registrar = resolved.address
       localIp <- Resource.eval(localIpFor(registrar))
       // A REGISTER carries no media, so the RTP port is not used.
-      endpoint <- Resource.eval(
-        Async[F].fromEither(
-          LocalEndpoint.from(
-            account.config,
-            config.bindAddress,
-            localIp,
-            sipPortFor(protocol),
-            config.baseRtpPort,
-            protocol,
-            codecs.capabilities
-          )
-        )
-      )
+      endpoint <- Resource.eval(signallingEndpoint(account, localIp, protocol))
       alternatives <- Resource.eval(alternativesTo(endpoint, found.tail))
       registration <- Registration.resource(
         layer,
@@ -345,6 +340,58 @@ class SoftphoneStreaming[F[_]: Async: Network] private (
       case other =>
         Async[F].raiseError(SoftphoneError.TransportUnavailable(other.token))
     }
+
+  /** An endpoint for a request that carries no media, such as REGISTER or
+    * MESSAGE, which has no use for an RTP port.
+    */
+  private def signallingEndpoint(
+      account: Account,
+      localIp: IpAddress,
+      transport: TransportProtocol
+  ): F[LocalEndpoint] =
+    Async[F].fromEither(
+      LocalEndpoint.from(
+        account.config,
+        config.bindAddress,
+        localIp,
+        sipPortFor(transport),
+        config.baseRtpPort,
+        transport,
+        codecs.capabilities
+      )
+    )
+
+  /** The way to reach `resolved`, as `account`, for a request to `target`. */
+  private def uplinkTo(
+      account: Account,
+      target: SipUri,
+      resolved: ResolvedTarget
+  ): F[Uplink] =
+    for {
+      protocol <- available(resolved.transport)
+      localIp  <- localIpFor(resolved.address)
+      endpoint <- signallingEndpoint(account, localIp, protocol)
+        .flatMap(secureIfNeeded(_, target.scheme))
+        .flatMap(seenFromOutside)
+    } yield Uplink(endpoint, resolved.address)
+
+  private val messages = new MessageSender[F](layer, entropy)
+
+  override def sendMessageAs(
+      id: AccountId,
+      to: Callee,
+      content: MessageContent
+  ): F[Either[MessageFailure, Unit]] =
+    for {
+      account <- accountNamed(id)
+      target  <- Async[F].fromEither(to.toSipUri(account.config.realm))
+      found   <- allTargets(account, target)
+      result  <- messages.deliver(
+        found.toList.map(uplinkTo(account, target, _)),
+        target,
+        content
+      )
+    } yield result
 
   /** The endpoint of a call, with a pair of RTP ports that goes back to the
     * pool when the call's resources are released, and keys of its own.

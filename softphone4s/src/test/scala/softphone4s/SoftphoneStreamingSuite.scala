@@ -9,6 +9,7 @@ import org.typelevel.log4cats.noop.NoOpLogger
 import softphone4s.SipLiterals.*
 import softphone4s.config.{CodecChoice, SoftphoneConfig}
 import softphone4s.media.HalfByteCodec
+import softphone4s.messaging.{MessageContent, MessageFailure}
 import softphone4s.model.*
 import softphone4s.transaction.TransactionMessages
 import softphone4s.transport.{Inbound, SipTransport, Transport}
@@ -185,6 +186,48 @@ class SoftphoneStreamingSuite extends CatsEffectSuite {
           result
         )
       )
+  }
+
+  test(
+    "a message is sent to the callee over UDP and delivered when answered 200"
+  ) {
+    (phone, remote).tupled.use { (softphone, peer) =>
+      for {
+        sending <- softphone
+          .sendMessage(callee, MessageContent.plain("hi bob, é ✓"))
+          .start
+        message <- requestOf(peer, SipMethod.Message)
+        _ <- peer.send(us, TransactionMessages.responseTo(message, 200, "OK"))
+        result <- sending.joinWithNever.timeout(5.seconds)
+      } yield {
+        assertEquals(result, Right(()))
+        assertEquals(message.body, "hi bob, é ✓")
+        assertEquals(message.requestUri.render, "sip:bob@127.0.0.1")
+        assertEquals(message.headers.contentType, Some(MediaType.Plain))
+        // From us, as the account, with a tag: outside a dialog the To has none.
+        assertEquals(message.headers.to.tag, None)
+        assert(message.headers.from.tag.isDefined)
+      }
+    }
+  }
+
+  test("a message that is refused says why") {
+    (phone, remote).tupled.use { (softphone, peer) =>
+      for {
+        sending <- softphone
+          .sendMessage(callee, MessageContent.plain("hi"))
+          .start
+        message <- requestOf(peer, SipMethod.Message)
+        _       <- peer.send(
+          us,
+          TransactionMessages.responseTo(message, 403, "Forbidden")
+        )
+        result <- sending.joinWithNever.timeout(5.seconds)
+      } yield assertEquals(
+        result,
+        Left(MessageFailure.Rejected(403, "Forbidden"))
+      )
+    }
   }
 
   test("a BYE for a call that does not exist is answered 481") {
