@@ -64,13 +64,9 @@ private[softphone4s] object StandaloneRequest {
       }
 
     attempt(CSeqNumber.One, None).flatMap {
-      case Outcome.Final(r) if r.statusCode == 401 || r.statusCode == 407 =>
-        val (kind, challenges) =
-          if r.statusCode == 401 then
-            (AuthKind.Origin, r.headers.wwwAuthenticate)
-          else (AuthKind.Proxy, r.headers.proxyAuthenticate)
-        AuthChallenge
-          .best(challenges)
+      case Outcome.Final(r @ Challenges.Challenged(kind, challenges)) =>
+        Challenges
+          .once(challenges, 0)
           .fold(Async[F].pure(Outcome.Final(r): Outcome))(challenge =>
             entropy.cnonce.flatMap { cnonce =>
               attempt(

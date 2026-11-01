@@ -22,7 +22,6 @@ object RegistrationFsm {
   private val RefreshFraction = 2 // refresh at 1/2 of the lifetime
   private val BackoffBase     = 5.seconds
   private val BackoffCap      = 5.minutes
-  private val MaxAuthAttempts = 2
 
   /** The wait before retry number `attempt` (1, 2, ...): doubling from 5 s,
     * capped at 5 minutes.
@@ -114,7 +113,27 @@ object RegistrationFsm {
       attempt: Int,
       phase: RegistrationPhase,
       response: SipResponse
-  ): State[RegistrationFsmState, List[RegistrationAction]] =
+  ): Transition =
+    Challenges.of(response) match {
+      case Some((kind, challenges)) =>
+        retryWithAuth(
+          context,
+          attempt,
+          phase,
+          kind,
+          challenges,
+          context.requested
+        )
+      case None => unchallenged(context, attempt, phase, response)
+    }
+
+  /** The response to a REGISTER that does not ask for credentials. */
+  private def unchallenged(
+      context: RegistrationContext,
+      attempt: Int,
+      phase: RegistrationPhase,
+      response: SipResponse
+  ): Transition =
     response.statusCode match {
       case code if code < 200 => State.pure(Nil)
       case code if code < 300 =>
@@ -127,24 +146,6 @@ object RegistrationFsm {
             )
           case lifetime => registered(context, lifetime)
         }
-      case 401 =>
-        retryWithAuth(
-          context,
-          attempt,
-          phase,
-          AuthKind.Origin,
-          response.headers.wwwAuthenticate,
-          context.requested
-        )
-      case 407 =>
-        retryWithAuth(
-          context,
-          attempt,
-          phase,
-          AuthKind.Proxy,
-          response.headers.proxyAuthenticate,
-          context.requested
-        )
       case 423 =>
         response.headers.minExpires.filter(_ > context.requested) match {
           case Some(minimum) =>
@@ -208,11 +209,8 @@ object RegistrationFsm {
       lifetime: Expires
   ): Transition = {
     val made = context.authAttempts.getOrElse(kind, 0)
-    AuthChallenge
-      .best(challenges)
-      .filter(c =>
-        made == 0 || (made < MaxAuthAttempts && c.staleness == Staleness.Stale)
-      )
+    Challenges
+      .toAnswer(challenges, made)
       .fold(
         // The credentials did not work: forget them rather than send them again.
         fail(
@@ -281,21 +279,12 @@ object RegistrationFsm {
     val done = go(Stopped, List(Notify(RegistrationState.Unregistered)))
     response.statusCode match {
       case code if code < 200 => State.pure(Nil)
-      case 401                =>
-        challengeAgain(
-          context,
-          AuthKind.Origin,
-          response.headers.wwwAuthenticate,
-          done
-        )
-      case 407 =>
-        challengeAgain(
-          context,
-          AuthKind.Proxy,
-          response.headers.proxyAuthenticate,
-          done
-        )
-      case _ => done
+      case _                  =>
+        Challenges
+          .of(response)
+          .fold(done)((kind, challenges) =>
+            challengeAgain(context, kind, challenges, done)
+          )
     }
   }
 
@@ -306,9 +295,8 @@ object RegistrationFsm {
       giveUp: Transition
   ): Transition = {
     val made = context.authAttempts.getOrElse(kind, 0)
-    AuthChallenge
-      .best(challenges)
-      .filter(_ => made == 0)
+    Challenges
+      .once(challenges, made)
       .fold(giveUp) { challenge =>
         val next = context.copy(
           cseq = context.cseq.next,

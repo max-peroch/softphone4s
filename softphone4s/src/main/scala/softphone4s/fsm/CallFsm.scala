@@ -15,15 +15,10 @@ object CallFsm {
   import SipEvent.*
   import TerminationReason.*
 
-  /** One answer, plus one more if the server reports a stale nonce. */
-  private val MaxAuthAttempts = 2
-
-  private val Trying            = 100
-  private val Ok                = 200
-  private val Unauthorized      = 401
-  private val ProxyAuthRequired = 407
-  private val ErrorResponseMin  = 300
-  private val FinalResponseMin  = 200
+  private val Trying           = 100
+  private val Ok               = 200
+  private val ErrorResponseMin = 300
+  private val FinalResponseMin = 200
 
   type Transition = State[CallState, List[SipAction]]
 
@@ -57,23 +52,13 @@ object CallFsm {
           go(CallState.Ringing(ctx, dialog), earlyMedia(ctx, response))
 
         // Without a Digest challenge we can answer, the 401 or 407 is final.
-        case (Inviting(ctx), ResponseReceived(response))
-            if response.statusCode == Unauthorized =>
-          answerChallenge(
-            ctx,
-            response,
-            AuthKind.Origin,
-            response.headers.wwwAuthenticate
-          )
-
-        case (Inviting(ctx), ResponseReceived(response))
-            if response.statusCode == ProxyAuthRequired =>
-          answerChallenge(
-            ctx,
-            response,
-            AuthKind.Proxy,
-            response.headers.proxyAuthenticate
-          )
+        case (
+              Inviting(ctx),
+              ResponseReceived(
+                response @ Challenges.Challenged(kind, challenges)
+              )
+            ) =>
+          answerChallenge(ctx, response, kind, challenges)
 
         case (Inviting(ctx), ResponseReceived(response))
             if response.statusCode == Ok =>
@@ -338,28 +323,14 @@ object CallFsm {
   private def attempts(ctx: InviteCtx, kind: AuthKind): Int =
     ctx.authAttempts.getOrElse(kind, 0)
 
-  /** We answer a challenge once. A second one means the credentials were
-    * refused, so it is final, unless the server says the nonce only expired,
-    * which earns one more try (RFC 3261 §22.2, RFC 2617 §3.2.1).
-    */
-  private def mayAnswer(
-      ctx: InviteCtx,
-      kind: AuthKind,
-      challenge: DigestChallenge
-  ): Boolean = {
-    val made = attempts(ctx, kind)
-    made == 0 || (made < MaxAuthAttempts && challenge.staleness == Staleness.Stale)
-  }
-
   private def answerChallenge(
       ctx: InviteCtx,
       response: SipResponse,
       kind: AuthKind,
       challenges: List[AuthChallenge]
   ): Transition =
-    AuthChallenge
-      .best(challenges)
-      .filter(challenge => mayAnswer(ctx, kind, challenge))
+    Challenges
+      .toAnswer(challenges, attempts(ctx, kind))
       .fold(reject(response)) { challenge =>
         val newCtx = ctx.copy(
           cseq = ctx.cseq.next,

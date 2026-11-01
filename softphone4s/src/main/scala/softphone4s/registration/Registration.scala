@@ -328,14 +328,9 @@ object Registration {
             .last
         )
         _ <- answer match {
-          case Some(r) if r.statusCode == 401 || r.statusCode == 407 =>
-            val (kind, challenges) =
-              if r.statusCode == 401 then
-                (AuthKind.Origin, r.headers.wwwAuthenticate)
-              else (AuthKind.Proxy, r.headers.proxyAuthenticate)
-            AuthChallenge
-              .best(challenges)
-              .filter(_ => authorization.isEmpty)
+          case Some(Challenges.Challenged(kind, challenges)) =>
+            Challenges
+              .once(challenges, authorization.fold(0)(_ => 1))
               .traverse_(challenge =>
                 removal(
                   uplink,
