@@ -17,12 +17,13 @@ class PuritySuite extends FunSuite {
     * so that a scan that finds nothing fails and does not pass.
     */
   private val pure: List[(String, Int)] = List(
-    "model"     -> 40,
-    "codec"     -> 8,
-    "fsm"       -> 15,
-    "sdp"       -> 12,
-    "srtp"      -> 10,
-    "messaging" -> 3
+    "model"        -> 40,
+    "codec"        -> 8,
+    "fsm"          -> 15,
+    "sdp"          -> 12,
+    "srtp"         -> 10,
+    "messaging"    -> 3,
+    "subscription" -> 14
   )
 
   private val effectful =

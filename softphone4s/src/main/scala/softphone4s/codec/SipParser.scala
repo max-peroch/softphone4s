@@ -496,15 +496,17 @@ object SipParser {
 
   private def parseMethod(s: String): Either[ParseError, SipMethod] =
     s.trim.toUpperCase match {
-      case "INVITE"   => Right(SipMethod.Invite)
-      case "ACK"      => Right(SipMethod.Ack)
-      case "BYE"      => Right(SipMethod.Bye)
-      case "CANCEL"   => Right(SipMethod.Cancel)
-      case "OPTIONS"  => Right(SipMethod.Options)
-      case "INFO"     => Right(SipMethod.Info)
-      case "REGISTER" => Right(SipMethod.Register)
-      case "UPDATE"   => Right(SipMethod.Update)
-      case "MESSAGE"  => Right(SipMethod.Message)
-      case other      => Left(ParseError.UnknownMethod(other))
+      case "INVITE"    => Right(SipMethod.Invite)
+      case "ACK"       => Right(SipMethod.Ack)
+      case "BYE"       => Right(SipMethod.Bye)
+      case "CANCEL"    => Right(SipMethod.Cancel)
+      case "OPTIONS"   => Right(SipMethod.Options)
+      case "INFO"      => Right(SipMethod.Info)
+      case "REGISTER"  => Right(SipMethod.Register)
+      case "UPDATE"    => Right(SipMethod.Update)
+      case "MESSAGE"   => Right(SipMethod.Message)
+      case "SUBSCRIBE" => Right(SipMethod.Subscribe)
+      case "NOTIFY"    => Right(SipMethod.Notify)
+      case other       => Left(ParseError.UnknownMethod(other))
     }
 }

@@ -129,8 +129,8 @@ class SipParserSuite extends FunSuite {
 
   test("an unknown method is a typed error") {
     assertEquals(
-      failure(invite.replace("INVITE sip", "NOTIFY sip")),
-      ParseError.UnknownMethod("NOTIFY")
+      failure(invite.replace("INVITE sip", "FROBNICATE sip")),
+      ParseError.UnknownMethod("FROBNICATE")
     )
   }
 
