@@ -10,7 +10,7 @@ import softphone4s.SipLiterals.*
 import softphone4s.config.{CodecChoice, SoftphoneConfig}
 import softphone4s.media.HalfByteCodec
 import softphone4s.messaging.{MessageContent, MessageFailure}
-import softphone4s.subscription.{Ending, EventHeader}
+import softphone4s.subscription.{Ending, EventHeader, MessageSummary}
 import softphone4s.model.*
 import softphone4s.transaction.TransactionMessages
 import softphone4s.transport.{Inbound, SipTransport, Transport}
@@ -428,7 +428,9 @@ class SoftphoneStreamingSuite extends CatsEffectSuite {
       subscribe: SipRequest,
       number: Int,
       state: String,
-      body: String = ""
+      body: String = "",
+      event: String = "presence",
+      contentType: MediaType = pidf
   ): SipRequest =
     SipRequest(
       SipMethod.Notify,
@@ -442,11 +444,11 @@ class SoftphoneStreamingSuite extends CatsEffectSuite {
         ),
         cseq = cseq(number, SipMethod.Notify),
         contacts = List(nameAddr("<sip:bob@127.0.0.1:19071>")),
-        contentType = Option.when(body.nonEmpty)(pidf),
+        contentType = Option.when(body.nonEmpty)(contentType),
         others = List(
           ExtensionHeader(
             FieldName("Event").fold(e => fail(e), identity),
-            "presence"
+            event
           ),
           ExtensionHeader(
             FieldName("Subscription-State").fold(e => fail(e), identity),
@@ -505,6 +507,60 @@ class SoftphoneStreamingSuite extends CatsEffectSuite {
             assertEquals(leave.headers.callId, first.headers.callId)
             assertEquals(leave.headers.to.tag, Some(tag("srv")))
             assertEquals(leave.requestUri.render, "sip:bob@127.0.0.1:19071")
+          }
+        }
+    }
+  }
+
+  test(
+    "a package is subscribed to by its Event and Accept, and its states are read"
+  ) {
+    def summary(n: Int, state: String, body: String) =
+      (first: SipRequest) =>
+        notifyFor(
+          first,
+          n,
+          state,
+          body,
+          "message-summary",
+          MediaType.SimpleMessageSummary
+        )
+    (phone, remote).tupled.use { (softphone, peer) =>
+      softphone.subscriptions
+        .watch(callee, MessageSummary.Package)
+        .use { watched =>
+          for {
+            first <- subscribeRequest(peer)
+            _     <- peer.send(us, acceptedSubscribe(first, 3600))
+            good = summary(
+              1,
+              "active;expires=3600",
+              "Messages-Waiting: yes\r\nVoice-Message: 2/8\r\n"
+            )(first)
+            _ <- peer.send(us, good)
+            _ <- answerTo(peer, good)
+            _ <- peer.send(
+              us,
+              summary(2, "active;expires=3000", "Messages-Waiting: maybe\r\n")(
+                first
+              )
+            )
+            states <- watched.states.take(2).compile.toList.timeout(5.seconds)
+          } yield {
+            def header(name: String) =
+              first.headers.others.find(_.name.matches(name)).map(_.value)
+            assertEquals(header("Event"), Some("message-summary"))
+            assertEquals(
+              header("Accept"),
+              Some("application/simple-message-summary")
+            )
+            assertEquals(
+              states.headOption.flatMap(_.toOption).map(_.waiting),
+              Some(true)
+            )
+            // A body that does not follow the format is a Left, and the stream
+            // goes on.
+            assert(states.lift(1).exists(_.isLeft), states.toString)
           }
         }
     }

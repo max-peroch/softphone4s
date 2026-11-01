@@ -24,6 +24,9 @@ object EventHeader {
 
   private val Token = """[A-Za-z0-9\-\.!%*_+`'~]+""".r
 
+  /** The `message-summary` package (RFC 3842). */
+  val MessageSummary: EventHeader = new EventHeader("message-summary", None)
+
   /** The `Event` header of a package, with an `id` if there is more than one
     * subscription to it in the dialog.
     */

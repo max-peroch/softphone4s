@@ -3,7 +3,7 @@ package softphone4s
 import cats.data.NonEmptyList
 import cats.effect.Resource
 import softphone4s.model.{AccountId, Callee, Expires, MediaType}
-import softphone4s.subscription.EventHeader
+import softphone4s.subscription.{EventHeader, EventPackage}
 
 import scala.concurrent.duration.*
 
@@ -37,6 +37,30 @@ trait Subscriptions[F[_]] {
       accept: List[MediaType] = Nil,
       expires: Expires = Subscriptions.DefaultExpires
   ): Resource[F, Subscription[F]]
+
+  /** Subscribes to an event package as `account`: the `Event` and `Accept` are
+    * the package's, and the states it describes come from [[Watch.states]]. A
+    * NOTIFY that cannot be read as the package says (the one that ends a
+    * subscription often has no body) is a `Left` there and does not end the
+    * stream.
+    */
+  def watchAs[A](
+      account: AccountId,
+      target: Callee,
+      pkg: EventPackage[A],
+      expires: Expires = Subscriptions.DefaultExpires
+  ): Resource[F, Watch[F, A]] =
+    subscribeAs(account, target, pkg.event, pkg.accept, expires).map(s =>
+      Watch(s, s.notifications.map(pkg.decode))
+    )
+
+  /** Subscribes to an event package as the default account. */
+  def watch[A](
+      target: Callee,
+      pkg: EventPackage[A],
+      expires: Expires = Subscriptions.DefaultExpires
+  ): Resource[F, Watch[F, A]] =
+    watchAs(accounts.head, target, pkg, expires)
 
   /** Subscribes as the default account. */
   def subscribe(

@@ -474,9 +474,27 @@ and ends when the subscription does. Releasing the resource ends the
 subscription with a SUBSCRIBE for nothing and waits for the last NOTIFY.
 
 `subscribeAs` subscribes as one of several accounts, and `expires` asks for a
-lifetime other than an hour. The body of a NOTIFY is text for the program to
-decode as the event package says; typed packages (presence, message-summary) are
-the next piece.
+lifetime other than an hour. The body of a NOTIFY is text that an event
+package reads.
+
+#### Event packages
+
+An `EventPackage[A]` is a value that names the `Event`, the `Accept` types and
+how a NOTIFY becomes an `A`; `phone.subscriptions.watch(target, pkg)` subscribes
+to it and gives the states:
+
+```scala
+phone.subscriptions.watch(mailbox, MessageSummary.Package).use { watched =>
+  watched.states.evalMap {
+    case Right(summary) => IO.println(s"waiting: ${summary.waiting}, ${summary.counts}")
+    case Left(error)    => IO.println(error.message)   // e.g. the final NOTIFY, with no body
+  }.compile.drain
+}
+```
+
+A NOTIFY that cannot be read is a `Left(PackageError)` and does not end the
+stream. `MessageSummary.Package` (RFC 3842, message waiting) is the first; a
+program can define its own.
 
 ### Receiving DTMF
 

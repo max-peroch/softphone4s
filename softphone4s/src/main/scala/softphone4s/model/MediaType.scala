@@ -41,6 +41,10 @@ object MediaType {
   /** The text of an instant message (RFC 3428). */
   val Plain: MediaType = MediaType("text", "plain", ListMap.empty)
 
+  /** The body of a message-waiting NOTIFY (RFC 3842). */
+  val SimpleMessageSummary: MediaType =
+    MediaType("application", "simple-message-summary", ListMap.empty)
+
   /** A digit sent in SIP INFO, the way most phones do. */
   val DtmfRelay: MediaType =
     MediaType("application", "dtmf-relay", ListMap.empty)
