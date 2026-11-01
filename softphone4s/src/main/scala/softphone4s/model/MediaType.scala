@@ -45,6 +45,10 @@ object MediaType {
   val SimpleMessageSummary: MediaType =
     MediaType("application", "simple-message-summary", ListMap.empty)
 
+  /** The body of a presence NOTIFY (RFC 3863). */
+  val PidfXml: MediaType =
+    MediaType("application", "pidf+xml", ListMap.empty)
+
   /** A digit sent in SIP INFO, the way most phones do. */
   val DtmfRelay: MediaType =
     MediaType("application", "dtmf-relay", ListMap.empty)

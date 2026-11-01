@@ -30,6 +30,7 @@ lazy val softphone4s = project
       catsEffect,
       fs2Core,
       fs2Io,
+      fs2DataXml,
       pureconfigCore,
       pureconfigGeneric,
       log4catsCore,

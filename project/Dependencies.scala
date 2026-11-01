@@ -19,6 +19,10 @@ object Dependencies {
   val fs2Core    = "co.fs2"        %% "fs2-core"    % fs2Version
   val fs2Io      = "co.fs2"        %% "fs2-io"      % fs2Version
 
+  // XML, for the bodies of presence (PIDF). Reads in Scala, never fetches an
+  // external entity or DTD.
+  val fs2DataXml = "org.gnieh" %% "fs2-data-xml" % "1.14.1"
+
   // DNS (SRV and NAPTR records, with their TTLs)
   val dnsjava = "dnsjava" % "dnsjava" % dnsjavaVersion
 

@@ -24,6 +24,9 @@ object EventHeader {
 
   private val Token = """[A-Za-z0-9\-\.!%*_+`'~]+""".r
 
+  /** The `presence` package (RFC 3856). */
+  val Presence: EventHeader = new EventHeader("presence", None)
+
   /** The `message-summary` package (RFC 3842). */
   val MessageSummary: EventHeader = new EventHeader("message-summary", None)
 

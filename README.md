@@ -32,6 +32,12 @@ See the [releases page](https://github.com/max-peroch/softphone4s/releases)
 for the latest published version, and [`build.sbt`](build.sbt) for the exact
 Scala, Cats Effect, and fs2 versions this release was built against.
 
+The library and the tracing module run on Java 17 and later (they are compiled
+with `-release 17` and tested on 17 and 25). The Opus module needs Java 22 or
+later, for the Foreign Function & Memory API, and the native access to be
+allowed (`--enable-native-access=ALL-UNNAMED`). Use a JDK that has the fix for
+CVE-2026-91403 (25.0.5, 21.0.13, 17.0.21 or later), or set `tls.trust-store`.
+
 ## Overview
 
 softphone4s handles outbound SIP calls end-to-end:
@@ -64,7 +70,9 @@ softphone4s handles outbound SIP calls end-to-end:
 - **TLS** (RFC 3261 §26, RFC 5922): the server is identified by the host the
   request is addressed to (its first Route, else its Request-URI), which is sent
   as the SNI name and, by default, checked against the certificate. Trust comes
-  from your own trust store or the JVM's; a client certificate can be presented
+  from your own trust store or the JVM's (set `tls.trust-store` to trust only the
+  authorities you name, whatever the JVM ships with; useful while a JDK's own
+  list is in doubt); a client certificate can be presented
   (mutual TLS), the oldest protocol version is yours to set (1.2 by default),
   and a handshake that fails is a failed connection, not a lost message.
   Verification fails closed: a destination given as an IP address has no name
@@ -493,8 +501,16 @@ phone.subscriptions.watch(mailbox, MessageSummary.Package).use { watched =>
 ```
 
 A NOTIFY that cannot be read is a `Left(PackageError)` and does not end the
-stream. `MessageSummary.Package` (RFC 3842, message waiting) is the first; a
-program can define its own.
+stream. Two packages come with the library, and a program can define its own:
+
+- `MessageSummary.Package` (RFC 3842, message waiting): whether messages are
+  waiting, for which account, and the counts by class.
+- `Presence.Package` (RFC 3856 with PIDF, RFC 3863): the tuples of an entity, each
+  with its `id`, `basic` status (`Open` or `Closed`, or none), contact and notes;
+  `presence.isOpen` says whether any is open. The XML is read by `fs2-data-xml`,
+  in Scala and fetching nothing: a document with a DOCTYPE, or an entity the XML
+  spec does not define, is refused. Extension elements in other namespaces (RPID
+  and the like) are skipped.
 
 ### Receiving DTMF
 
