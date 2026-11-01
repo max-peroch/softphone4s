@@ -17,6 +17,14 @@ final case class MediaType private (
   def render: String =
     s"$mainType/$subType${HeaderSyntax.renderParams(params)}"
 
+  /** The `charset` parameter, lower-cased and without quotes, if there is one.
+    */
+  def charset: Option[String] =
+    params.collectFirst {
+      case (name, Some(value)) if name.value == "charset" =>
+        value.value.stripPrefix("\"").stripSuffix("\"").toLowerCase
+    }
+
   /** Whether this is `application/sdp`, whatever its parameters. */
   def isSdp: Boolean = mainType == "application" && subType == "sdp"
 

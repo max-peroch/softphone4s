@@ -25,6 +25,36 @@ object SipMessages {
   private def contacts(e: LocalEndpoint): List[NameAddr] =
     List(NameAddr(e.contact))
 
+  // -------------------------------------------------------------------------
+  // Answers to a MESSAGE, which need nothing of ours
+  // -------------------------------------------------------------------------
+
+  /** The 200 to a MESSAGE we take. */
+  def messageOk(req: SipRequest): SipResponse =
+    TransactionMessages.responseTo(req, 200, "OK")
+
+  /** The 415 to a MESSAGE whose content we cannot take, saying what we can (RFC
+    * 3261 §21.4.13).
+    */
+  def unsupportedMessage(
+      req: SipRequest,
+      accepted: List[MediaType]
+  ): SipResponse = {
+    val refusal = TransactionMessages.responseTo(
+      req,
+      415,
+      "Unsupported Media Type"
+    )
+    refusal.copy(headers =
+      refusal.headers.copy(others =
+        ExtensionHeader(
+          FieldName.Accept,
+          accepted.map(_.render).mkString(", ")
+        ) :: refusal.headers.others
+      )
+    )
+  }
+
   extension (e: LocalEndpoint) {
 
     // -----------------------------------------------------------------------
@@ -331,32 +361,6 @@ object SipMessages {
         ),
         body = content.text
       )
-
-    /** The 200 to a MESSAGE we take. */
-    def buildMessageOk(req: SipRequest): SipResponse =
-      TransactionMessages.responseTo(req, 200, "OK")
-
-    /** The 415 to a MESSAGE whose content we cannot take, saying what we can
-      * (RFC 3261 §21.4.13).
-      */
-    def buildUnsupportedMessage(
-        req: SipRequest,
-        accepted: List[MediaType]
-    ): SipResponse = {
-      val refusal = TransactionMessages.responseTo(
-        req,
-        415,
-        "Unsupported Media Type"
-      )
-      refusal.copy(headers =
-        refusal.headers.copy(others =
-          ExtensionHeader(
-            FieldName.Accept,
-            accepted.map(_.render).mkString(", ")
-          ) :: refusal.headers.others
-        )
-      )
-    }
 
     /** The 200 to an OPTIONS query: what we can do (RFC 3261 §11.2). */
     def buildOptionsOk(req: SipRequest): SipResponse = {

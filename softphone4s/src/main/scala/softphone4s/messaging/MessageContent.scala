@@ -13,4 +13,14 @@ object MessageContent {
   /** `text` as `text/plain`. */
   def plain(text: String): MessageContent =
     MessageContent(MediaType.Plain, text)
+
+  /** The types of message we take. */
+  val Accepted: List[MediaType] = List(MediaType.Plain)
+
+  /** Whether we can read a message of this type: `text/plain`, in a character
+    * set that bodies, which we read as UTF-8, do not garble.
+    */
+  def canRead(contentType: MediaType): Boolean =
+    contentType.mainType == "text" && contentType.subType == "plain" &&
+      contentType.charset.forall(Set("utf-8", "us-ascii").contains)
 }

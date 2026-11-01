@@ -7,7 +7,7 @@ import fs2.{Pipe, Stream}
 import io.opentelemetry.context.ContextStorage
 import org.typelevel.otel4s.Attribute
 import org.typelevel.otel4s.trace.{SpanKind, SpanOps, Tracer}
-import softphone4s.messaging.{MessageContent, MessageFailure}
+import softphone4s.messaging.{IncomingMessage, MessageContent, MessageFailure}
 import softphone4s.{Call, IncomingCall, Softphone}
 import softphone4s.fsm.SessionChange
 import softphone4s.model.{AccountId, Callee, DtmfDigit, DtmfMethod}
@@ -121,6 +121,9 @@ final class TracedSoftphone[F[_]: Async](
       }
 
   def incoming: Stream[F, IncomingCall[F]] = underlying.incoming
+
+  def incomingMessages: Stream[F, IncomingMessage] =
+    underlying.incomingMessages
 
   def sendMessageAs(
       account: AccountId,

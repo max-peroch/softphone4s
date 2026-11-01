@@ -230,6 +230,168 @@ class SoftphoneStreamingSuite extends CatsEffectSuite {
     }
   }
 
+  // ---- Messages that arrive -------------------------------------------------------------
+
+  private def messageRequest(
+      id: String,
+      body: String,
+      contentType: Option[MediaType] = Some(MediaType.Plain),
+      user: String = "test"
+  ): SipRequest =
+    SipRequest(
+      SipMethod.Message,
+      uri(s"sip:$user@127.0.0.1:19070"),
+      SipHeaders(
+        callId = callId(s"$id@host"),
+        from = nameAddr("<sip:bob@127.0.0.1>;tag=ft"),
+        to = nameAddr(s"<sip:$user@127.0.0.1>"),
+        vias = NonEmptyList.one(
+          via(s"SIP/2.0/UDP 127.0.0.1:19071;branch=z9hG4bK$id")
+        ),
+        cseq = cseq(1, SipMethod.Message),
+        contentType = contentType
+      ),
+      body
+    )
+
+  private def finalResponse(peer: Transport[IO]) =
+    peer.messages
+      .collectFirst {
+        case Inbound(_, r: SipResponse) if r.statusCode >= 200 => r
+      }
+      .compile
+      .lastOrError
+      .timeout(5.seconds)
+
+  test(
+    "a message that arrives is answered 200 and read from incomingMessages"
+  ) {
+    (phone, remote).tupled.use { (softphone, peer) =>
+      for {
+        _        <- peer.send(us, messageRequest("m1", "hi there, é ✓"))
+        answer   <- finalResponse(peer)
+        received <- softphone.incomingMessages.head.compile.lastOrError
+          .timeout(5.seconds)
+      } yield {
+        assertEquals(answer.statusCode, 200)
+        assertEquals(answer.headers.callId, callId("m1@host"))
+        assertEquals(received.content, MessageContent.plain("hi there, é ✓"))
+        assertEquals(received.from.uri.render, "sip:bob@127.0.0.1")
+        assertEquals(received.account.render, "sip:test@127.0.0.1")
+      }
+    }
+  }
+
+  test("messages are read in the order they came") {
+    (phone, remote).tupled.use { (softphone, peer) =>
+      for {
+        _ <- List("one", "two", "three").zipWithIndex.traverse_((text, i) =>
+          peer.send(us, messageRequest(s"o$i", text)) >> finalResponse(peer)
+        )
+        got <- softphone.incomingMessages
+          .take(3)
+          .compile
+          .toList
+          .timeout(5.seconds)
+      } yield assertEquals(got.map(_.content.text), List("one", "two", "three"))
+    }
+  }
+
+  test(
+    "a message of a type we cannot read is answered 415 with what we take, and does not appear"
+  ) {
+    (phone, remote).tupled.use { (softphone, peer) =>
+      val html = MediaType.parse("text/html").fold(e => fail(e), identity)
+      for {
+        _      <- peer.send(us, messageRequest("h1", "<b>hi</b>", Some(html)))
+        answer <- finalResponse(peer)
+        none   <- softphone.incomingMessages.head.compile.last
+          .timeout(300.millis)
+          .attempt
+      } yield {
+        assertEquals(answer.statusCode, 415)
+        assertEquals(
+          answer.headers.others.map(h => (h.name.value, h.value)),
+          List(("Accept", "text/plain"))
+        )
+        assert(none.isLeft, "a message that was refused appeared")
+      }
+    }
+  }
+
+  test("text in a character set that would be garbled is answered 415") {
+    (phone, remote).tupled.use { (_, peer) =>
+      val latin = MediaType
+        .parse("text/plain;charset=iso-8859-1")
+        .fold(e => fail(e), identity)
+      peer.send(us, messageRequest("l1", "caf\u00e9", Some(latin))) >>
+        finalResponse(peer).map(a => assertEquals(a.statusCode, 415))
+    }
+  }
+
+  test("a body that does not say what it is is answered 400") {
+    (phone, remote).tupled.use { (_, peer) =>
+      peer.send(us, messageRequest("n1", "no type", None)) >>
+        finalResponse(peer).map(a => assertEquals(a.statusCode, 400))
+    }
+  }
+
+  test("a retransmitted message is answered again and appears once") {
+    (phone, remote).tupled.use { (softphone, peer) =>
+      val request = messageRequest("r1", "once")
+      for {
+        _     <- peer.send(us, request)
+        _     <- finalResponse(peer)
+        _     <- peer.send(us, request)
+        again <- finalResponse(peer)
+        got   <- softphone.incomingMessages
+          .take(2)
+          .compile
+          .toList
+          .timeout(500.millis)
+          .attempt
+      } yield {
+        assertEquals(again.statusCode, 200)
+        // Only one arrived, so waiting for a second times out.
+        assert(got.isLeft, got)
+      }
+    }
+  }
+
+  test(
+    "when nobody reads, the messages that wait are limited, and the next is refused 503"
+  ) {
+    (phone, remote).tupled.use { (softphone, peer) =>
+      val n = SoftphoneStreaming.MessageBacklog + 1
+      for {
+        collected <- peer.messages
+          .collect {
+            case Inbound(_, r: SipResponse) if r.statusCode >= 200 => r
+          }
+          .take(n.toLong)
+          .compile
+          .toList
+          .timeout(10.seconds)
+          .start
+        _ <- (1 to n).toList.traverse_(i =>
+          peer.send(us, messageRequest(s"b$i", s"message $i"))
+        )
+        statuses <- collected.joinWithNever.map(_.map(_.statusCode))
+        // A message read makes room for the next.
+        _     <- softphone.incomingMessages.head.compile.lastOrError
+        _     <- peer.send(us, messageRequest("b-after", "after"))
+        after <- finalResponse(peer)
+      } yield {
+        assertEquals(
+          statuses.count(_ == 200),
+          SoftphoneStreaming.MessageBacklog
+        )
+        assertEquals(statuses.count(_ == 503), 1)
+        assertEquals(after.statusCode, 200)
+      }
+    }
+  }
+
   test("a BYE for a call that does not exist is answered 481") {
     (phone, remote).tupled.use { (_, peer) =>
       val stray = SipRequest(

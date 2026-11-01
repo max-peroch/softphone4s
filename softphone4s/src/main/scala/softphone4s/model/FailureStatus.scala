@@ -26,6 +26,7 @@ object FailureStatus {
   val BadRequest: FailureStatus             = 400
   val CallDoesNotExist: FailureStatus       = 481
   val RequestPending: FailureStatus         = 491
+  val ServiceUnavailable: FailureStatus     = 503
 
   private val phrases: Map[Int, String] = Map(
     400 -> "Bad Request",

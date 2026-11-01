@@ -38,7 +38,8 @@ import softphone4s.transport.{
   TcpTransport,
   TlsTransport
 }
-import softphone4s.messaging.{MessageContent, MessageFailure}
+import softphone4s.fsm.SipMessages
+import softphone4s.messaging.{IncomingMessage, MessageContent, MessageFailure}
 import softphone4s.ua.{
   DialogInput,
   InboundCall,
@@ -65,6 +66,7 @@ class SoftphoneStreaming[F[_]: Async: Network] private (
     codecs: AudioCodecs,
     supervisor: Supervisor[F],
     incomingCalls: Queue[F, IncomingCall[F]],
+    messageQueue: Queue[F, IncomingMessage],
     logger: StructuredLogger[F]
 ) extends Softphone[F] {
 
@@ -503,6 +505,8 @@ class SoftphoneStreaming[F[_]: Async: Network] private (
             )
           )
         )(acceptInbound(transaction, _))
+      case None if request.method == SipMethod.Message =>
+        acceptMessage(transaction)
       case None =>
         logger.debug(Map("callId" -> request.headers.callId.value))(
           "Request for a call that does not exist"
@@ -515,6 +519,51 @@ class SoftphoneStreaming[F[_]: Async: Network] private (
             )
           )
     })
+  }
+
+  override def incomingMessages: Stream[F, IncomingMessage] =
+    Stream.fromQueueUnterminated(messageQueue)
+
+  /** A MESSAGE outside any dialog (RFC 3428). It is answered 404 if no account
+    * is the one it is for, 400 if it has a body and does not say what it is,
+    * 415 if it is not text we can read, and 503 if nobody is reading and the
+    * queue is full; otherwise it is held for `incomingMessages` and answered
+    * 200, in that order, so that 200 means the program has it.
+    */
+  private def acceptMessage(transaction: ServerTransaction[F]): F[Unit] = {
+    val request                       = transaction.request
+    def refuse(status: FailureStatus) =
+      transaction.respond(
+        TransactionMessages.responseTo(request, status.value, status.reason)
+      )
+    accountFor(request) match {
+      case None          => refuse(FailureStatus.NotFound)
+      case Some(account) =>
+        request.headers.contentType match {
+          case None if request.body.nonEmpty =>
+            refuse(FailureStatus.BadRequest)
+          case Some(contentType) if !MessageContent.canRead(contentType) =>
+            transaction.respond(
+              SipMessages.unsupportedMessage(request, MessageContent.Accepted)
+            )
+          case contentType =>
+            val message = IncomingMessage(
+              account.id,
+              request.headers.from,
+              MessageContent(
+                contentType.getOrElse(MediaType.Plain),
+                request.body
+              )
+            )
+            messageQueue.tryOffer(message).flatMap {
+              case true  => transaction.respond(SipMessages.messageOk(request))
+              case false =>
+                logger.warn(Map("account" -> account.id.render))(
+                  "A message was refused: nobody is reading them"
+                ) >> refuse(FailureStatus.ServiceUnavailable)
+            }
+        }
+    }
   }
 
   /** Hands messages no transaction claimed (the ACK of a 2xx, a retransmitted
@@ -625,6 +674,9 @@ class SoftphoneStreaming[F[_]: Async: Network] private (
 
 object SoftphoneStreaming {
 
+  /** How many instant messages wait for a reader before the next is refused. */
+  val MessageBacklog: Int = 64
+
   /** How many targets of a name are tried at most. */
   private[softphone4s] val MaxTargets: Int = 4
 
@@ -702,7 +754,10 @@ object SoftphoneStreaming {
       )
       supervisor    <- Supervisor[F](await = false)
       incomingCalls <- Resource.eval(Queue.unbounded[F, IncomingCall[F]])
-      range         <- Resource.eval(
+      messageQueue  <- Resource.eval(
+        Queue.bounded[F, IncomingMessage](SoftphoneStreaming.MessageBacklog)
+      )
+      range <- Resource.eval(
         Async[F].fromEither(
           RtpPortRange(config.baseRtpPort, config.lastRtpPort).leftMap(
             SoftphoneError.RtpPortsInvalid(_)
@@ -732,6 +787,7 @@ object SoftphoneStreaming {
         codecs = codecs,
         supervisor,
         incomingCalls,
+        messageQueue,
         logger
       )
       _ <- Resource.eval(supervisor.supervise(softphone.routeIncoming))

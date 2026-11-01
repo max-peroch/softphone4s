@@ -536,13 +536,13 @@ class SipMessagesSuite extends FunSuite {
   }
 
   test("the 200 to a MESSAGE answers it and carries no body") {
-    val ok200 = endpoint.buildMessageOk(message())
+    val ok200 = messageOk(message())
     assertEquals((ok200.statusCode, ok200.body), (200, ""))
     assertEquals(ok200.headers.cseq, cseq(1, SipMethod.Message))
   }
 
   test("the 415 to a MESSAGE we cannot read says what we can") {
-    val refusal = endpoint.buildUnsupportedMessage(
+    val refusal = unsupportedMessage(
       message(),
       List(MediaType.Plain, MediaType.Sdp)
     )

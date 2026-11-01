@@ -4,7 +4,7 @@ import cats.data.NonEmptyList
 import cats.effect.Resource
 import fs2.{Pipe, Stream}
 import softphone4s.fsm.SessionChange
-import softphone4s.messaging.{MessageContent, MessageFailure}
+import softphone4s.messaging.{IncomingMessage, MessageContent, MessageFailure}
 import softphone4s.model.{AccountId, Callee, Dtmf, DtmfDigit, DtmfMethod}
 import softphone4s.registration.Registration
 
@@ -110,6 +110,15 @@ trait Softphone[F[_]] {
       content: MessageContent
   ): F[Either[MessageFailure, Unit]] =
     sendMessageAs(accounts.head, to, content)
+
+  /** Instant messages (RFC 3428) that arrive for any of the accounts, in the
+    * order they come; `IncomingMessage.account` says which. Each is answered
+    * 200 once it is held here, so that a message seen as delivered is a message
+    * the program has. Up to 64 wait for a reader; beyond that the sender is
+    * told 503. A message whose type we cannot read is answered 415 and does not
+    * appear.
+    */
+  def incomingMessages: Stream[F, IncomingMessage]
 
   /** Calls placed to any of the accounts, as they arrive;
     * `IncomingCall.account` says which. Each is answered with

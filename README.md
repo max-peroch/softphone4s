@@ -424,6 +424,26 @@ refusal is final. The content is text, sent as UTF-8; `MessageContent` takes any
 type (`text/plain` is the one every phone reads). `sendMessageAs` sends as one of
 several accounts.
 
+### Receiving messages
+
+`phone.incomingMessages` is the stream of instant messages that arrive for any of
+the accounts, in order; `IncomingMessage.account` says which, `from` who sent it
+and `content` what it says:
+
+```scala
+phone.incomingMessages
+  .evalMap(m => IO.println(s"${m.from.uri.render}: ${m.content.text}"))
+  .compile
+  .drain
+```
+
+A message is answered `200` once the stream holds it, so a sender that sees it
+delivered knows the program has it. The others are answered without reaching the
+program: `404` if no account is the one it is for, `400` if it has a body and
+does not say what it is, `415` (listing `text/plain`) for any other type or for a
+character set other than UTF-8 or US-ASCII, and `503` if 64 are already waiting
+for a reader. A retransmission is answered again and appears once.
+
 ### Receiving DTMF
 
 ```scala

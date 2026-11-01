@@ -191,6 +191,47 @@ class MultiAccountSuite extends CatsEffectSuite {
     }
   }
 
+  private def messageTo(user: String, id: String): SipRequest =
+    inviteTo(user, id).copy(
+      method = SipMethod.Message,
+      headers = inviteTo(user, id).headers.copy(
+        cseq = cseq(1, SipMethod.Message),
+        contentType = Some(MediaType.Plain),
+        contacts = Nil
+      ),
+      body = s"hello $user"
+    )
+
+  test("a message is attributed to the account it was sent to") {
+    scenario().use { (phone, peer) =>
+      for {
+        _      <- peer.send(target, messageTo("alt", "ma1"))
+        status <- finalStatus(peer)
+        got    <- phone.incomingMessages.head.compile.lastOrError
+          .timeout(5.seconds)
+      } yield {
+        assertEquals(status, 200)
+        assertEquals(got.account.render, "sip:alt@127.0.0.1")
+        assertEquals(got.content.text, "hello alt")
+      }
+    }
+  }
+
+  test("with several accounts a message to an unknown user is refused 404") {
+    scenario().use { (phone, peer) =>
+      for {
+        _      <- peer.send(target, messageTo("nobody", "ma2"))
+        status <- finalStatus(peer)
+        none   <- phone.incomingMessages.head.compile.last
+          .timeout(300.millis)
+          .attempt
+      } yield {
+        assertEquals(status, 404)
+        assert(none.isLeft, "no message must appear")
+      }
+    }
+  }
+
   test("with a single account a call is taken whatever user it names") {
     scenario(more = Nil).use { (phone, peer) =>
       peer.send(target, inviteTo("anyone", "s1")) >>
