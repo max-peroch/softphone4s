@@ -450,7 +450,8 @@ account every call is taken. Two accounts cannot have the same user.
 | `realm`             | `String`    | required     | SIP realm / server hostname                        |
 | `local-sip-port`    | `Port`      | `5060`       | Local UDP port for SIP                             |
 | `server-port`       | `Port`      | `5060`       | Remote SIP server port. 5060 leaves the port to SRV records and the transport's default; any other value is used as it is and skips SRV |
-| `base-rtp-port`     | `Port`      | `8000`       | Base RTP port; each concurrent call uses two ports |
+| `base-rtp-port`     | `Port`      | `8000`       | First RTP port of the range media is received on; a call takes a pair (RTP on an even port, RTCP on the next) for as long as it lasts |
+| `max-rtp-port`      | `Port`      | base + 9999  | Last port of the range (5 000 calls at once by default, as far as ports go) |
 | `bind-address`      | `IpAddress` | `0.0.0.0`    | Local bind address                                 |
 | `local-ip-fallback` | `IpAddress` | `127.0.0.1`  | Advertised when no IPv4 route to the SIP server is found |
 | `hangup-timeout`    | `Duration`  | `5 seconds`  | Grace period for event loop drain on release       |
@@ -499,7 +500,8 @@ All failures surface as `SoftphoneError` (a sealed `RuntimeException` hierarchy)
 | `TlsConfigurationInvalid(reason)` | A TLS key store cannot be read or has the wrong password |
 | `UnknownAccount(account)` | `callAs` or `registerAs` named an account the softphone does not hold |
 | `DuplicateAccount(user)` | Two configured accounts share a user |
-| `RtpPortExhausted(port)` | Computed RTP port exceeds 65535 (too many concurrent calls) |
+| `RtpPortsExhausted(first, last)` | Every pair of RTP ports in the range is in use or cannot be bound (too many concurrent calls) |
+| `RtpPortsInvalid(reason)` | `base-rtp-port` and `max-rtp-port` leave no pair of ports |
 
 `awaitPickup` raises the error as an effect if the call is rejected or
 times out before being answered.

@@ -428,6 +428,30 @@ class MultiAccountSuite extends CatsEffectSuite {
     assert(load("srtp = always").isLeft)
   }
 
+  test("the range of RTP ports is read, from 8000 to 17999 if not said") {
+    def load(extra: String) =
+      ConfigSource
+        .string(s"user = alice\npassword = pw\nrealm = example.com\n$extra")
+        .load[SoftphoneConfig]
+    val none = load("").fold(f => fail(f.prettyPrint()), identity)
+    assertEquals(
+      (none.baseRtpPort, none.lastRtpPort),
+      (port"8000", port"17999")
+    )
+    // Following the first port when only that is set, and held to the ports there are.
+    assertEquals(
+      load("base-rtp-port = 20000").map(_.lastRtpPort),
+      Right(port"29999")
+    )
+    assertEquals(
+      load("base-rtp-port = 60000").map(_.lastRtpPort),
+      Right(port"65535")
+    )
+    val set = load("base-rtp-port = 30000\nmax-rtp-port = 30099")
+      .fold(f => fail(f.prettyPrint()), identity)
+    assertEquals((set.baseRtpPort, set.lastRtpPort), (port"30000", port"30099"))
+  }
+
   test("a jitter buffer that cannot work is a configuration error") {
     def load(extra: String) =
       ConfigSource

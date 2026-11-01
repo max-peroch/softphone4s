@@ -21,7 +21,7 @@ import softphone4s.fsm.CallTimer
 import softphone4s.model.*
 import softphone4s.registration.Registration
 import softphone4s.sdp.LocalCrypto
-import softphone4s.media.{AudioCodec, AudioCodecs}
+import softphone4s.media.{AudioCodec, AudioCodecs, RtpPortRange, RtpPorts}
 import softphone4s.runtime.{Entropy, Timers}
 import softphone4s.stun.StunClient
 import softphone4s.transaction.{
@@ -53,7 +53,7 @@ class SoftphoneStreaming[F[_]: Async: Network] private (
     publicSip: SignallingRef[F, Option[SocketAddress[IpAddress]]],
     layer: TransactionLayer[F],
     routes: Ref[F, Map[CallId, Channel[F, DialogInput[F]]]],
-    nextCallIndex: Ref[F, Int],
+    rtpPorts: RtpPorts[F],
     entropy: Entropy[F],
     codecs: AudioCodecs,
     supervisor: Supervisor[F],
@@ -111,11 +111,9 @@ class SoftphoneStreaming[F[_]: Async: Network] private (
           logger.info(Map("address" -> ip.toString))("Advertising local IP")
         )
       )
-      endpoint <- Resource.eval(
-        allocateEndpoint(account, localIp, protocol)
-          .flatMap(secureIfNeeded(_, target.scheme))
-          .flatMap(seenFromOutside)
-      )
+      endpoint <- allocateEndpoint(account, localIp, protocol)
+        .evalMap(secureIfNeeded(_, target.scheme))
+        .evalMap(seenFromOutside)
       alternatives <- Resource.eval(alternativesTo(endpoint, found.tail))
       streamWay    <- Resource.eval(
         streamWayTo(account, target, endpoint, calleeAddr)
@@ -348,23 +346,21 @@ class SoftphoneStreaming[F[_]: Async: Network] private (
         Async[F].raiseError(SoftphoneError.TransportUnavailable(other.token))
     }
 
+  /** The endpoint of a call, with a pair of RTP ports that goes back to the
+    * pool when the call's resources are released, and keys of its own.
+    */
   private def allocateEndpoint(
       account: Account,
       localIp: IpAddress,
       transport: TransportProtocol
-  ): F[LocalEndpoint] =
-    nextCallIndex.getAndUpdate(_ + 1).flatMap { callIndex =>
-      val portsPerCall = 2
-      val rtpPortInt   = config.baseRtpPort.value + callIndex * portsPerCall
-      for {
-        rtpPort <- Async[F].fromOption(
-          Port.fromInt(rtpPortInt),
-          SoftphoneError.RtpPortExhausted(rtpPortInt)
-        )
-        // The keys of a call are made once, and are the same over its session
-        // changes and its uplinks.
-        crypto   <- LocalCrypto.generate[F](config.srtp)
-        endpoint <- Async[F].fromEither(
+  ): Resource[F, LocalEndpoint] =
+    for {
+      rtpPort <- rtpPorts.allocate
+      // The keys of a call are made once, and are the same over its session
+      // changes and its uplinks.
+      crypto   <- Resource.eval(LocalCrypto.generate[F](config.srtp))
+      endpoint <- Resource.eval(
+        Async[F].fromEither(
           LocalEndpoint.from(
             account.config,
             config.bindAddress,
@@ -375,8 +371,8 @@ class SoftphoneStreaming[F[_]: Async: Network] private (
             codecs.capabilities.copy(crypto = crypto)
           )
         )
-      } yield endpoint
-    }
+      )
+    } yield endpoint
 
   private def buildCall(
       callId: CallId,
@@ -540,14 +536,12 @@ class SoftphoneStreaming[F[_]: Async: Network] private (
       callSupervisor <- Supervisor[F](await = false)
       timers         <- Timers.resource[F, CallTimer]
       localIp        <- Resource.eval(localIpFor(invite.from))
-      endpoint       <- Resource.eval(
-        allocateEndpoint(
-          account,
-          localIp,
-          invite.request.headers.topVia.transport
-        ).flatMap(secureIfNeeded(_, invite.request.requestUri.scheme))
-          .flatMap(seenFromOutside)
-      )
+      endpoint       <- allocateEndpoint(
+        account,
+        localIp,
+        invite.request.headers.topVia.transport
+      ).evalMap(secureIfNeeded(_, invite.request.requestUri.scheme))
+        .evalMap(seenFromOutside)
       media <- Resource.eval(
         MediaSession
           .create(
@@ -661,9 +655,16 @@ object SoftphoneStreaming {
       )
       supervisor    <- Supervisor[F](await = false)
       incomingCalls <- Resource.eval(Queue.unbounded[F, IncomingCall[F]])
-      callIndex     <- Resource.eval(Ref[F].of(0))
-      entropy       <- Resource.eval(Entropy.secure[F])
-      records       <- Resource.eval(dns)
+      range         <- Resource.eval(
+        Async[F].fromEither(
+          RtpPortRange(config.baseRtpPort, config.lastRtpPort).leftMap(
+            SoftphoneError.RtpPortsInvalid(_)
+          )
+        )
+      )
+      rtpPorts <- Resource.eval(RtpPorts.binding[F](range, config.bindAddress))
+      entropy  <- Resource.eval(Entropy.secure[F])
+      records  <- Resource.eval(dns)
       softphone = new SoftphoneStreaming(
         config,
         accounts,
@@ -679,7 +680,7 @@ object SoftphoneStreaming {
         publicSip,
         layer,
         routes,
-        callIndex,
+        rtpPorts,
         entropy,
         codecs = codecs,
         supervisor,

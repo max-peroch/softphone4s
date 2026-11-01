@@ -26,6 +26,7 @@ final case class SoftphoneConfig(
     localSipPort: Port = port"5060",
     serverPort: Port = port"5060",
     baseRtpPort: Port = port"8000",
+    maxRtpPort: Option[Port] = None,
     bindAddress: IpAddress = ip"0.0.0.0",
     localIpFallback: IpAddress = ip"127.0.0.1",
     hangupTimeout: FiniteDuration = 5.seconds,
@@ -45,6 +46,16 @@ final case class SoftphoneConfig(
     jitterBuffer: JitterConfig = JitterConfig.Default,
     srtp: SrtpPolicy = SrtpPolicy.Off
 ) {
+
+  /** The last port media may be received on: as set, or 10 000 above the first,
+    * which is 5 000 calls at once, as far as there are ports.
+    */
+  def lastRtpPort: Port =
+    maxRtpPort.getOrElse(
+      Port
+        .fromInt(math.min(baseRtpPort.value + 9999, 65535))
+        .getOrElse(baseRtpPort)
+    )
 
   /** What our offers and answers are made from: the codecs chosen, in order. */
   def capabilities: Capabilities =

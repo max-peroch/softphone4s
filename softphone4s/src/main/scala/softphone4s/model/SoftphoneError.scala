@@ -56,8 +56,10 @@ object SoftphoneError {
       extends SoftphoneError(s"No such account: $account")
   final case class DuplicateAccount(account: String)
       extends SoftphoneError(s"Account configured twice: $account")
-  final case class RtpPortExhausted(port: Int)
+  final case class RtpPortsExhausted(first: Int, last: Int)
       extends SoftphoneError(
-        s"Computed RTP port $port is out of range (0-65535)"
+        s"No free pair of RTP ports from $first to $last"
       )
+  final case class RtpPortsInvalid(reason: String)
+      extends SoftphoneError(s"Cannot use these RTP ports: $reason")
 }

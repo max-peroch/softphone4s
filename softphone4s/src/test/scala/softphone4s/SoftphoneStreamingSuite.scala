@@ -117,6 +117,76 @@ class SoftphoneStreamingSuite extends CatsEffectSuite {
     }
   }
 
+  /** `io`, again after a moment while it fails for want of a pair of ports. */
+  private def retrying[A](io: IO[A], times: Int): IO[A] =
+    io.handleErrorWith {
+      case _: SoftphoneError.RtpPortsExhausted if times > 0 =>
+        IO.sleep(100.millis) >> retrying(io, times - 1)
+      case other => IO.raiseError(other)
+    }
+
+  test("the RTP ports of a call go back to the pool when it ends") {
+    // One pair of ports for the whole phone.
+    val small = SoftphoneStreaming.resource[IO](
+      config.copy(
+        baseRtpPort = port"19120",
+        maxRtpPort = Some(port"19121")
+      ),
+      audio,
+      NoOpLogger.impl[IO]
+    )
+    (small, remote).tupled.use { (softphone, peer) =>
+      for {
+        first <- softphone.call(callee).use { call =>
+          for {
+            invite <- requestOf(peer, SipMethod.Invite)
+            _      <- peer.send(us, okFor(invite))
+            _      <- call.awaitPickup.timeout(5.seconds)
+            // The pair is held, so another call finds none.
+            blocked <- softphone.call(callee).use_.attempt
+          } yield (invite, blocked)
+        }
+        // The first call is over, and its pair is free again.
+        // The system may take a moment to let go of the sockets just closed.
+        second <- retrying(
+          softphone
+            .call(callee)
+            .use(_ => requestOf(peer, SipMethod.Invite)),
+          20
+        )
+      } yield {
+        assertEquals(
+          first._2.left.toOption,
+          Some(SoftphoneError.RtpPortsExhausted(19120, 19121))
+        )
+        assert(first._1.body.contains("m=audio 19120"), first._1.body)
+        assert(second.body.contains("m=audio 19120"), second.body)
+      }
+    }
+  }
+
+  test(
+    "a range of RTP ports with no pair in it is refused when the phone starts"
+  ) {
+    SoftphoneStreaming
+      .resource[IO](
+        config.copy(
+          baseRtpPort = port"19130",
+          maxRtpPort = Some(port"19130")
+        ),
+        audio,
+        NoOpLogger.impl[IO]
+      )
+      .use_
+      .attempt
+      .map(result =>
+        assert(
+          result.left.exists(_.isInstanceOf[SoftphoneError.RtpPortsInvalid]),
+          result
+        )
+      )
+  }
+
   test("a BYE for a call that does not exist is answered 481") {
     (phone, remote).tupled.use { (_, peer) =>
       val stray = SipRequest(
