@@ -107,6 +107,15 @@ class MessageSummarySuite extends FunSuite {
     )
   }
 
+  test("counts cannot be made but through of, which checks them") {
+    assert(compileErrors("MessageCounts(1, 2, 3, 4)").nonEmpty)
+    assert(
+      compileErrors(
+        "MessageCounts.of(1, 2).toOption.get.copy(newMessages = -1)"
+      ).nonEmpty
+    )
+  }
+
   test("the package asks for message-summary and takes its type") {
     assertEquals(MessageSummary.Package.event.render, "message-summary")
     assertEquals(

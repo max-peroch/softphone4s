@@ -1,6 +1,6 @@
 package softphone4s.presence
 
-import softphone4s.subscription.EventPackage
+import softphone4s.subscription.{EventPackage, PackageError}
 
 /** The presence of an entity (RFC 3863): the tuples it is reachable by and
   * notes about it as a whole. No tuples means nothing is known.
@@ -22,4 +22,8 @@ object Presence {
 
   /** The `presence` package: subscribe with it, and read PIDF. */
   val Package: EventPackage[Presence] = Pidf.Package
+
+  /** Reads a PIDF document (RFC 3863), whether it came in a NOTIFY or not. */
+  def parse(document: String): Either[PackageError, Presence] =
+    Pidf.parse(document)
 }

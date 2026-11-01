@@ -43,12 +43,40 @@ private[presence] object Pidf {
 
   // ---- XML to a tree ---------------------------------------------------------------
 
+  /** The namespaces in force: by prefix, and with no prefix for the default. */
+  private type Scope = Map[Option[String], String]
+
+  /** The scope inside an element: its parent's, changed by what the element
+    * declares (`xmlns="..."` and `xmlns:p="..."`; an empty one takes it away).
+    */
+  private def scopeOf(
+      parent: Scope,
+      attributes: List[(QName, String)]
+  ): Scope =
+    attributes.foldLeft(parent) {
+      case (scope, (QName(None, "xmlns"), uri))    => declare(scope, None, uri)
+      case (scope, (QName(Some("xmlns"), p), uri)) =>
+        declare(scope, Some(p), uri)
+      case (scope, _) => scope
+    }
+
+  private def declare(scope: Scope, prefix: Option[String], uri: String) =
+    if uri.isEmpty then scope - prefix else scope + (prefix -> uri)
+
   private final case class Element(
       name: QName,
+      namespace: Option[String],
       attributes: List[(QName, String)],
       children: List[Element],
       text: String
   ) {
+
+    /** Whether this is the element `local` of PIDF, in whatever way the
+      * document spells the namespace.
+      */
+    def is(local: String): Boolean =
+      namespace.contains(Namespace) && name.local == local
+
     def attribute(local: String): Option[String] =
       attributes.collectFirst { case (QName(None, `local`), value) =>
         value
@@ -58,12 +86,19 @@ private[presence] object Pidf {
   /** An element being read: what it has so far, last first. */
   private final case class Open(
       name: QName,
+      scope: Scope,
       attributes: List[(QName, String)],
       children: List[Element],
       text: List[String]
   ) {
     def close: Element =
-      Element(name, attributes, children.reverse, text.reverse.mkString.trim)
+      Element(
+        name,
+        scope.get(name.prefix),
+        attributes,
+        children.reverse,
+        text.reverse.mkString.trim
+      )
   }
 
   private def read(body: String): Either[Throwable, List[XmlEvent]] =
@@ -116,7 +151,11 @@ private[presence] object Pidf {
       case (_, StartTag(name, attributes, _)) =>
         attributes
           .traverse(a => a.value.traverse(resolved).map(a.name -> _.mkString))
-          .map(attrs => (Open(name, attrs, Nil, Nil) :: reading._1, reading._2))
+          .map { attrs =>
+            val outer = reading._1.headOption.fold(Map.empty: Scope)(_.scope)
+            val open  = Open(name, scopeOf(outer, attrs), attrs, Nil, Nil)
+            (open :: reading._1, reading._2)
+          }
       case ((current :: above, root), EndTag(_)) =>
         finished(current.close, (above, root))
       case ((Nil, _), EndTag(_)) => Left("an end tag with nothing open")
@@ -145,13 +184,6 @@ private[presence] object Pidf {
 
   // ---- The tree to presence ----------------------------------------------------------
 
-  /** The namespace a prefix, or no prefix, is declared to be on `root`. */
-  private def declared(root: Element): Option[String] =
-    root.attributes.collectFirst {
-      case (QName(None, "xmlns"), uri) if root.name.prefix.isEmpty        => uri
-      case (QName(Some("xmlns"), p), uri) if root.name.prefix.contains(p) => uri
-    }
-
   private def presence(root: Element): Either[String, Presence] =
     for {
       _ <- Either.cond(
@@ -160,38 +192,33 @@ private[presence] object Pidf {
         s"not a presence document: <${root.name.render}>"
       )
       _ <- Either.cond(
-        declared(root).contains(Namespace),
+        root.is("presence"),
         (),
         s"not in the namespace $Namespace"
       )
       entity <- root.attribute("entity").toRight("no entity")
-      prefix = root.name.prefix
-      named  = (e: Element, local: String) =>
-        e.name.prefix == prefix && e.name.local == local
-      tuples <- root.children.filter(named(_, "tuple")).traverse(tuple(named))
+      tuples <- root.children.filter(_.is("tuple")).traverse(tuple)
     } yield Presence(
       entity,
       tuples,
-      root.children.filter(named(_, "note")).map(_.text)
+      root.children.filter(_.is("note")).map(_.text)
     )
 
-  private def tuple(
-      named: (Element, String) => Boolean
-  )(element: Element): Either[String, PresenceTuple] =
+  private def tuple(element: Element): Either[String, PresenceTuple] =
     for {
       id     <- element.attribute("id").toRight("a tuple with no id")
       status <- element.children
-        .find(named(_, "status"))
+        .find(_.is("status"))
         .toRight(s"tuple $id has no status")
       basic <- status.children
-        .find(named(_, "basic"))
+        .find(_.is("basic"))
         .traverse(b =>
           Availability.parse(b.text).toRight(s"basic: '${b.text}'")
         )
     } yield PresenceTuple(
       id,
       basic,
-      element.children.find(named(_, "contact")).map(_.text),
-      element.children.filter(named(_, "note")).map(_.text)
+      element.children.find(_.is("contact")).map(_.text),
+      element.children.filter(_.is("note")).map(_.text)
     )
 }

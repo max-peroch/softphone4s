@@ -67,6 +67,29 @@ class PidfSuite extends FunSuite {
     assert(found.isOpen)
   }
 
+  test(
+    "an element that leaves the PIDF namespace is not PIDF, though it is named as PIDF is"
+  ) {
+    val body =
+      """<presence xmlns="urn:ietf:params:xml:ns:pidf" entity="e">
+        |  <tuple id="a"><status xmlns="urn:other"><basic>open</basic></status></tuple>
+        |  <tuple xmlns="urn:other" id="b"><status><basic>open</basic></status></tuple>
+        |</presence>""".stripMargin
+    // The first tuple has no status of ours; the second is not a tuple of ours.
+    assert(malformed(body))
+    val back =
+      """<presence xmlns="urn:ietf:params:xml:ns:pidf" entity="e">
+        |  <x xmlns="urn:other"><tuple id="n"/></x>
+        |  <tuple id="a" xmlns:p="urn:ietf:params:xml:ns:pidf"><p:status><basic>open</basic></p:status></tuple>
+        |</presence>""".stripMargin
+    // Only the second tuple is ours, and its status is spelt with a prefix that
+    // the root did not use; <basic> falls in the default namespace, which is ours.
+    assertEquals(
+      read(back).map(_.tuples.map(t => t.id -> t.basic)),
+      Right(List("a" -> Some(Availability.Open)))
+    )
+  }
+
   test("a prefixed namespace is read, and extensions in others are skipped") {
     val body =
       """<p:presence xmlns:p="urn:ietf:params:xml:ns:pidf"
@@ -189,6 +212,15 @@ class PidfSuite extends FunSuite {
         )
       ),
       Left(PackageError.UnexpectedType(Some(MediaType.Plain)))
+    )
+  }
+
+  test("a document is read outside a NOTIFY too") {
+    assertEquals(
+      Presence.parse(
+        """<presence xmlns="urn:ietf:params:xml:ns:pidf" entity="e"/>"""
+      ),
+      Right(Presence("e", Nil, Nil))
     )
   }
 
