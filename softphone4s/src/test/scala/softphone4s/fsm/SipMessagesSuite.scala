@@ -563,4 +563,145 @@ class SipMessagesSuite extends FunSuite {
       .map(_.value)
     assert(allow.exists(_.contains("MESSAGE")), allow)
   }
+
+  // ---- SUBSCRIBE --------------------------------------------------------------------
+
+  private val presenceEvent =
+    softphone4s.subscription
+      .EventHeader("presence")
+      .fold(e => fail(e), identity)
+  private val pidf =
+    MediaType.parse("application/pidf+xml").fold(e => fail(e), identity)
+
+  private def subscribe(
+      accept: List[MediaType] = List(pidf),
+      auth: Option[ExtensionHeader] = None
+  ) =
+    endpoint.buildSubscribe(
+      uri("sip:bob@sip.example.com"),
+      callId("sub@host"),
+      tag("ltag"),
+      cseqNumber(1),
+      branch("z9hG4bKsub"),
+      presenceEvent,
+      Expires(3600).fold(e => fail(e), identity),
+      accept,
+      auth
+    )
+
+  private def extra(request: SipRequest, name: String) =
+    request.headers.others.find(_.name.matches(name)).map(_.value)
+
+  test(
+    "buildSubscribe is outside any dialog: from us, to the resource, with our Contact"
+  ) {
+    val request = subscribe()
+    assertEquals(request.method, SipMethod.Subscribe)
+    assertEquals(request.requestUri.render, "sip:bob@sip.example.com")
+    assertEquals(
+      request.headers.from.render,
+      "<sip:alice@sip.example.com>;tag=ltag"
+    )
+    assertEquals(request.headers.to.render, "<sip:bob@sip.example.com>")
+    assertEquals(request.headers.cseq, cseq(1, SipMethod.Subscribe))
+    // The NOTIFYs come to the Contact, so a SUBSCRIBE must have one.
+    assertEquals(
+      request.headers.contacts.map(_.render),
+      List("<sip:alice@192.168.1.5:5060>")
+    )
+    assertEquals(request.body, "")
+  }
+
+  test("it names the event, the lifetime asked for and the types it takes") {
+    val request = subscribe()
+    assertEquals(extra(request, "Event"), Some("presence"))
+    assertEquals(extra(request, "Accept"), Some("application/pidf+xml"))
+    assertEquals(request.headers.expires.map(_.value), Some(3600))
+  }
+
+  test(
+    "with no types to accept there is no Accept, and a retry carries the Authorization"
+  ) {
+    assertEquals(extra(subscribe(accept = Nil), "Accept"), None)
+    val auth = ExtensionHeader(FieldName.Authorization, "Digest x")
+    assertEquals(
+      extra(subscribe(auth = Some(auth)), "Authorization"),
+      Some("Digest x")
+    )
+  }
+
+  test("a SUBSCRIBE goes over the wire with its Event, Expires and Accept") {
+    val text = new String(
+      softphone4s.codec.SipCodec.encode(subscribe()).toArray,
+      "UTF-8"
+    )
+    assert(text.startsWith("SUBSCRIBE sip:bob@sip.example.com SIP/2.0"), text)
+    assert(text.contains("Event: presence"), text)
+    assert(text.contains("Expires: 3600"), text)
+    assert(text.contains("Accept: application/pidf+xml"), text)
+    assert(text.contains("CSeq: 1 SUBSCRIBE"), text)
+  }
+
+  private def subscriptionDialog(routes: List[NameAddr] = Nil) =
+    SipDialog(
+      callId = callId("sub@host"),
+      localTag = tag("ltag"),
+      remoteTag = Some(tag("srv")),
+      localUri = uri("sip:alice@sip.example.com"),
+      remoteUri = uri("sip:bob@sip.example.com"),
+      remoteTarget = uri("sip:bob@198.51.100.7:5070"),
+      localCseq = cseqNumber(1),
+      routeSet = routes
+    )
+
+  private def refresh(dialog: SipDialog, lifetime: Int = 3600) =
+    endpoint.buildSubscribeIn(
+      dialog,
+      cseqNumber(2),
+      branch("z9hG4bKref"),
+      presenceEvent,
+      Expires(lifetime).fold(e => fail(e), identity),
+      List(pidf)
+    )
+
+  test(
+    "a SUBSCRIBE in the dialog goes to the notifier's Contact, with the tags of the dialog and the CSeq given"
+  ) {
+    val request = refresh(subscriptionDialog())
+    assertEquals(request.requestUri.render, "sip:bob@198.51.100.7:5070")
+    assertEquals(
+      request.headers.from.render,
+      "<sip:alice@sip.example.com>;tag=ltag"
+    )
+    assertEquals(request.headers.to.render, "<sip:bob@sip.example.com>;tag=srv")
+    assertEquals(request.headers.callId, callId("sub@host"))
+    assertEquals(request.headers.cseq, cseq(2, SipMethod.Subscribe))
+    assertEquals(request.headers.routes, Nil)
+    assertEquals(extra(request, "Event"), Some("presence"))
+  }
+
+  test(
+    "ending a subscription is the same SUBSCRIBE with a lifetime of nothing"
+  ) {
+    assertEquals(
+      refresh(subscriptionDialog(), lifetime = 0).headers.expires.map(_.value),
+      Some(0)
+    )
+  }
+
+  test(
+    "a route set becomes Route headers, and a loose router first leaves the Contact as the Request-URI"
+  ) {
+    val routes = List(
+      nameAddr("<sip:p1.example.com;lr>"),
+      nameAddr("<sip:p2.example.com;lr>")
+    )
+    val request = refresh(subscriptionDialog(routes))
+    // For the caller the route set is reversed (RFC 3261 §12.1.2).
+    assertEquals(
+      request.headers.routes.map(_.uri.render),
+      List("sip:p2.example.com;lr", "sip:p1.example.com;lr")
+    )
+    assertEquals(request.requestUri.render, "sip:bob@198.51.100.7:5070")
+  }
 }

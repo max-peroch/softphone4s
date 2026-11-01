@@ -3,6 +3,7 @@ package softphone4s.fsm
 import cats.data.NonEmptyList
 import softphone4s.codec.{DigestAuth, SdpCodec}
 import softphone4s.messaging.MessageContent
+import softphone4s.subscription.EventHeader
 import softphone4s.model.*
 import softphone4s.transaction.TransactionMessages
 
@@ -331,6 +332,70 @@ object SipMessages {
       )
 
     // -----------------------------------------------------------------------
+    // SUBSCRIBE
+    // -----------------------------------------------------------------------
+
+    /** The SUBSCRIBE that begins a subscription (RFC 6665 §4.1.1): outside any
+      * dialog, to the resource, with our Contact (which the NOTIFYs come to),
+      * the event, the lifetime asked for and the types of body we take.
+      * Resending it after a challenge keeps the Call-ID and tag and raises the
+      * CSeq.
+      */
+    def buildSubscribe(
+        resource: SipUri,
+        callId: CallId,
+        localTag: Tag,
+        cseq: CSeqNumber,
+        branch: Branch,
+        event: EventHeader,
+        expires: Expires,
+        accept: List[MediaType],
+        authHeader: Option[ExtensionHeader] = None
+    ): SipRequest =
+      SipRequest(
+        method = SipMethod.Subscribe,
+        requestUri = resource,
+        headers = SipHeaders(
+          callId = callId,
+          from = NameAddr.withTag(e.accountUri, localTag),
+          to = NameAddr(resource),
+          vias = vias(e, branch),
+          cseq = CSeq(cseq, SipMethod.Subscribe),
+          contacts = contacts(e),
+          expires = Some(expires),
+          others = subscribeHeaders(event, accept) ++ authHeader.toList
+        )
+      )
+
+    /** A SUBSCRIBE within the subscription's `dialog`, to refresh it or to end
+      * it with `Expires: 0`. `cseq` is the one the subscription is at.
+      */
+    def buildSubscribeIn(
+        dialog: SipDialog,
+        cseq: CSeqNumber,
+        branch: Branch,
+        event: EventHeader,
+        expires: Expires,
+        accept: List[MediaType],
+        authHeader: Option[ExtensionHeader] = None
+    ): SipRequest =
+      SipRequest(
+        method = SipMethod.Subscribe,
+        requestUri = dialog.route.requestUri,
+        headers = SipHeaders(
+          callId = dialog.callId,
+          from = NameAddr.withTag(dialog.localUri, dialog.localTag),
+          to = remoteParty(dialog),
+          vias = vias(e, branch),
+          cseq = CSeq(cseq, SipMethod.Subscribe),
+          contacts = contacts(e),
+          expires = Some(expires),
+          routes = dialog.route.routes,
+          others = subscribeHeaders(event, accept) ++ authHeader.toList
+        )
+      )
+
+    // -----------------------------------------------------------------------
     // MESSAGE
     // -----------------------------------------------------------------------
 
@@ -396,6 +461,17 @@ object SipMessages {
 
   private val AllowedMethods: String =
     "INVITE, ACK, BYE, CANCEL, OPTIONS, INFO, UPDATE, MESSAGE"
+
+  private def subscribeHeaders(
+      event: EventHeader,
+      accept: List[MediaType]
+  ): List[ExtensionHeader] =
+    ExtensionHeader(FieldName.Event, event.render) ::
+      Option
+        .when(accept.nonEmpty)(
+          ExtensionHeader(FieldName.Accept, accept.map(_.render).mkString(", "))
+        )
+        .toList
 
   private def remoteParty(dialog: SipDialog): NameAddr =
     NameAddr(
