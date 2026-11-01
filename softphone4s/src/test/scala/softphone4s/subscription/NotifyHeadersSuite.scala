@@ -111,6 +111,19 @@ class NotifyHeadersSuite extends FunSuite {
     )
   }
 
+  test("a terminated state with no reason says so, and is not followed") {
+    assertEquals(
+      NotifyState.parse("terminated"),
+      Right(NotifyState.Terminated(EndReason.Unspecified, None))
+    )
+    assertEquals(
+      Ending
+        .Terminated(EndReason.Unspecified, None)
+        .resubscribeAfter(20.seconds),
+      None
+    )
+  }
+
   test(
     "a state we do not know, or an expiry that is not a number, is refused"
   ) {

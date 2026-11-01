@@ -29,6 +29,9 @@ enum EndReason {
   /** The state will not change again (RFC 6665 §4.2.2). */
   case Invariant
 
+  /** The NOTIFY gave no reason; treated as a refusal. */
+  case Unspecified
+
   /** A reason this stack does not know; treated as a refusal. */
   case Other(text: String)
 }

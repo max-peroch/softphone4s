@@ -38,7 +38,7 @@ enum Ending {
           case EndReason.Probation | EndReason.GiveUp    =>
             Some(retryAfter.getOrElse(backoff))
           case EndReason.Rejected | EndReason.NoResource | EndReason.Invariant |
-              EndReason.Other(_) =>
+              EndReason.Unspecified | EndReason.Other(_) =>
             None
         }
     }

@@ -59,7 +59,7 @@ object NotifyState {
               Terminated(
                 named
                   .get("reason")
-                  .fold(EndReason.Other("none"))(EndReason.parse),
+                  .fold(EndReason.Unspecified)(EndReason.parse),
                 retry
               )
             )

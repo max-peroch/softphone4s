@@ -1,5 +1,7 @@
 package softphone4s.subscription
 
+import cats.syntax.all.*
+
 /** The `Event` header (RFC 6665 §8.2.1): the event package a subscription is
   * to, and the `id` parameter that tells apart subscriptions to one package in
   * one dialog. The package name is a token (dots allowed, as in
@@ -35,7 +37,7 @@ object EventHeader {
         eventPackage.toLowerCase,
         s"not an event package name: '$eventPackage'"
       )
-      kept <- id.traverseEither(i =>
+      kept <- id.traverse(i =>
         Either.cond(
           Token.matches(i),
           i,
@@ -56,12 +58,4 @@ object EventHeader {
         apply(name, id)
       case _ => Left(s"empty Event header: '$value'")
     }
-
-  extension [A](option: Option[A])
-    private def traverseEither[B](
-        f: A => Either[String, B]
-    ): Either[String, Option[B]] =
-      option.fold[Either[String, Option[B]]](Right(None))(a =>
-        f(a).map(Some(_))
-      )
 }

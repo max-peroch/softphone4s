@@ -84,38 +84,61 @@ private[softphone4s] object Subscriber {
       _ <- Resource.make(agent.begin)(_ => agent.release(stopTimeout))
     } yield agent
 
-  private final class Agent[F[_]: Async] private (
-      layer: TransactionLayer[F],
+  /** What the subscription is to, which stays the same for its life. */
+  private final case class Aim[F[_]](
       ways: NonEmptyList[Uplink],
-      routes: Ref[F, Map[CallId, Channel[F, DialogInput[F]]]],
       target: SipUri,
       event: EventHeader,
       accept: List[MediaType],
       requested: Expires,
-      nextHop: (TransportProtocol, SipUri) => F[SocketAddress[IpAddress]],
-      entropy: Entropy[F],
-      supervisor: Supervisor[F],
-      timers: Timers[F, SubscriptionTimer],
+      nextHop: (TransportProtocol, SipUri) => F[SocketAddress[IpAddress]]
+  )
+
+  /** What changes as it runs. */
+  private final case class Cells[F[_]](
       fsm: Ref[F, SubscriptionFsmState],
-      events: Channel[F, SubscriptionEvent],
-      requestsIn: Channel[F, DialogInput[F]],
       dialog: Ref[F, Option[SipDialog]],
       listed: Ref[F, Option[CallId]],
       pending: Ref[F, Map[Int, ServerTransaction[F]]],
       selected: Ref[F, Int],
       attempt: Ref[F, Int],
       retrying: Ref[F, Option[Fiber[F, Throwable, Unit]]],
-      nonceCounts: Ref[F, Map[Nonce, NonceCount]],
+      nonceCounts: Ref[F, Map[Nonce, NonceCount]]
+  )
+
+  /** What the program sees of it, and waits on. */
+  private final case class Outputs[F[_]](
       signal: SignallingRef[F, SubscriptionStatus],
       out: Queue[F, Option[Notification]],
       active: Deferred[F, Either[Ending, Unit]],
       releasing: Deferred[F, Unit],
-      stopped: Deferred[F, Unit],
+      stopped: Deferred[F, Unit]
+  )
+
+  private final class Agent[F[_]: Async] private (
+      layer: TransactionLayer[F],
+      routes: Ref[F, Map[CallId, Channel[F, DialogInput[F]]]],
+      aim: Aim[F],
+      cells: Cells[F],
+      outputs: Outputs[F],
+      entropy: Entropy[F],
+      supervisor: Supervisor[F],
+      timers: Timers[F, SubscriptionTimer],
+      events: Channel[F, SubscriptionEvent],
+      requestsIn: Channel[F, DialogInput[F]],
       logger: StructuredLogger[F]
   ) extends Subscription[F] {
+    import aim.*
+    import cells.*
+    import outputs.*
 
+    // The end is put back for the next reader, so that a stream begun after the
+    // subscription is over ends at once and does not wait for ever.
     def notifications: Stream[F, Notification] =
-      Stream.fromQueueNoneTerminated(out)
+      Stream
+        .repeatEval(out.take)
+        .evalTap(_.fold(out.offer(None))(_ => Async[F].unit))
+        .unNoneTerminate
 
     def status: Signal[F, SubscriptionStatus] = signal
 
@@ -132,6 +155,9 @@ private[softphone4s] object Subscriber {
     /** Begins a dialog: new identifiers, listed so that its NOTIFYs come here.
       */
     def begin: F[Unit] =
+      releasing.tryGet.flatMap(released => start.unlessA(released.isDefined))
+
+    private def start: F[Unit] =
       for {
         uplink <- current
         callId <- entropy.callId(uplink.endpoint.ip)
@@ -178,11 +204,17 @@ private[softphone4s] object Subscriber {
 
     /** The subscription is over for good. */
     private def finish(ending: Option[Ending]): F[Unit] =
-      unlist >>
-        out.offer(None) >>
-        ending.traverse_(e => active.complete(Left(e)).void) >>
-        active.complete(Left(Ending.Unsubscribed)).void >>
-        stopped.complete(()).void
+      // Once, however many times it is asked: the first to complete `stopped`
+      // does the rest.
+      stopped
+        .complete(())
+        .flatMap(first =>
+          (unlist >>
+            out.offer(None) >>
+            active
+              .complete(Left(ending.getOrElse(Ending.Unsubscribed)))
+              .void).whenA(first)
+        )
 
     // ---- The event loop -------------------------------------------------------
 
@@ -250,6 +282,17 @@ private[softphone4s] object Subscriber {
       }
 
     private def process(input: SubscriptionEvent): F[Unit] =
+      input match {
+        // Nothing begins once the subscription is released, whatever was on its
+        // way when it was.
+        case SubscriptionEvent.Start(_) =>
+          releasing.tryGet.flatMap(released =>
+            step(input).unlessA(released.isDefined)
+          )
+        case _ => step(input)
+      }
+
+    private def step(input: SubscriptionEvent): F[Unit] =
       for {
         before  <- fsm.get
         _       <- noteDialog(before, input)
@@ -490,50 +533,38 @@ private[softphone4s] object Subscriber {
         logger: StructuredLogger[F]
     ): F[Agent[F]] =
       for {
-        fsm        <- Ref.of[F, SubscriptionFsmState](SubscriptionFsmState.Idle)
+        cells <- (
+          Ref.of[F, SubscriptionFsmState](SubscriptionFsmState.Idle),
+          Ref.of[F, Option[SipDialog]](None),
+          Ref.of[F, Option[CallId]](None),
+          Ref.of[F, Map[Int, ServerTransaction[F]]](Map.empty),
+          Ref.of[F, Int](0),
+          Ref.of[F, Int](0),
+          Ref.of[F, Option[Fiber[F, Throwable, Unit]]](None),
+          Ref.of[F, Map[Nonce, NonceCount]](Map.empty)
+        ).mapN(Cells[F].apply)
+        outputs <- (
+          SignallingRef.of[F, SubscriptionStatus](
+            SubscriptionStatus.Subscribing
+          ),
+          Queue.circularBuffer[F, Option[Notification]](64),
+          Deferred[F, Either[Ending, Unit]],
+          Deferred[F, Unit],
+          Deferred[F, Unit]
+        ).mapN(Outputs[F].apply)
         events     <- Channel.unbounded[F, SubscriptionEvent]
         requestsIn <- Channel.bounded[F, DialogInput[F]](128)
-        dialog     <- Ref.of[F, Option[SipDialog]](None)
-        listed     <- Ref.of[F, Option[CallId]](None)
-        pending    <- Ref.of[F, Map[Int, ServerTransaction[F]]](Map.empty)
-        selected   <- Ref.of[F, Int](0)
-        attempt    <- Ref.of[F, Int](0)
-        retrying   <- Ref.of[F, Option[Fiber[F, Throwable, Unit]]](None)
-        nonces     <- Ref.of[F, Map[Nonce, NonceCount]](Map.empty)
-        signal     <- SignallingRef.of[F, SubscriptionStatus](
-          SubscriptionStatus.Subscribing
-        )
-        out       <- Queue.circularBuffer[F, Option[Notification]](64)
-        active    <- Deferred[F, Either[Ending, Unit]]
-        releasing <- Deferred[F, Unit]
-        stopped   <- Deferred[F, Unit]
       } yield new Agent(
         layer,
-        ways,
         routes,
-        target,
-        event,
-        accept,
-        requested,
-        nextHop,
+        Aim(ways, target, event, accept, requested, nextHop),
+        cells,
+        outputs,
         entropy,
         supervisor,
         timers,
-        fsm,
         events,
         requestsIn,
-        dialog,
-        listed,
-        pending,
-        selected,
-        attempt,
-        retrying,
-        nonces,
-        signal,
-        out,
-        active,
-        releasing,
-        stopped,
         logger
       )
   }

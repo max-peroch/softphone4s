@@ -722,4 +722,52 @@ class SubscriberSuite extends CatsEffectSuite {
       }
     }
   }
+
+  test(
+    "the end of the stream stays: a reader that comes after it ends at once"
+  ) {
+    virtual {
+      rig().use { r =>
+        for {
+          request <- nextSubscribe(r.peer)
+          _       <- refuseSubscribe(r.peer, request, 403, "Forbidden")
+          first   <- r.subscription.notifications.compile.toList
+          second  <- r.subscription.notifications.compile.toList
+            .timeout(1.minute)
+          third <- r.subscription.notifications.compile.toList.timeout(1.minute)
+        } yield assertEquals((first, second, third), (Nil, Nil, Nil))
+      }
+    }
+  }
+
+  test(
+    "releasing it at once, before anything has been sent, sends no SUBSCRIBE afterwards"
+  ) {
+    virtual {
+      rig().allocated.flatMap { (r, release) =>
+        for {
+          _ <- release
+          // The notifier's end of the wire stays open after the subscription is
+          // released; nothing may arrive on it.
+          sent <- r.peer.messages
+            .collectFirst {
+              case Inbound(_, q: SipRequest)
+                  if q.method == SipMethod.Subscribe =>
+                q
+            }
+            .compile
+            .last
+            .timeout(10.minutes)
+            .attempt
+          listed <- r.routes.get
+        } yield {
+          assert(
+            sent.isLeft || sent.exists(_.isEmpty),
+            s"a SUBSCRIBE was sent after the release: $sent"
+          )
+          assertEquals(listed, Map.empty)
+        }
+      }
+    }
+  }
 }
