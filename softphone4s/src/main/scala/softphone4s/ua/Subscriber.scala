@@ -196,7 +196,12 @@ private[softphone4s] object Subscriber {
         retrying.getAndSet(None).flatMap(_.traverse_(_.cancel)) >>
         fsm.get.flatMap {
           case SubscriptionFsmState.Idle | SubscriptionFsmState.Ended(_) =>
-            finish(None)
+            // Between dialogs, or over: the status must not go on saying that a
+            // new dialog is awaited.
+            signal.update {
+              case over @ SubscriptionStatus.Ended(_) => over
+              case _ => SubscriptionStatus.Ended(Ending.Unsubscribed)
+            } >> finish(None)
           case _ =>
             events.send(SubscriptionEvent.Stop) >>
               stopped.get.timeoutTo(timeout, Async[F].unit)

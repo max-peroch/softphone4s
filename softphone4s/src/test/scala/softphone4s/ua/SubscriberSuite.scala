@@ -723,6 +723,27 @@ class SubscriberSuite extends CatsEffectSuite {
     }
   }
 
+  test("released while it waits to try again, the status says it ended") {
+    virtual {
+      rig().allocated.flatMap { (r, release) =>
+        for {
+          request <- nextSubscribe(r.peer)
+          _ <- refuseSubscribe(r.peer, request, 503, "Service Unavailable")
+          _ <- r.subscription.status.discrete
+            .collectFirst { case s: SubscriptionStatus.Retrying => s }
+            .compile
+            .lastOrError
+          _    <- release
+          now  <- r.subscription.status.get
+          done <- r.subscription.awaitActive
+        } yield {
+          assertEquals(now, SubscriptionStatus.Ended(Ending.Unsubscribed))
+          assertEquals(done, Left(Ending.Unsubscribed))
+        }
+      }
+    }
+  }
+
   test(
     "the end of the stream stays: a reader that comes after it ends at once"
   ) {
