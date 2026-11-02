@@ -690,6 +690,16 @@ transaction's, the ACK of a 2xx is the call's. The four transaction state
 machines (`InviteClientTransaction` and its three siblings) are pure too and
 emit timer actions that `Timers` runs.
 
+## Logging
+
+Every log line is a message with a context of fields, named in `LogFields`:
+`call-id`, `direction` (`outgoing` or `incoming`) and `account` on every line of a
+call, so one call can be followed in the logs of both phones (they agree on the
+`call-id`); `account` on a registration, with `event` and `target` or `presentity`
+on a subscription or publication; `branch`, `method` and `side` on a line about a
+transaction. Any `StructuredLogger` works; the stack only adds context to the one
+it is given.
+
 ## Metrics
 
 `SoftphoneStreaming.resource(..., metrics = Some(m))` takes a `Metrics[F]`, which
@@ -753,6 +763,17 @@ arrives, CPU, allocation, file descriptors and drift, and failing on limits give
 on the command line. On a 2014 laptop with both phones in one process it holds
 about 40 calls before setup times grow and audio is lost; a media packet costs
 about 0.7 ms of CPU, which is the main thing left to improve.
+
+`LossySignallingSuite` puts a UDP relay (`LossyRelay`) between the two phones
+that loses, duplicates and delays the SIP messages of a call's set-up as a plan
+says, by the kind of message and its place among those of its kind: an INVITE
+lost twice, a lost `200`, every message delivered twice, a `180` arriving after
+the `200`, and every INVITE lost (the call ends with `CallTimedOut` and the callee
+never hears of it). The relay records what reached it and what it passed on, in
+order, so a test can show that the fault happened. Dropping the INVITE client's
+retransmission fails two of them. A duplicated INVITE is absorbed by three layers
+(the transaction, the router's `482`, and the call itself), so removing one of them
+does not fail the call test; the transaction suites cover each layer alone.
 
 Bounds that came out of it: on a TCP or TLS connection the time to frame is
 linear in the bytes read, however they are cut up (a flood of keep-alives, or a
