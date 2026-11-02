@@ -12,17 +12,51 @@ import scala.annotation.tailrec
   */
 object StreamFraming {
 
-  /** What the front of a buffer holds. */
+  /** What the front of the unread bytes holds. Positions are in the array being
+    * read.
+    */
   private enum Step {
-    case NeedMore
-    case Skip(rest: Chunk[Byte])
-    case Ping(rest: Chunk[Byte])
-    case Message(message: Chunk[Byte], rest: Chunk[Byte])
+
+    /** Not enough yet. `need` bytes in all, counted from the front, must have
+      * arrived before it is worth looking again: the end of the message when
+      * its length is known, else one more than there are. `scanned` of them
+      * have been searched for the end of the headers, so the search goes on
+      * from there.
+      */
+    case NeedMore(need: Int, scanned: Int)
+    case Skip(to: Int)
+    case Ping(to: Int)
+    case Message(from: Int, to: Int)
     case Failed(error: FramingError)
   }
 
+  /** What is left after the messages at the front of the buffer are taken, with
+    * what the next look needs to know.
+    */
+  private final case class Drained(
+      frames: Vector[Frame],
+      rest: Chunk[Byte],
+      failure: Option[FramingError],
+      need: Int,
+      scanned: Int
+  )
+
   private val Cr = '\r'.toByte
   private val Lf = '\n'.toByte
+
+  /** The double CRLF of a keep-alive ping. */
+  private val PingBytes: Array[Byte] = Array(Cr, Lf, Cr, Lf)
+
+  /** Whether the `count` bytes at `at` are the first of a ping. */
+  private def startsPing(bytes: Array[Byte], at: Int, count: Int): Boolean = {
+    @tailrec
+    def same(i: Int): Boolean =
+      i >= count || (bytes(at + i) == PingBytes(i) && same(i + 1))
+    same(0)
+  }
+
+  /** A ping, as the event that carries it: there can be millions. */
+  private val PingEvent: Either[FramingError, Frame] = Right(Frame.Ping)
 
   /** Every complete message of the stream, or the error that ended it. A stream
     * that ends in the middle of a message yields nothing for it. Keep-alive
@@ -36,79 +70,104 @@ object StreamFraming {
       case Left(error)                 => Left(error)
     }
 
-  /** As [[frames]], and the pings as well (a lone CRLF, a pong, is skipped). */
+  /** As [[frames]], and the pings as well (a lone CRLF, a pong, is skipped).
+    *
+    * The time taken is in proportion to the bytes that come, however they are
+    * cut up: the buffer is copied once for each read that completes something,
+    * not for each message or ping in it, and a message that is still arriving
+    * is looked at again only when all of it can be there (or, in its headers,
+    * from where the search left off).
+    */
   def events[F[_]](
       limits: FramingLimits = FramingLimits()
   ): Pipe[F, Byte, Either[FramingError, Frame]] = {
     def loop(
         in: Stream[F, Chunk[Byte]],
-        buffer: Chunk[Byte]
-    ): Pull[F, Either[FramingError, Frame], Unit] = {
-      val (messages, rest, failure) = drain(buffer, limits)
-      Pull.output(Chunk.from(messages.map(Right(_)))) >> (failure match {
-        case Some(error) => Pull.output1(Left(error))
-        case None        =>
-          in.pull.uncons1.flatMap {
-            case None                => Pull.done
-            case Some((chunk, tail)) => loop(tail, rest ++ chunk)
+        buffer: Chunk[Byte],
+        need: Int,
+        scanned: Int
+    ): Pull[F, Either[FramingError, Frame], Unit] =
+      in.pull.uncons1.flatMap {
+        case None                => Pull.done
+        case Some((chunk, tail)) =>
+          val combined = buffer ++ chunk
+          if combined.size < need then loop(tail, combined, need, scanned)
+          else {
+            val drained = drain(combined, limits, scanned)
+            Pull.output(Chunk.from(drained.frames.map {
+              case Frame.Ping => PingEvent
+              case message    => Right(message)
+            })) >>
+              (drained.failure match {
+                case Some(error) => Pull.output1(Left(error))
+                case None        =>
+                  loop(tail, drained.rest, drained.need, drained.scanned)
+              })
           }
-      })
-    }
-    in => loop(in.chunks, Chunk.empty).stream
+      }
+    in => loop(in.chunks, Chunk.empty, 1, 0).stream
   }
 
   /** The complete messages at the front of `buffer`, what is left, and the
-    * error that stopped it, if any.
+    * error that stopped it, if any. `scanned` is how far the front message's
+    * headers have been searched already.
     */
   private def drain(
       buffer: Chunk[Byte],
-      limits: FramingLimits
-  ): (Vector[Frame], Chunk[Byte], Option[FramingError]) = {
+      limits: FramingLimits,
+      scanned: Int
+  ): Drained = {
+    val bytes                      = buffer.toArray
+    def rest(at: Int): Chunk[Byte] = Chunk.array(bytes, at, bytes.length - at)
+
     @tailrec
-    def go(
-        remaining: Chunk[Byte],
-        acc: Vector[Frame]
-    ): (Vector[Frame], Chunk[Byte], Option[FramingError]) =
-      next(remaining, limits) match {
-        case Step.NeedMore               => (acc, remaining, None)
-        case Step.Skip(rest)             => go(rest, acc)
-        case Step.Ping(rest)             => go(rest, acc :+ Frame.Ping)
-        case Step.Message(message, rest) =>
-          go(rest, acc :+ Frame.Message(message))
-        case Step.Failed(error) => (acc, remaining, Some(error))
+    def go(at: Int, acc: Vector[Frame], scanned: Int): Drained =
+      next(bytes, at, scanned, limits) match {
+        case Step.NeedMore(need, seen) =>
+          Drained(acc, rest(at), None, need, seen)
+        case Step.Skip(to)          => go(to, acc, 0)
+        case Step.Ping(to)          => go(to, acc :+ Frame.Ping, 0)
+        case Step.Message(from, to) =>
+          go(to, acc :+ Frame.Message(Chunk.array(bytes, from, to - from)), 0)
+        case Step.Failed(error) => Drained(acc, rest(at), Some(error), 0, 0)
       }
-    go(buffer, Vector.empty)
+    go(0, Vector.empty, scanned)
   }
 
-  private def next(buffer: Chunk[Byte], limits: FramingLimits): Step = {
-    val bytes = buffer.toArray
-    if bytes.isEmpty then Step.NeedMore
-    else if bytes(0) == Cr || bytes(0) == Lf then blankLines(buffer, bytes)
+  private def next(
+      bytes: Array[Byte],
+      at: Int,
+      scanned: Int,
+      limits: FramingLimits
+  ): Step = {
+    val available = bytes.length - at
+    if available == 0 then Step.NeedMore(1, 0)
+    else if bytes(at) == Cr || bytes(at) == Lf then blankLines(bytes, at)
     else
-      endOfHeaders(bytes) match {
+      endOfHeaders(bytes, at, scanned) match {
         case -1 =>
-          if limits.maxHeaderBytes.isExceededBy(bytes.length) then
+          if limits.maxHeaderBytes.isExceededBy(available) then
             Step.Failed(
               FramingError.HeadersTooLarge(limits.maxHeaderBytes.value)
             )
-          else Step.NeedMore
-        case end if limits.maxHeaderBytes.isExceededBy(end) =>
+          else Step.NeedMore(available + 1, available)
+        case end if limits.maxHeaderBytes.isExceededBy(end - at) =>
           Step.Failed(
             FramingError.HeadersTooLarge(limits.maxHeaderBytes.value)
           )
         case end =>
-          contentLength(new String(bytes, 0, end, ISO_8859_1)) match {
+          val headerLength = end - at
+          contentLength(new String(bytes, at, headerLength, ISO_8859_1)) match {
             case Left(error)   => Step.Failed(error)
             case Right(length) =>
               if length > limits.maxBodyBytes.value then
                 Step.Failed(
                   FramingError.BodyTooLarge(length, limits.maxBodyBytes.value)
                 )
-              else if bytes.length - end < length then Step.NeedMore
-              else {
-                val total = end + length.toInt
-                Step.Message(buffer.take(total), buffer.drop(total))
-              }
+              else if available - headerLength < length then
+                // The headers are looked at again, from the start, once the body is there.
+                Step.NeedMore(headerLength + length.toInt, 0)
+              else Step.Message(at, end + length.toInt)
           }
       }
   }
@@ -117,30 +176,31 @@ object StreamFraming {
     * single CRLF a pong or nothing at all. What looks like the start of a ping
     * but is not yet four bytes long has to wait for the rest.
     */
-  private def blankLines(buffer: Chunk[Byte], bytes: Array[Byte]): Step = {
-    val ping = Array(Cr, Lf, Cr, Lf)
-    if bytes.length >= 4 && bytes.take(4).sameElements(ping) then
-      Step.Ping(buffer.drop(4))
-    else if bytes.length < 4 && ping.startsWith(bytes) then Step.NeedMore
+  private def blankLines(bytes: Array[Byte], at: Int): Step = {
+    val available = bytes.length - at
+    if available >= 4 && startsPing(bytes, at, 4) then Step.Ping(at + 4)
+    else if available < 4 && startsPing(bytes, at, available) then
+      Step.NeedMore(4, 0)
     else
       Step.Skip(
-        buffer.drop(
-          if bytes.length > 1 && bytes(0) == Cr && bytes(1) == Lf then 2 else 1
-        )
+        at + (if available > 1 && bytes(at) == Cr && bytes(at + 1) == Lf then 2
+              else 1)
       )
   }
 
-  /** The index just past the first blank line, or -1. */
-  private def endOfHeaders(bytes: Array[Byte]): Int = {
+  /** The position just past the first blank line of the message at `at`, or -1.
+    * `scanned` bytes of it are known to hold none, and a blank line can begin
+    * up to three bytes before them.
+    */
+  private def endOfHeaders(bytes: Array[Byte], at: Int, scanned: Int): Int = {
     @tailrec
     def find(i: Int): Int =
       if i + 3 >= bytes.length then -1
-      else if bytes(i) == Cr && bytes(i + 1) == Lf && bytes(
-          i + 2
-        ) == Cr && bytes(i + 3) == Lf
+      else if bytes(i) == Cr && bytes(i + 1) == Lf && bytes(i + 2) == Cr &&
+        bytes(i + 3) == Lf
       then i + 4
       else find(i + 1)
-    find(0)
+    find(at + math.max(0, scanned - 3))
   }
 
   /** The `Content-Length` (or its short form `l`) among the header lines. */
