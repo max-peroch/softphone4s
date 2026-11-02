@@ -11,6 +11,7 @@ import fs2.io.net.Network
 import org.typelevel.log4cats.StructuredLogger
 import softphone4s.config.SoftphoneConfig
 import softphone4s.fsm.CallTimer
+import softphone4s.metrics.CallDirection
 import softphone4s.model.*
 import softphone4s.media.AudioCodecs
 import softphone4s.runtime.{Entropy, Timers}
@@ -42,6 +43,7 @@ private[softphone4s] final class IncomingRouter[F[_]: Async: Network](
     supervisor: Supervisor[F],
     incomingCalls: Queue[F, IncomingCall[F]],
     messageQueue: Queue[F, IncomingMessage],
+    observer: CallObserver[F],
     logger: StructuredLogger[F]
 ) {
 
@@ -250,6 +252,14 @@ private[softphone4s] final class IncomingRouter[F[_]: Async: Network](
           config.answerTimeout,
           config.hangupTimeout,
           logger
+        )
+      )
+      _ <- Resource.eval(
+        observer.observe(
+          CallDirection.Incoming,
+          call,
+          call.endedBecause,
+          call.jitterStats
         )
       )
     } yield call).use { call =>

@@ -7,7 +7,7 @@ object Dependencies {
   private val pureconfigVersion    = "0.17.11"
   private val log4catsVersion      = "2.8.0"
   private val otel4sVersion        = "1.1.0"
-  private val opentelemetryVersion = "1.67.0"
+  private val opentelemetryVersion = "1.64.0" // what otel4s 1.1.0 is built against
   private val scribeVersion        = "3.19.0"
   private val dnsjavaVersion       = "3.6.3"
 
@@ -46,7 +46,10 @@ object Dependencies {
   val scribeSlf4j   = "com.outr"      %% "scribe-slf4j"   % scribeVersion
 
   // Observability (tracing / OpenTelemetry)
-  val otel4sCoreTrace = "org.typelevel" %% "otel4s-core-trace" % otel4sVersion
+  val otel4sCoreTrace   = "org.typelevel" %% "otel4s-core-trace"   % otel4sVersion
+  val otel4sCoreMetrics = "org.typelevel" %% "otel4s-core-metrics" % otel4sVersion
+  val otel4sOteljavaTestkit =
+    "org.typelevel" %% "otel4s-oteljava-testkit" % otel4sVersion % Test
   val otel4sOteljava  = "org.typelevel" %% "otel4s-oteljava"   % otel4sVersion
   val otel4sOteljavaContextStorage =
     "org.typelevel" %% "otel4s-oteljava-context-storage" % otel4sVersion

@@ -13,6 +13,7 @@ import org.typelevel.log4cats.StructuredLogger
 import softphone4s.config.{ObservedAddresses, SoftphoneConfig, StunConfig}
 import softphone4s.dns.{DnsJavaRecords, DnsRecords, TargetResolver}
 import softphone4s.fsm.CallTimer
+import softphone4s.metrics.{CallDirection, Metrics}
 import softphone4s.model.*
 import softphone4s.registration.Registration
 import softphone4s.media.{AudioCodec, AudioCodecs, RtpPortRange, RtpPorts}
@@ -49,6 +50,7 @@ class SoftphoneStreaming[F[_]: Async: Network] private (
     entropy: Entropy[F],
     codecs: AudioCodecs,
     router: IncomingRouter[F],
+    observer: CallObserver[F],
     logger: StructuredLogger[F]
 ) extends Softphone[F] {
 
@@ -188,6 +190,7 @@ class SoftphoneStreaming[F[_]: Async: Network] private (
         config.hangupTimeout,
         logger
       )
+      _ <- observer.registered(account.id, registration)
     } yield registration
 
   private def buildCall(
@@ -231,6 +234,14 @@ class SoftphoneStreaming[F[_]: Async: Network] private (
           extraHeaders
         )
       )
+      _ <- Resource.eval(
+        observer.observe(
+          CallDirection.Outgoing,
+          call,
+          call.endedBecause,
+          call.jitterStats
+        )
+      )
       _ <- Resource.make(call.runEventLoop(dialogInput).start)(fiber =>
         call.hangup >> fiber.join.void
           .timeoutTo(config.hangupTimeout, fiber.cancel)
@@ -257,14 +268,16 @@ object SoftphoneStreaming {
       config: SoftphoneConfig,
       audioFormat: AudioFormat,
       logger: StructuredLogger[F],
-      extraCodecs: List[AudioCodec] = Nil
+      extraCodecs: List[AudioCodec] = Nil,
+      metrics: Option[Metrics[F]] = None
   ): Resource[F, SoftphoneStreaming[F]] =
     resourceWith(
       config,
       audioFormat,
       logger,
       DnsJavaRecords.configured[F](config.dns),
-      extraCodecs
+      extraCodecs,
+      metrics
     )
 
   /** As [[resource]], looking names up with `dns` instead of the system's DNS
@@ -275,9 +288,12 @@ object SoftphoneStreaming {
       audioFormat: AudioFormat,
       logger: StructuredLogger[F],
       dns: F[DnsRecords[F]],
-      extraCodecs: List[AudioCodec] = Nil
+      extraCodecs: List[AudioCodec] = Nil,
+      metrics: Option[Metrics[F]] = None
   ): Resource[F, SoftphoneStreaming[F]] =
     for {
+      // What goes to `metrics` cannot break the stack: an error is logged.
+      measured = Metrics.guarded(metrics.getOrElse(Metrics.noop[F]), logger)
       codecs <- Resource.eval(
         Async[F].fromEither(audioCodecs(config, audioFormat, extraCodecs))
       )
@@ -313,7 +329,8 @@ object SoftphoneStreaming {
         observed =>
           publicSip
             .set(Some(observed.address))
-            .whenA(config.nat.observedAddress == ObservedAddresses.Use)
+            .whenA(config.nat.observedAddress == ObservedAddresses.Use),
+        measured.transaction
       )
       routes <- Resource.eval(
         Ref[F].of(Map.empty[CallId, Channel[F, DialogInput[F]]])
@@ -321,7 +338,8 @@ object SoftphoneStreaming {
       accounts <- Resource.eval(
         Async[F].fromEither(Account.all(config.accounts))
       )
-      supervisor    <- Supervisor[F](await = false)
+      supervisor <- Supervisor[F](await = false)
+      observer = new CallObserver[F](measured, supervisor)
       incomingCalls <- Resource.eval(Queue.unbounded[F, IncomingCall[F]])
       messageQueue  <- Resource.eval(
         Queue.bounded[F, IncomingMessage](SoftphoneStreaming.MessageBacklog)
@@ -368,6 +386,7 @@ object SoftphoneStreaming {
         supervisor,
         incomingCalls,
         messageQueue,
+        observer,
         logger
       )
       softphone = new SoftphoneStreaming(
@@ -381,6 +400,7 @@ object SoftphoneStreaming {
         entropy,
         codecs,
         router,
+        observer,
         logger
       )
       _ <- Resource.eval(supervisor.supervise(router.routeIncoming))

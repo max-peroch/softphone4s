@@ -21,16 +21,24 @@ object TransactionManager {
       config: TransactionConfig,
       logger: StructuredLogger[F]
   ): Resource[F, TransactionLayer[F]] =
-    resourceObserving(transport, config, logger, _ => Async[F].unit)
+    resourceObserving(
+      transport,
+      config,
+      logger,
+      _ => Async[F].unit,
+      _ => Async[F].unit
+    )
 
   /** As [[resource]], and `observed` is told what the servers we send requests
-    * to say we look like from where they are (their `received` and `rport`).
+    * to say we look like from where they are (their `received` and `rport`),
+    * and `events` of the retransmissions and timeouts the layer has.
     */
   def resourceObserving[F[_]: Async](
       transport: Transport[F],
       config: TransactionConfig,
       logger: StructuredLogger[F],
-      observed: ObservedAddress => F[Unit]
+      observed: ObservedAddress => F[Unit],
+      events: TransactionEvent => F[Unit]
   ): Resource[F, TransactionLayer[F]] =
     for {
       supervisor <- Supervisor[F](await = false)
@@ -46,6 +54,7 @@ object TransactionManager {
         incomingQ,
         unmatchedQ,
         observed,
+        events,
         logger
       )
       _ <- Resource.eval(

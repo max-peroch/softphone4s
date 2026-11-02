@@ -690,6 +690,32 @@ transaction's, the ACK of a 2xx is the call's. The four transaction state
 machines (`InviteClientTransaction` and its three siblings) are pure too and
 emit timer actions that `Timers` runs.
 
+## Metrics
+
+`SoftphoneStreaming.resource(..., metrics = Some(m))` takes a `Metrics[F]`, which
+the stack tells what it does: `callBegan`, `callEnded(CallReport)` (direction,
+outcome, talk time, and what the jitter buffer did over the call), `registration`
+(each state an account goes through, and `Unregistered` when it is released), and
+`transaction` (a SIP request or response retransmitted, or a transaction that
+timed out, by side and method). A method that fails is logged and dropped, so a
+broken counter cannot break a call. A call ends as `Completed`, `Rejected(status)`
+(the other side refused it), `Declined` (we turned it away), `Unanswered`
+(cancelled or timed out) or `Failed`.
+
+`softphone4s-otel4s` has `OtelMetrics`, which makes OpenTelemetry instruments of
+these (`softphone4s.calls`, `.calls.active`, `.call.duration`,
+`.registrations.active`, `.registration.changes`, `.sip.retransmissions`,
+`.sip.timeouts`, `.rtp.frames`), with attributes of low cardinality: nothing in
+them names a call, an account or an address.
+
+```scala
+for {
+  meter   <- meterProvider.get("softphone4s")
+  metrics <- Resource.eval(OtelMetrics[IO](meter))
+  phone   <- SoftphoneStreaming.resource[IO](config, audio, logger, metrics = Some(metrics))
+} yield phone
+```
+
 ## Robustness
 
 What comes off the network is not trusted. Every decoder answers any input with

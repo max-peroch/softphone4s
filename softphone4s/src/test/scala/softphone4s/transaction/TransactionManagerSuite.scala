@@ -1,6 +1,7 @@
 package softphone4s.transaction
 
 import cats.effect.IO
+import cats.syntax.all.*
 import cats.effect.testkit.TestControl
 import munit.CatsEffectSuite
 import org.typelevel.log4cats.noop.NoOpLogger
@@ -35,24 +36,30 @@ class TransactionManagerSuite extends CatsEffectSuite {
   private def peers(
       dropA: (Int, SipMessage) => Boolean = (_, _) => false,
       dropB: (Int, SipMessage) => Boolean = (_, _) => false,
-      withB: Boolean = true
+      withB: Boolean = true,
+      eventsA: TransactionEvent => IO[Unit] = _ => IO.unit,
+      eventsB: TransactionEvent => IO[Unit] = _ => IO.unit
   ) =
     for {
       pair <- cats.effect.Resource.eval(InMemoryTransport.pair[IO])
       ta   <- cats.effect.Resource.eval(RecordingTransport(pair._1, dropA))
       tb   <- cats.effect.Resource.eval(RecordingTransport(pair._2, dropB))
-      la   <- TransactionManager.resource(
+      la   <- TransactionManager.resourceObserving(
         ta,
         TransactionConfig(),
-        NoOpLogger.impl[IO]
+        NoOpLogger.impl[IO],
+        _ => IO.unit,
+        eventsA
       )
       lb <-
         if withB then
           TransactionManager
-            .resource(
+            .resourceObserving(
               tb,
               TransactionConfig(),
-              NoOpLogger.impl[IO]
+              NoOpLogger.impl[IO],
+              _ => IO.unit,
+              eventsB
             )
             .map(Some(_))
         else cats.effect.Resource.pure[IO, Option[TransactionLayer[IO]]](None)
@@ -415,6 +422,132 @@ class TransactionManagerSuite extends CatsEffectSuite {
           _   <- client(la, options, b) // same branch, after both ended
           st2 <- lb.get.incoming.head.compile.lastOrError
         } yield assertEquals(st2.request, options)
+      }
+    )
+  }
+
+  // ---- What the layer tells of the network's trouble -------------------------------
+
+  private def recorder =
+    cats.effect.Ref.of[IO, Vector[TransactionEvent]](Vector.empty)
+
+  test(
+    "an INVITE nobody answers is reported as six retransmissions and a timeout"
+  ) {
+    TestControl.executeEmbed(
+      recorder.flatMap { seen =>
+        peers(withB = false, eventsA = e => seen.update(_ :+ e)).use {
+          (la, _, _, _) =>
+            for {
+              c  <- client(la, invite, b)
+              _  <- c.notices.compile.toList
+              es <- seen.get
+            } yield assertEquals(
+              es,
+              Vector.fill(6)(
+                TransactionEvent
+                  .Retransmitted(TransactionSide.Client, SipMethod.Invite)
+              ) :+ TransactionEvent.TimedOut(
+                TransactionSide.Client,
+                SipMethod.Invite
+              )
+            )
+        }
+      }
+    )
+  }
+
+  test(
+    "a non-INVITE nobody answers is reported as ten retransmissions and a timeout"
+  ) {
+    TestControl.executeEmbed(
+      recorder.flatMap { seen =>
+        peers(withB = false, eventsA = e => seen.update(_ :+ e)).use {
+          (la, _, _, _) =>
+            for {
+              c  <- client(la, options, b)
+              _  <- c.notices.compile.toList
+              es <- seen.get
+            } yield assertEquals(
+              es,
+              Vector.fill(10)(
+                TransactionEvent
+                  .Retransmitted(TransactionSide.Client, SipMethod.Options)
+              ) :+ TransactionEvent.TimedOut(
+                TransactionSide.Client,
+                SipMethod.Options
+              )
+            )
+        }
+      }
+    )
+  }
+
+  test(
+    "a failure response with every ACK lost is reported as retransmissions and a timeout at the server"
+  ) {
+    TestControl.executeEmbed(
+      (recorder, recorder).tupled.flatMap { (atClient, atServer) =>
+        peers(
+          dropA = (_, m) => isRequest(m, SipMethod.Ack),
+          eventsA = e => atClient.update(_ :+ e),
+          eventsB = e => atServer.update(_ :+ e)
+        ).use { (la, lb, _, tb) =>
+          for {
+            _       <- client(la, invite, b)
+            st      <- lb.get.incoming.head.compile.lastOrError
+            _       <- reply(st, 486)
+            _       <- st.notices.compile.toList
+            sent    <- tb.log
+            server  <- atServer.get
+            client_ <- atClient.get
+          } yield {
+            val responses = sent.count(m => isStatus(m._2, 486))
+            assert(
+              responses > 1,
+              s"the response went out only $responses times"
+            )
+            // every one after the first is a retransmission
+            assertEquals(
+              server.collect { case e: TransactionEvent.Retransmitted =>
+                e
+              }.size,
+              responses - 1
+            )
+            assertEquals(
+              server.lastOption,
+              Some(
+                TransactionEvent.TimedOut(
+                  TransactionSide.Server,
+                  SipMethod.Invite
+                )
+              )
+            )
+            // the client sent no request again: its INVITE was answered at once
+            assertEquals(client_, Vector.empty)
+          }
+        }
+      }
+    )
+  }
+
+  test("an exchange that goes well is reported as nothing") {
+    TestControl.executeEmbed(
+      (recorder, recorder).tupled.flatMap { (atClient, atServer) =>
+        peers(
+          eventsA = e => atClient.update(_ :+ e),
+          eventsB = e => atServer.update(_ :+ e)
+        ).use { (la, lb, _, _) =>
+          for {
+            c  <- client(la, options, b)
+            st <- lb.get.incoming.head.compile.lastOrError
+            _  <- reply(st, 200)
+            _  <- c.notices.compile.toList
+            _  <- IO.sleep(1.minute)
+            a  <- atClient.get
+            s  <- atServer.get
+          } yield assertEquals((a, s), (Vector.empty, Vector.empty))
+        }
       }
     )
   }

@@ -6,6 +6,7 @@ import com.comcast.ip4s.*
 import org.typelevel.log4cats.noop.NoOpLogger
 import softphone4s.{Softphone, SoftphoneStreaming}
 import softphone4s.config.{AccountConfig, SoftphoneConfig}
+import softphone4s.metrics.Metrics
 import softphone4s.model.{Callee, Secret, User}
 
 import javax.sound.sampled.AudioFormat
@@ -67,17 +68,23 @@ object Loopback {
         .toList
     )
 
-  def pair(settings: Settings = Settings()): Resource[IO, Pair] =
+  def pair(
+      settings: Settings = Settings(),
+      aliceMetrics: Option[Metrics[IO]] = None,
+      bobMetrics: Option[Metrics[IO]] = None
+  ): Resource[IO, Pair] =
     (
       SoftphoneStreaming.resource[IO](
         config("alice", AlicePort, 19430, settings),
         audio,
-        NoOpLogger.impl[IO]
+        NoOpLogger.impl[IO],
+        metrics = aliceMetrics
       ),
       SoftphoneStreaming.resource[IO](
         config("bob", BobPort, 19450, settings),
         audio,
-        NoOpLogger.impl[IO]
+        NoOpLogger.impl[IO],
+        metrics = bobMetrics
       )
     ).mapN(Pair(_, _))
 }

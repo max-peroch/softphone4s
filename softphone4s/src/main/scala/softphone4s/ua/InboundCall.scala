@@ -12,6 +12,7 @@ import softphone4s.{Call, IncomingCall}
 import softphone4s.codec.SdpCodec
 import softphone4s.fsm.*
 import softphone4s.fsm.SipMessages.*
+import softphone4s.media.JitterStats
 import softphone4s.model.*
 import softphone4s.runtime.{Entropy, Timers}
 import softphone4s.transaction.{
@@ -49,6 +50,7 @@ private[softphone4s] final class InboundCall[F[_]: Async] private (
     lastOk: Ref[F, Option[SipResponse]],
     established: Deferred[F, Either[Throwable, Unit]],
     callEnded: Deferred[F, Throwable],
+    endReason: Deferred[F, TerminationReason],
     cancelledByCaller: Deferred[F, Unit],
     finished: Deferred[F, Unit],
     dtmfChannel: Channel[F, DtmfDigit],
@@ -117,6 +119,12 @@ private[softphone4s] final class InboundCall[F[_]: Async] private (
       case None      => dtmfChannel.stream.interruptWhen(endedInterrupt)
     }
   def awaitHangup: F[Unit] = callEnded.get.void
+
+  /** Why the call ended, whichever side ended it: for its metrics. */
+  private[softphone4s] def endedBecause: F[TerminationReason] = endReason.get
+
+  /** What the jitter buffer has done over the call, for its metrics. */
+  private[softphone4s] def jitterStats: F[JitterStats] = media.jitterStats
 
   def sendDtmf(digit: DtmfDigit, duration: FiniteDuration): F[DtmfMethod] =
     for {
@@ -371,7 +379,8 @@ private[softphone4s] final class InboundCall[F[_]: Async] private (
             .whenA(reason == TerminationReason.CancelledByCaller) >>
           signalStreams >>
           dtmfChannel.close.void >>
-          established.complete(Left(err)).void
+          established.complete(Left(err)).void >>
+          endReason.complete(reason).void
 
       case NotifyDtmf(digit) => dtmfChannel.send(digit).void
 
@@ -430,6 +439,7 @@ private[softphone4s] object InboundCall {
       lastOk            <- Ref[F].of(Option.empty[SipResponse])
       established       <- Deferred[F, Either[Throwable, Unit]]
       callEnded         <- Deferred[F, Throwable]
+      endReason         <- Deferred[F, TerminationReason]
       cancelledByCaller <- Deferred[F, Unit]
       finished          <- Deferred[F, Unit]
       dtmfChannel       <- Channel.bounded[F, DtmfDigit](64)
@@ -459,6 +469,7 @@ private[softphone4s] object InboundCall {
         lastOk,
         established,
         callEnded,
+        endReason,
         cancelledByCaller,
         finished,
         dtmfChannel,

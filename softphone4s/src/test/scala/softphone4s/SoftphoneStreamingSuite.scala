@@ -9,6 +9,8 @@ import org.typelevel.log4cats.noop.NoOpLogger
 import softphone4s.SipLiterals.*
 import softphone4s.config.{CodecChoice, SoftphoneConfig}
 import softphone4s.media.HalfByteCodec
+import softphone4s.metrics.RecordingMetrics
+import softphone4s.registration.RegistrationState
 import softphone4s.messaging.{MessageContent, MessageFailure}
 import softphone4s.presence.{Availability, Presence, PresenceTuple}
 import softphone4s.subscription.{Ending, EventHeader, MessageSummary}
@@ -788,6 +790,64 @@ class SoftphoneStreamingSuite extends CatsEffectSuite {
           )
           assertEquals(removal.headers.expires, Some(Expires.Zero))
           assertEquals(removal.headers.callId, first.headers.callId)
+        }
+      }
+    }
+  }
+
+  test("a registration's states, and its end, are reported to the metrics") {
+    RecordingMetrics().flatMap { metrics =>
+      val measured =
+        SoftphoneStreaming.resource[IO](
+          config,
+          audio,
+          NoOpLogger.impl[IO],
+          metrics = Some(metrics)
+        )
+      (measured, remote).tupled.use { (softphone, peer) =>
+        def answer(request: SipRequest, granted: Int) = {
+          val base =
+            TransactionMessages.responseTo(request, 200, "OK", Some(tag("srv")))
+          peer.send(
+            us,
+            base.copy(headers =
+              base.headers.copy(contacts =
+                request.headers.contacts.map(c =>
+                  c.withExpires(
+                    Expires(granted).fold(err => fail(err), identity)
+                  )
+                )
+              )
+            )
+          )
+        }
+        softphone.register.allocated.flatMap { case (registration, release) =>
+          for {
+            first     <- requestOf(peer, SipMethod.Register)
+            _         <- answer(first, 3600)
+            _         <- registration.awaitRegistered.timeout(5.seconds)
+            releasing <- release.start
+            removal   <- requestOf(peer, SipMethod.Register)
+            _         <- answer(removal, 0)
+            _         <- releasing.join
+            seen      <- metrics.recorded
+          } yield {
+            val states = seen.collect {
+              case RecordingMetrics.Recorded.Registration(account, state) =>
+                (account, state)
+            }
+            val account = softphone.accounts.head
+            assert(states.forall(_._1 == account), states.toString)
+            assertEquals(
+              states.map(_._2).filterNot(_ == RegistrationState.Unregistering),
+              Vector(
+                RegistrationState.Unregistered,
+                RegistrationState.Registering,
+                RegistrationState.Registered(3600.seconds),
+                RegistrationState.Unregistered
+              )
+            )
+          }
         }
       }
     }

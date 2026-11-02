@@ -12,6 +12,7 @@ import softphone4s.codec.{SdpCodec, SipCodec}
 import softphone4s.sdp.Capabilities
 import softphone4s.fsm.*
 import softphone4s.fsm.SipMessages.*
+import softphone4s.media.JitterStats
 import softphone4s.model.*
 import softphone4s.runtime.{Entropy, Timers}
 import softphone4s.transaction.{
@@ -32,6 +33,7 @@ import scala.concurrent.duration.*
 private[softphone4s] class OutboundCall[F[_]: Async] private (
     answered: Deferred[F, Either[Throwable, Unit]],
     callEnded: Deferred[F, Throwable],
+    endReason: Deferred[F, TerminationReason],
     dtmfChannel: Channel[F, DtmfDigit],
     hangupSignal: Deferred[F, Unit],
     stateRef: Ref[F, CallState],
@@ -104,6 +106,12 @@ private[softphone4s] class OutboundCall[F[_]: Async] private (
       case None      => dtmfChannel.stream.interruptWhen(hangupInterrupt)
     }
   def awaitHangup: F[Unit] = callEnded.get.void
+
+  /** Why the call ended, whichever side ended it: for its metrics. */
+  private[softphone4s] def endedBecause: F[TerminationReason] = endReason.get
+
+  /** What the jitter buffer has done over the call, for its metrics. */
+  private[softphone4s] def jitterStats: F[JitterStats] = media.jitterStats
 
   def sendDtmf(digit: DtmfDigit, duration: FiniteDuration): F[DtmfMethod] =
     for {
@@ -563,7 +571,8 @@ private[softphone4s] class OutboundCall[F[_]: Async] private (
           media.stop() >>
           signalStreams >>
           dtmfChannel.close.void >>
-          answered.complete(Left(err)).void
+          answered.complete(Left(err)).void >>
+          endReason.complete(reason).void
 
       case NotifyDtmf(digit) =>
         dtmfChannel.send(digit).void
@@ -617,6 +626,7 @@ private[softphone4s] object OutboundCall {
       )
       answered           <- Deferred[F, Either[Throwable, Unit]]
       callEnded          <- Deferred[F, Throwable]
+      endReason          <- Deferred[F, TerminationReason]
       dtmfChannel        <- Channel.bounded[F, DtmfDigit](64)
       hangupSignal       <- Deferred[F, Unit]
       stateRef           <- Ref[F].of[CallState](CallState.Inviting(ctx))
@@ -638,6 +648,7 @@ private[softphone4s] object OutboundCall {
       call = new OutboundCall(
         answered,
         callEnded,
+        endReason,
         dtmfChannel,
         hangupSignal,
         stateRef,

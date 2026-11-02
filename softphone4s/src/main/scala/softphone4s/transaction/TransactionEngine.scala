@@ -21,6 +21,7 @@ private[transaction] final class TransactionEngine[F[_]: Concurrent](
     incomingQueue: Queue[F, ServerTransaction[F]],
     unmatchedQueue: Queue[F, Inbound],
     observed: ObservedAddress => F[Unit],
+    events: TransactionEvent => F[Unit],
     logger: StructuredLogger[F]
 ) {
 
@@ -160,20 +161,21 @@ private[transaction] final class TransactionEngine[F[_]: Concurrent](
       case Some(entry) =>
         val (next, actions) = entry.machine.step(event)
         val id              = TransactionId.Client(key)
-        actions.traverse_(runClient(id, entry, _)) >> {
-          if next.isTerminated then
-            cancelTimers(id) >> entry.notices
-              .offer(None)
-              .as(
-                table.copy(clients = table.clients - key)
-              )
-          else
-            table
-              .copy(clients =
-                table.clients.updated(key, entry.copy(machine = next))
-              )
-              .pure[F]
-        }
+        clientTrouble(key, event, actions).traverse_(events) >>
+          actions.traverse_(runClient(id, entry, _)) >> {
+            if next.isTerminated then
+              cancelTimers(id) >> entry.notices
+                .offer(None)
+                .as(
+                  table.copy(clients = table.clients - key)
+                )
+            else
+              table
+                .copy(clients =
+                  table.clients.updated(key, entry.copy(machine = next))
+                )
+                .pure[F]
+          }
     }
 
   private def serverEvent(
@@ -186,21 +188,63 @@ private[transaction] final class TransactionEngine[F[_]: Concurrent](
       case Some(entry) =>
         val (next, actions) = entry.machine.step(event)
         val id              = TransactionId.Server(key)
-        actions.traverse_(runServer(key, entry, _)) >> {
-          if next.isTerminated then
-            cancelTimers(id) >> entry.notices
-              .offer(None)
-              .as(
-                table.copy(servers = table.servers - key)
-              )
-          else
-            table
-              .copy(servers =
-                table.servers.updated(key, entry.copy(machine = next))
-              )
-              .pure[F]
-        }
+        serverTrouble(key, event, actions).traverse_(events) >>
+          actions.traverse_(runServer(key, entry, _)) >> {
+            if next.isTerminated then
+              cancelTimers(id) >> entry.notices
+                .offer(None)
+                .as(
+                  table.copy(servers = table.servers - key)
+                )
+            else
+              table
+                .copy(servers =
+                  table.servers.updated(key, entry.copy(machine = next))
+                )
+                .pure[F]
+          }
     }
+
+  /** What a client transaction's step says of the network: a request sent again
+    * because a timer fired (not the ACK of a failure, which a response causes),
+    * or the end of the wait for an answer.
+    */
+  private def clientTrouble(
+      key: ClientKey,
+      event: ClientEvent,
+      actions: List[ClientAction]
+  ): List[TransactionEvent] = {
+    val sentAgain = event match {
+      case ClientEvent.TimerFired(_) =>
+        actions.collect { case ClientAction.Transmit(_) =>
+          TransactionEvent.Retransmitted(TransactionSide.Client, key.method)
+        }
+      case _ => Nil
+    }
+    sentAgain ++ actions.collect { case ClientAction.TimedOut =>
+      TransactionEvent.TimedOut(TransactionSide.Client, key.method)
+    }
+  }
+
+  /** As [[clientTrouble]]: a response sent again, because the request came
+    * again or a timer fired, or no ACK for a failure.
+    */
+  private def serverTrouble(
+      key: ServerKey,
+      event: ServerEvent,
+      actions: List[ServerAction]
+  ): List[TransactionEvent] = {
+    val sentAgain = event match {
+      case ServerEvent.RequestRetransmitted | ServerEvent.TimerFired(_) =>
+        actions.collect { case ServerAction.Transmit(_) =>
+          TransactionEvent.Retransmitted(TransactionSide.Server, key.method)
+        }
+      case _ => Nil
+    }
+    sentAgain ++ actions.collect { case ServerAction.AckTimedOut =>
+      TransactionEvent.TimedOut(TransactionSide.Server, key.method)
+    }
+  }
 
   private def respond(
       table: Table[F],

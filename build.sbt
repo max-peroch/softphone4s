@@ -50,7 +50,11 @@ lazy val softphone4sOtel4s = project
     scalacOptions       ++= Seq("-release", "17"),
     libraryDependencies ++= Seq(
       otel4sCoreTrace,
-      opentelemetryApi
+      otel4sCoreMetrics,
+      opentelemetryApi,
+      munit,
+      munitCatsEffect,
+      otel4sOteljavaTestkit
     )
   )
 
