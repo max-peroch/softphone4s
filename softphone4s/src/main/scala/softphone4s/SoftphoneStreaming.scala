@@ -77,6 +77,17 @@ class SoftphoneStreaming[F[_]: Async: Network] private (
       logger
     )
 
+  override val publications: Publications[F] =
+    new PublicationService[F](
+      accounts,
+      accountNamed,
+      uplinks,
+      layer,
+      entropy,
+      config.hangupTimeout,
+      logger
+    )
+
   private def accountNamed(id: AccountId): F[Account] =
     Async[F].fromOption(
       accountList.find(_.id == id),

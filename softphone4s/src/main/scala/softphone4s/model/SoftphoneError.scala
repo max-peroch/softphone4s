@@ -52,6 +52,8 @@ object SoftphoneError {
       extends SoftphoneError(s"No implementation of the codec $codec")
   final case class TlsConfigurationInvalid(reason: String)
       extends SoftphoneError(s"Cannot set up TLS: $reason")
+  final case class InvalidPublication(reason: String)
+      extends SoftphoneError(s"Cannot publish: $reason")
   final case class UnknownAccount(account: String)
       extends SoftphoneError(s"No such account: $account")
   final case class DuplicateAccount(account: String)

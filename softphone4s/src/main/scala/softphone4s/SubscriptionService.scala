@@ -2,7 +2,6 @@ package softphone4s
 
 import cats.data.NonEmptyList
 import cats.effect.{Async, Ref, Resource}
-import cats.syntax.all.*
 import fs2.concurrent.Channel
 import org.typelevel.log4cats.StructuredLogger
 import softphone4s.model.*
@@ -40,29 +39,10 @@ private[softphone4s] final class SubscriptionService[F[_]: Async](
       target  <- Resource.eval(
         Async[F].fromEither(callee.toSipUri(account.config.realm))
       )
-      found <- Resource.eval(uplinks.allTargets(account, target))
-      // The first way must work; the others are there for when it does not.
-      first  <- Resource.eval(uplinks.uplinkTo(account, target, found.head))
-      others <- Resource.eval(
-        found.tail.flatTraverse(other =>
-          uplinks
-            .uplinkTo(account, target, other)
-            .map(List(_))
-            .handleErrorWith(error =>
-              logger
-                .debug(
-                  Map(
-                    "target" -> other.address.toString,
-                    "error"  -> String.valueOf(error.getMessage)
-                  )
-                )("Not using this target as a fallback")
-                .as(Nil)
-            )
-        )
-      )
+      ways         <- Resource.eval(uplinks.waysTo(account, target))
       subscription <- Subscriber.resource[F](
         layer,
-        NonEmptyList(first, others),
+        ways,
         routes,
         target,
         event,

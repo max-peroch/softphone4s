@@ -1,5 +1,7 @@
 package softphone4s.presence
 
+import softphone4s.model.MediaType
+import softphone4s.publication.PublicationBody
 import softphone4s.subscription.{EventPackage, PackageError}
 
 /** The presence of an entity (RFC 3863): the tuples it is reachable by and
@@ -29,6 +31,10 @@ object Presence {
     */
   def render(presence: Presence): Either[String, String] =
     Pidf.render(presence)
+
+  /** Our own presence as the body of a PUBLISH. */
+  def document(presence: Presence): Either[String, PublicationBody] =
+    render(presence).map(PublicationBody(MediaType.PidfXml, _))
 
   /** Reads a PIDF document (RFC 3863), whether it came in a NOTIFY or not. */
   def parse(document: String): Either[PackageError, Presence] =

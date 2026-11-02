@@ -96,6 +96,9 @@ trait Softphone[F[_]] {
   /** Subscriptions to the state of a resource elsewhere (RFC 6665). */
   def subscriptions: Subscriptions[F]
 
+  /** State published about ourselves: presence (RFC 3903). */
+  def publications: Publications[F]
+
   /** Calls placed to any of the accounts, as they arrive;
     * `IncomingCall.account` says which. Each is answered with
     * `IncomingCall.accept` or turned away with `reject`; one that is neither is

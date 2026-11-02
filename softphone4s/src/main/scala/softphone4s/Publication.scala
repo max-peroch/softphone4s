@@ -1,6 +1,9 @@
 package softphone4s
 
+import cats.Applicative
+import cats.syntax.all.*
 import fs2.concurrent.Signal
+import softphone4s.presence.Presence
 import softphone4s.publication.{
   PublicationBody,
   PublicationEnding,
@@ -27,4 +30,21 @@ trait Publication[F[_]] {
     * ended instead if it ended for good first.
     */
   def awaitPublished: F[Either[PublicationEnding, Unit]]
+}
+
+object Publication {
+
+  extension [F[_]](publication: Publication[F]) {
+
+    /** Publishes `presence` in place of the state now held. Nothing is sent,
+      * and the reason is given, if it cannot be written as PIDF.
+      */
+    def updatePresence(
+        presence: Presence
+    )(using F: Applicative[F]): F[Either[String, Unit]] =
+      Presence
+        .document(presence)
+        .traverse(publication.update)
+        .map(_.void)
+  }
 }

@@ -10,6 +10,7 @@ import pureconfig.ConfigSource
 import softphone4s.SipLiterals.*
 import softphone4s.config.{AccountConfig, KeyStoreType, SoftphoneConfig}
 import softphone4s.model.*
+import softphone4s.presence.Presence
 import softphone4s.subscription.EventHeader
 import softphone4s.srtp.SrtpPolicy
 import softphone4s.transport.{
@@ -281,12 +282,18 @@ class MultiAccountSuite extends CatsEffectSuite {
     "a subscription is made as the account asked, and as the default if none is"
   ) {
     scenario().use { (phone, peer) =>
-      def subscribeFrom(use: cats.effect.Resource[IO, Subscription[IO]]) =
+      // An unanswered SUBSCRIBE is sent again while the subscription is
+      // released, so the request is picked by the account it is from.
+      def subscribeFrom(
+          user: String,
+          use: cats.effect.Resource[IO, Subscription[IO]]
+      ) =
         use.use(_ =>
           peer.messages
             .collectFirst {
               case Inbound(_, r: SipRequest)
-                  if r.method == SipMethod.Subscribe =>
+                  if r.method == SipMethod.Subscribe &&
+                    r.headers.from.uri.render == user =>
                 r
             }
             .compile
@@ -296,13 +303,72 @@ class MultiAccountSuite extends CatsEffectSuite {
       val presence = EventHeader("presence").fold(e => fail(e), identity)
       for {
         alt <- subscribeFrom(
+          "sip:alt@127.0.0.1",
           phone.subscriptions.subscribeAs(phone.accounts.last, bob, presence)
         )
-        main <- subscribeFrom(phone.subscriptions.subscribe(bob, presence))
+        main <- subscribeFrom(
+          "sip:test@127.0.0.1",
+          phone.subscriptions.subscribe(bob, presence)
+        )
       } yield {
         assertEquals(alt.headers.from.uri.render, "sip:alt@127.0.0.1")
         assertEquals(main.headers.from.uri.render, "sip:test@127.0.0.1")
       }
+    }
+  }
+
+  test(
+    "presence is published as the account asked, and as the default if none is"
+  ) {
+    scenario().use { (phone, peer) =>
+      // An unanswered PUBLISH is sent again while the publication is released,
+      // so the request is picked by the account it is from.
+      def publishFrom(
+          user: String,
+          use: cats.effect.Resource[IO, Publication[IO]]
+      ) =
+        use.use(_ =>
+          peer.messages
+            .collectFirst {
+              case Inbound(_, r: SipRequest)
+                  if r.method == SipMethod.Publish &&
+                    r.headers.from.uri.render == user =>
+                r
+            }
+            .compile
+            .lastOrError
+            .timeout(5.seconds)
+        )
+      val somebody = Presence("pres:x@y", Nil, Nil)
+      for {
+        alt <- publishFrom(
+          "sip:alt@127.0.0.1",
+          phone.publications.publishPresenceAs(phone.accounts.last, somebody)
+        )
+        main <- publishFrom(
+          "sip:test@127.0.0.1",
+          phone.publications.publishPresence(somebody)
+        )
+      } yield {
+        assertEquals(alt.requestUri.render, "sip:alt@127.0.0.1")
+        assertEquals(main.requestUri.render, "sip:test@127.0.0.1")
+      }
+    }
+  }
+
+  test("publishing as an account the softphone does not hold is refused") {
+    scenario().use { (phone, _) =>
+      val stranger = AccountId(uri("sip:nobody@127.0.0.1"))
+      phone.publications
+        .publishPresenceAs(stranger, Presence("pres:x@y", Nil, Nil))
+        .use_
+        .attempt
+        .map(r =>
+          assertEquals(
+            r,
+            Left(SoftphoneError.UnknownAccount("sip:nobody@127.0.0.1"))
+          )
+        )
     }
   }
 

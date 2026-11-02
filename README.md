@@ -512,6 +512,39 @@ stream. Two packages come with the library, and a program can define its own:
   spec does not define, is refused. Extension elements in other namespaces (RPID
   and the like) are skipped.
 
+### Publishing presence
+
+`phone.publications.publishPresence(presence)` publishes the state of our own
+address (RFC 3903) for as long as the resource is held. Acquiring it sends the
+first PUBLISH and returns at once; `awaitPublished` says when the server holds
+the state:
+
+```scala
+val mine = Presence("pres:alice@example.com",
+  List(PresenceTuple("desk", Some(Availability.Open), None, List("at my desk"))), Nil)
+
+phone.publications.publishPresence(mine).use { publication =>
+  publication.awaitPublished >>
+    publication.updatePresence(mine.copy(tuples = Nil)) >>   // a new state
+    IO.sleep(10.minutes)
+}                                                            // released: removed
+```
+
+The server gives a tag with every answer and the library uses the latest: the
+state is refreshed under it at half its lifetime, changed with a new PUBLISH when
+you give another presence (one given while a request is in flight is sent once it
+is answered, and of several the last), and removed with `Expires: 0` on release.
+If the server loses the state (a `412`, or a lifetime that runs out) all of it is
+published again. A lifetime that is too brief (`423`) is raised, a challenge is
+answered once, and a refresh that does not get through is tried again after a
+wait while the lifetime runs out. A failure that may pass (a timeout, a 5xx)
+begins a new run after a backoff, with the latest presence; `publication.status`
+says where it stands, including `Retrying`. A presence that cannot be written as
+XML (an empty entity, a tuple id that is not an XML name, a control character) is
+refused before anything is sent. `publishAs` and `publishPresenceAs` publish as
+one of several accounts, and `publications.publish(event, document)` publishes
+the state of any other event package.
+
 ### Receiving DTMF
 
 ```scala
@@ -609,7 +642,8 @@ All failures surface as `SoftphoneError` (a sealed `RuntimeException` hierarchy)
 | `TransportFailed` | The SIP transport could not send a request of the call |
 | `TransportUnavailable(transport)` | A transport other than UDP, TCP or TLS was asked for |
 | `TlsConfigurationInvalid(reason)` | A TLS key store cannot be read or has the wrong password |
-| `UnknownAccount(account)` | `callAs` or `registerAs` named an account the softphone does not hold |
+| `UnknownAccount(account)` | `callAs`, `registerAs`, `subscribeAs`, `publishAs` or `publishPresenceAs` named an account the softphone does not hold |
+| `InvalidPublication(reason)` | `publishPresence` was given a presence that cannot be written as PIDF (an empty entity, a tuple id that is not an XML name, a character XML lacks) |
 | `DuplicateAccount(user)` | Two configured accounts share a user |
 | `RtpPortsExhausted(first, last)` | Every pair of RTP ports in the range is in use or cannot be bound (too many concurrent calls) |
 | `RtpPortsInvalid(reason)` | `base-rtp-port` and `max-rtp-port` leave no pair of ports |

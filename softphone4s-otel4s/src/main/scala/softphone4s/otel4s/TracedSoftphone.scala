@@ -9,7 +9,15 @@ import org.typelevel.otel4s.Attribute
 import org.typelevel.otel4s.trace.{SpanKind, SpanOps, Tracer}
 import softphone4s.Messaging
 import softphone4s.messaging.{IncomingMessage, MessageContent, MessageFailure}
-import softphone4s.{Call, IncomingCall, Softphone, Subscription, Subscriptions}
+import softphone4s.{
+  Call,
+  IncomingCall,
+  Publication,
+  Publications,
+  Softphone,
+  Subscription,
+  Subscriptions
+}
 import softphone4s.fsm.SessionChange
 import softphone4s.model.{
   AccountId,
@@ -19,6 +27,8 @@ import softphone4s.model.{
   Expires,
   MediaType
 }
+import softphone4s.presence.Presence
+import softphone4s.publication.PublicationBody
 import softphone4s.registration.Registration
 import softphone4s.subscription.EventHeader
 
@@ -121,6 +131,45 @@ final class TracedSubscriptions[F[_]](
       )
 }
 
+/** `Publications` with a span around each publication, for as long as it is
+  * held.
+  */
+final class TracedPublications[F[_]](
+    underlying: Publications[F],
+    tracer: Tracer[F]
+) extends Publications[F] {
+
+  def accounts: NonEmptyList[AccountId] = underlying.accounts
+
+  def publishAs(
+      account: AccountId,
+      event: EventHeader,
+      document: PublicationBody,
+      expires: Expires
+  ): Resource[F, Publication[F]] =
+    span(account, event).flatMap(_ =>
+      underlying.publishAs(account, event, document, expires)
+    )
+
+  def publishPresenceAs(
+      account: AccountId,
+      presence: Presence,
+      expires: Expires
+  ): Resource[F, Publication[F]] =
+    span(account, EventHeader.Presence).flatMap(_ =>
+      underlying.publishPresenceAs(account, presence, expires)
+    )
+
+  private def span(account: AccountId, event: EventHeader) =
+    tracer
+      .spanBuilder("softphone4s.publication")
+      .withSpanKind(SpanKind.Client)
+      .addAttribute(Attribute("softphone4s.account", account.render))
+      .addAttribute(Attribute("softphone4s.event", event.render))
+      .build
+      .resource
+}
+
 /** `Softphone` decorator adding OpenTelemetry spans around call setup, media,
   * and DTMF, and propagating the active trace context as a `traceparent` header
   * on outbound INVITEs.
@@ -189,6 +238,9 @@ final class TracedSoftphone[F[_]: Async](
 
   val subscriptions: Subscriptions[F] =
     new TracedSubscriptions(underlying.subscriptions, tracer)
+
+  val publications: Publications[F] =
+    new TracedPublications(underlying.publications, tracer)
 
   def registerAs(account: AccountId): Resource[F, Registration[F]] =
     tracer

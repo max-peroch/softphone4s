@@ -10,6 +10,7 @@ import softphone4s.SipLiterals.*
 import softphone4s.config.{CodecChoice, SoftphoneConfig}
 import softphone4s.media.HalfByteCodec
 import softphone4s.messaging.{MessageContent, MessageFailure}
+import softphone4s.presence.{Availability, Presence, PresenceTuple}
 import softphone4s.subscription.{Ending, EventHeader, MessageSummary}
 import softphone4s.model.*
 import softphone4s.transaction.TransactionMessages
@@ -510,6 +511,135 @@ class SoftphoneStreamingSuite extends CatsEffectSuite {
             assertEquals(leave.requestUri.render, "sip:bob@127.0.0.1:19071")
           }
         }
+    }
+  }
+
+  // ---- Publishing --------------------------------------------------------------------
+
+  private def publishRequest(
+      peer: Transport[IO],
+      wanted: SipRequest => Boolean = _ => true
+  ) =
+    peer.messages
+      .collectFirst {
+        case Inbound(_, r: SipRequest)
+            if r.method == SipMethod.Publish && wanted(r) =>
+          r
+      }
+      .compile
+      .lastOrError
+      .timeout(5.seconds)
+
+  private def acceptedPublish(
+      publish: SipRequest,
+      tag: String,
+      lifetime: Int
+  ) = {
+    val base = TransactionMessages.responseTo(publish, 200, "OK")
+    base.copy(headers =
+      base.headers.copy(
+        expires = Some(Expires(lifetime).fold(e => fail(e), identity)),
+        others = ExtensionHeader(FieldName.SipETag, tag) :: base.headers.others
+      )
+    )
+  }
+
+  private val mine = Presence(
+    "pres:test@127.0.0.1",
+    List(
+      PresenceTuple("t1", Some(Availability.Open), None, List("at my desk"))
+    ),
+    Nil
+  )
+
+  test(
+    "presence is published over UDP: the PUBLISH, a change under the tag, and the removal on release"
+  ) {
+    (phone, remote).tupled.use { (softphone, peer) =>
+      softphone.publications.publishPresence(mine).allocated.flatMap {
+        (publication, release) =>
+          for {
+            first <- publishRequest(peer)
+            _     <- peer.send(us, acceptedPublish(first, "tag1", 3600))
+            done  <- publication.awaitPublished.timeout(5.seconds)
+            busy = mine.copy(tuples =
+              List(PresenceTuple("t1", Some(Availability.Closed), None, Nil))
+            )
+            updated   <- publication.updatePresence(busy)
+            change    <- publishRequest(peer, _.headers.cseq.seq.value == 2)
+            _         <- peer.send(us, acceptedPublish(change, "tag2", 3600))
+            releasing <- release.start
+            removal <- publishRequest(peer, _.headers.expires.exists(_.isZero))
+            _       <- peer.send(us, acceptedPublish(removal, "tag2", 0))
+            _       <- releasing.joinWithNever.timeout(10.seconds)
+          } yield {
+            // The state is that of our own address.
+            assertEquals(first.requestUri.render, "sip:test@127.0.0.1")
+            assertEquals(first.headers.from.uri.render, "sip:test@127.0.0.1")
+            assertEquals(
+              first.headers.others.find(_.name.matches("Event")).map(_.value),
+              Some("presence")
+            )
+            assertEquals(first.headers.contentType, Some(MediaType.PidfXml))
+            assertEquals(Presence.parse(first.body), Right(mine))
+            assertEquals(
+              first.headers.others.find(_.name.matches("SIP-If-Match")),
+              None
+            )
+            assertEquals(done, Right(()))
+            assertEquals(updated, Right(()))
+            assertEquals(Presence.parse(change.body), Right(busy))
+            assertEquals(
+              change.headers.others
+                .find(_.name.matches("SIP-If-Match"))
+                .map(_.value),
+              Some("tag1")
+            )
+            assertEquals(
+              removal.headers.others
+                .find(_.name.matches("SIP-If-Match"))
+                .map(_.value),
+              Some("tag2")
+            )
+            assertEquals(removal.body, "")
+          }
+      }
+    }
+  }
+
+  test(
+    "a presence that cannot be written is refused and nothing is sent, and a change to one is refused the same way"
+  ) {
+    (phone, remote).tupled.use { (softphone, peer) =>
+      val broken = mine.copy(notes = List("bell \u0007"))
+      for {
+        refused <- softphone.publications.publishPresence(broken).use_.attempt
+        sent    <- peer.messages
+          .collectFirst {
+            case Inbound(_, r: SipRequest) if r.method == SipMethod.Publish => r
+          }
+          .compile
+          .last
+          .timeout(500.millis)
+          .attempt
+        changed <- softphone.publications.publishPresence(mine).use {
+          publication =>
+            publication.updatePresence(broken)
+        }
+      } yield {
+        assert(
+          refused.left.exists {
+            case SoftphoneError.InvalidPublication(_) => true
+            case _                                    => false
+          },
+          refused.toString
+        )
+        assert(
+          sent.isLeft,
+          "a PUBLISH was sent for a presence that cannot be written"
+        )
+        assert(changed.isLeft)
+      }
     }
   }
 

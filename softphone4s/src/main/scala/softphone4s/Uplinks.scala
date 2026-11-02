@@ -114,6 +114,33 @@ private[softphone4s] final class Uplinks[F[_]: Async](
       uri.withPort(account.config.serverPort)
     else uri
 
+  /** The ways to reach the server for a request to `target`, best first: the
+    * first must work, and the others, which are there for when it does not, are
+    * left out if they cannot be set up.
+    */
+  private[softphone4s] def waysTo(
+      account: Account,
+      target: SipUri
+  ): F[NonEmptyList[Uplink]] =
+    for {
+      found  <- allTargets(account, target)
+      first  <- uplinkTo(account, target, found.head)
+      others <- found.tail.flatTraverse(other =>
+        uplinkTo(account, target, other)
+          .map(List(_))
+          .handleErrorWith(error =>
+            logger
+              .debug(
+                Map(
+                  "target" -> other.address.toString,
+                  "error"  -> String.valueOf(error.getMessage)
+                )
+              )("Not using this target as a fallback")
+              .as(Nil)
+          )
+      )
+    } yield NonEmptyList(first, others)
+
   /** The way to reach `resolved`, as `account`, for a request to `target`. */
   private[softphone4s] def uplinkTo(
       account: Account,
