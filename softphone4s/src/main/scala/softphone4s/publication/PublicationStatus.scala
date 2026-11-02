@@ -14,6 +14,9 @@ enum PublicationStatus {
   /** We have asked for the state to be removed. */
   case Removing
 
+  /** It ended in a way that allows another try, which begins after `in`. */
+  case Retrying(because: PublicationEnding, in: FiniteDuration)
+
   /** Over: removed, or not to be had. */
   case Ended(ending: PublicationEnding)
 }
