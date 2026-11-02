@@ -7,9 +7,10 @@ object Dependencies {
   private val pureconfigVersion    = "0.17.11"
   private val log4catsVersion      = "2.8.0"
   private val otel4sVersion        = "1.1.0"
-  private val opentelemetryVersion = "1.64.0" // what otel4s 1.1.0 is built against
-  private val scribeVersion        = "3.19.0"
-  private val dnsjavaVersion       = "3.6.3"
+  private val opentelemetryVersion =
+    "1.64.0" // what otel4s 1.1.0 is built against
+  private val scribeVersion  = "3.19.0"
+  private val dnsjavaVersion = "3.6.3"
 
   // Audio
   val sound4s = "io.github.max-peroch" %% "sound4s" % "0.2.0"
@@ -29,7 +30,7 @@ object Dependencies {
   // Testing
   val munit           = "org.scalameta" %% "munit"             % "1.3.6" % Test
   val munitCatsEffect = "org.typelevel" %% "munit-cats-effect" % "2.2.1" % Test
-  val munitScalaCheck = "org.scalameta" %% "munit-scalacheck" % "1.3.1" % Test
+  val munitScalaCheck = "org.scalameta" %% "munit-scalacheck"  % "1.3.1" % Test
   val catsEffectTestkit =
     "org.typelevel" %% "cats-effect-testkit" % catsEffectVersion % Test
 
@@ -40,19 +41,20 @@ object Dependencies {
     "com.github.pureconfig" %% "pureconfig-generic-scala3" % pureconfigVersion
 
   // Logging
-  val log4catsCore  = "org.typelevel" %% "log4cats-core"  % log4catsVersion
-  val log4catsSlf4j = "org.typelevel" %% "log4cats-slf4j" % log4catsVersion
+  val log4catsCore    = "org.typelevel" %% "log4cats-core"  % log4catsVersion
+  val log4catsSlf4j   = "org.typelevel" %% "log4cats-slf4j" % log4catsVersion
   val log4catsTesting =
     "org.typelevel" %% "log4cats-testing" % log4catsVersion % Test
-  val scribe        = "com.outr"      %% "scribe"         % scribeVersion
-  val scribeSlf4j   = "com.outr"      %% "scribe-slf4j"   % scribeVersion
+  val scribe      = "com.outr" %% "scribe"       % scribeVersion
+  val scribeSlf4j = "com.outr" %% "scribe-slf4j" % scribeVersion
 
   // Observability (tracing / OpenTelemetry)
-  val otel4sCoreTrace   = "org.typelevel" %% "otel4s-core-trace"   % otel4sVersion
-  val otel4sCoreMetrics = "org.typelevel" %% "otel4s-core-metrics" % otel4sVersion
+  val otel4sCoreTrace   = "org.typelevel" %% "otel4s-core-trace" % otel4sVersion
+  val otel4sCoreMetrics =
+    "org.typelevel" %% "otel4s-core-metrics" % otel4sVersion
   val otel4sOteljavaTestkit =
     "org.typelevel" %% "otel4s-oteljava-testkit" % otel4sVersion % Test
-  val otel4sOteljava  = "org.typelevel" %% "otel4s-oteljava"   % otel4sVersion
+  val otel4sOteljava = "org.typelevel" %% "otel4s-oteljava" % otel4sVersion
   val otel4sOteljavaContextStorage =
     "org.typelevel" %% "otel4s-oteljava-context-storage" % otel4sVersion
   val opentelemetryApi =
