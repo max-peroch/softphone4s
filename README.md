@@ -40,6 +40,9 @@ later, for the Foreign Function & Memory API, and the native access to be
 allowed (`--enable-native-access=ALL-UNNAMED`). Use a JDK that has the fix for
 CVE-2026-91403 (25.0.5, 21.0.13, 17.0.21 or later), or set `tls.trust-store`.
 
+Coming from 0.1.0? [MIGRATION.md](MIGRATION.md) says what to change, and
+[CHANGELOG.md](CHANGELOG.md) what was added.
+
 ## Overview
 
 softphone4s handles outbound SIP calls end-to-end:

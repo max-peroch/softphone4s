@@ -55,6 +55,13 @@ jobs:
         if: matrix.java == '25'
         run: sbt doc
 
+      # Before 1.0 a release may break compatibility, so this reports and does
+      # not fail the build. The report is what MIGRATION.md is written from.
+      - name: Report binary compatibility with the last release
+        if: matrix.java == '25'
+        continue-on-error: true
+        run: sbt "softphone4s/mimaReportBinaryIssues;softphone4sOtel4s/mimaReportBinaryIssues"
+
   publish:
     name: Publish Artifacts
     needs: [build]

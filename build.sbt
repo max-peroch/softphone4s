@@ -18,11 +18,20 @@ ThisBuild / scalacOptions     := Seq(
 
 import Dependencies._
 
+// The published modules are checked, in binary compatibility, against the
+// version released before the one being built (`mimaReportBinaryIssues`).
+lazy val againstLastRelease = Seq(
+  mimaPreviousArtifacts := previousStableVersion.value
+    .map(version => organization.value %% moduleName.value % version)
+    .toSet
+)
+
 lazy val softphone4s = project
   .in(file("softphone4s"))
   .settings(
-    name                := "softphone4s",
-    scalacOptions       ++= Seq("-release", "17"),
+    againstLastRelease,
+    name := "softphone4s",
+    scalacOptions ++= Seq("-release", "17"),
     // Many suites bind real sockets on fixed ports, and the ports of one are
     // another's. They run one after the other.
     Test / parallelExecution := false,
@@ -47,8 +56,9 @@ lazy val softphone4sOtel4s = project
   .in(file("softphone4s-otel4s"))
   .dependsOn(softphone4s)
   .settings(
-    name                := "softphone4s-otel4s",
-    scalacOptions       ++= Seq("-release", "17"),
+    againstLastRelease,
+    name := "softphone4s-otel4s",
+    scalacOptions ++= Seq("-release", "17"),
     libraryDependencies ++= Seq(
       otel4sCoreTrace,
       otel4sCoreMetrics,
@@ -94,7 +104,7 @@ lazy val softphone4sBench = project
     name           := "softphone4s-bench",
     publish / skip := true,
     // The load and soak tests are programs, run in a JVM of their own
-    run / fork         := true,
+    run / fork := true,
     run / javaOptions ++= Seq("-Xmx2g"),
     run / connectInput := true
   )
@@ -103,11 +113,11 @@ lazy val softphone4sDemo = project
   .in(file("softphone4s-demo"))
   .dependsOn(softphone4s, softphone4sOtel4s)
   .settings(
-    name                := "softphone4s-demo",
-    mainClass           := Some("Demo"),
-    run / fork          := true,
-    run / connectInput  := true,
-    publish / skip      := true,
+    name               := "softphone4s-demo",
+    mainClass          := Some("Demo"),
+    run / fork         := true,
+    run / connectInput := true,
+    publish / skip     := true,
     libraryDependencies ++= Seq(
       sound4s,
       scribe,
