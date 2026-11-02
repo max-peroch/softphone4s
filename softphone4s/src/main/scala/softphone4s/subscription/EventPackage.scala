@@ -20,6 +20,19 @@ trait EventPackage[A] {
 
 object EventPackage {
 
+  /** The most characters of body an event package reads: 128 KiB, far above a
+    * presence document or a message summary, which are a few kilobytes.
+    */
+  val MaxBodyLength: Int = 128 * 1024
+
+  /** `body` if it is no longer than [[MaxBodyLength]]. */
+  def withinLimit(body: String): Either[PackageError, String] =
+    Either.cond(
+      body.length <= MaxBodyLength,
+      body,
+      PackageError.TooLarge(body.length, MaxBodyLength)
+    )
+
   /** The body of `notification`, if it has one of the `expected` type. */
   def bodyOf(
       notification: Notification,

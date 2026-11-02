@@ -116,6 +116,17 @@ class MessageSummarySuite extends FunSuite {
     )
   }
 
+  test("a body over the limit is refused, and one at it is read") {
+    val most                = EventPackage.MaxBodyLength
+    val head                = "Messages-Waiting: yes\r\nX-Pad: "
+    def padded(length: Int) = head + "x" * (length - head.length)
+    assert(MessageSummary.parse(padded(most)).isRight)
+    assertEquals(
+      MessageSummary.parse(padded(most + 1)),
+      Left(PackageError.TooLarge(most + 1, most))
+    )
+  }
+
   test("the package asks for message-summary and takes its type") {
     assertEquals(MessageSummary.Package.event.render, "message-summary")
     assertEquals(

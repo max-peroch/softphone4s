@@ -190,15 +190,15 @@ class PidfSuite extends FunSuite {
   }
 
   test(
-    "a document nested very deep, or very wide, is answered and does not overflow"
+    "a document nested very deep, or very wide, within the limit, is answered and does not overflow"
   ) {
     val ns   = """xmlns="urn:ietf:params:xml:ns:pidf""""
     val deep =
-      s"""<presence $ns entity="e">""" + "<x>" * 20000 + "</x>" * 20000 + "</presence>"
+      s"""<presence $ns entity="e">""" + "<x>" * 15000 + "</x>" * 15000 + "</presence>"
     assertEquals(read(deep), Right(Presence("e", Nil, Nil)))
     val wide =
-      s"""<presence $ns entity="e">""" + "<tuple id=\"a\"><status/></tuple>" * 20000 + "</presence>"
-    assertEquals(read(wide).map(_.tuples.size), Right(20000))
+      s"""<presence $ns entity="e">""" + "<tuple id=\"a\"><status/></tuple>" * 4000 + "</presence>"
+    assertEquals(read(wide).map(_.tuples.size), Right(4000))
   }
 
   test("no body, or another type, is said so") {
@@ -228,6 +228,20 @@ class PidfSuite extends FunSuite {
         .forAccount(softphone4s.model.AccountId(uri("sips:bob@secure.example")))
         .entity,
       "pres:bob@secure.example"
+    )
+  }
+
+  test("a document over the limit is refused, and one at it is read") {
+    val ns                  = """xmlns="urn:ietf:params:xml:ns:pidf""""
+    val open                = s"""<presence $ns entity="e"><note>"""
+    val close               = "</note></presence>"
+    def padded(length: Int) =
+      open + "x" * (length - open.length - close.length) + close
+    val most = softphone4s.subscription.EventPackage.MaxBodyLength
+    assert(Presence.parse(padded(most)).isRight)
+    assertEquals(
+      Presence.parse(padded(most + 1)),
+      Left(PackageError.TooLarge(most + 1, most))
     )
   }
 

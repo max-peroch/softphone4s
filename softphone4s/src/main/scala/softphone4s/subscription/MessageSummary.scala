@@ -30,7 +30,10 @@ object MessageSummary {
   /** Reads the body: `Field: value` lines, whose names are not case-sensitive.
     * A field that is not known is skipped, as the RFC asks.
     */
-  def parse(body: String): Either[PackageError, MessageSummary] = {
+  def parse(text: String): Either[PackageError, MessageSummary] =
+    EventPackage.withinLimit(text).flatMap(read)
+
+  private def read(body: String): Either[PackageError, MessageSummary] = {
     val fields = body.linesIterator
       .map(_.trim)
       .filter(_.nonEmpty)

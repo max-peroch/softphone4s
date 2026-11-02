@@ -31,8 +31,9 @@ private[presence] object Pidf {
       EventPackage.bodyOf(n, MediaType.PidfXml).flatMap(parse)
   }
 
-  def parse(body: String): Either[PackageError, Presence] =
+  def parse(document: String): Either[PackageError, Presence] =
     for {
+      body   <- EventPackage.withinLimit(document)
       events <- read(body).leftMap(e => malformed(e.getMessage))
       root   <- tree(events).leftMap(malformed)
       found  <- presence(root).leftMap(malformed)
