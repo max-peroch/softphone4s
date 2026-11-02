@@ -520,8 +520,8 @@ first PUBLISH and returns at once; `awaitPublished` says when the server holds
 the state:
 
 ```scala
-val mine = Presence("pres:alice@example.com",
-  List(PresenceTuple("desk", Some(Availability.Open), None, List("at my desk"))), Nil)
+val mine = Presence.forAccount(phone.publications.accounts.head,   // pres:alice@example.com
+  List(PresenceTuple("desk", Some(Availability.Open), None, List("at my desk"))))
 
 phone.publications.publishPresence(mine).use { publication =>
   publication.awaitPublished >>

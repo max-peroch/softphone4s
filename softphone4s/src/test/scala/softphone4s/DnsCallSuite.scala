@@ -13,6 +13,7 @@ import softphone4s.codec.SipCodec
 import softphone4s.config.SoftphoneConfig
 import softphone4s.dns.{FakeDns, NaptrRecord, SrvRecord}
 import softphone4s.model.*
+import softphone4s.presence.Presence
 import softphone4s.transaction.TransactionMessages
 import softphone4s.transport.StreamFraming
 
@@ -26,8 +27,26 @@ class DnsCallSuite extends CatsEffectSuite {
 
   private val audio = new AudioFormat(8000f, 16, 1, true, false)
 
-  /** A TCP SIP server on loopback; it queues what it is sent and answers INVITE
-    * and BYE.
+  /** The 200 a notifier gives to a PUBLISH: the state is held under a tag. */
+  private def answerPublish(
+      request: SipRequest,
+      socket: Socket[IO]
+  ): IO[Unit] =
+    Option
+      .when(request.method == SipMethod.Publish) {
+        val base = TransactionMessages.responseTo(request, 200, "OK")
+        base.copy(headers =
+          base.headers.copy(
+            expires = request.headers.expires,
+            others =
+              ExtensionHeader(FieldName.SipETag, "etag1") :: base.headers.others
+          )
+        )
+      }
+      .traverse_(r => socket.write(SipCodec.encode(r)))
+
+  /** A TCP SIP server on loopback; it queues what it is sent and answers
+    * INVITE, BYE and PUBLISH.
     */
   private def server(
       recordRoute: Option[String] = None
@@ -48,6 +67,7 @@ class DnsCallSuite extends CatsEffectSuite {
                 SipCodec.decode(bytes) match {
                   case Right(request: SipRequest) =>
                     requests.offer(request) >>
+                      answerPublish(request, socket) >>
                       Option
                         .when(
                           request.method == SipMethod.Invite || request.method == SipMethod.Bye
@@ -283,6 +303,38 @@ class DnsCallSuite extends CatsEffectSuite {
         invite.headers.topVia.transport,
         TransportProtocol.Tcp
       )
+    }
+  }
+
+  test(
+    "a publication whose best SRV target is down goes on to the next after the wait"
+  ) {
+    server().use { (listening, requests) =>
+      for {
+        dns <- FakeDns(
+          naptrs = naptrToTcp,
+          srvs = Map(
+            "_sip._tcp.example.org." -> List(
+              // Nothing listens on port 1: the connection is refused at once.
+              SrvRecord(10, 1, port"1", host("down.example.org")),
+              SrvRecord(20, 1, listening, host("up.example.org"))
+            )
+          ),
+          hosts = Map(
+            "down.example.org" -> List(ip"127.0.0.1"),
+            "up.example.org"   -> List(ip"127.0.0.1")
+          )
+        )
+        mine = Presence("pres:test@example.org", Nil, Nil)
+        result <- phone(dns, port"19137").use { p =>
+          p.publications.publishPresence(mine).use { publication =>
+            for {
+              done    <- publication.awaitPublished.timeout(30.seconds)
+              request <- next(requests, SipMethod.Publish)
+            } yield (done, request.headers.topVia.transport)
+          }
+        }
+      } yield assertEquals(result, (Right(()), TransportProtocol.Tcp))
     }
   }
 

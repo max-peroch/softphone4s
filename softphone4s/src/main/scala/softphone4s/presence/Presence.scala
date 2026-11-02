@@ -1,6 +1,6 @@
 package softphone4s.presence
 
-import softphone4s.model.MediaType
+import softphone4s.model.{AccountId, MediaType}
 import softphone4s.publication.PublicationBody
 import softphone4s.subscription.{EventPackage, PackageError}
 
@@ -21,6 +21,23 @@ final case class Presence(
 }
 
 object Presence {
+
+  /** The presence of `account`, whose entity is its own address as a `pres:`
+    * URI (`sip:alice@example.com` is `pres:alice@example.com`), which is what a
+    * notifier expects of a PUBLISH to that address.
+    */
+  def forAccount(
+      account: AccountId,
+      tuples: List[PresenceTuple] = Nil,
+      notes: List[String] = Nil
+  ): Presence =
+    Presence(
+      "pres:" + account.addressOfRecord.render
+        .stripPrefix("sips:")
+        .stripPrefix("sip:"),
+      tuples,
+      notes
+    )
 
   /** The `presence` package: subscribe with it, and read PIDF. */
   val Package: EventPackage[Presence] = Pidf.Package

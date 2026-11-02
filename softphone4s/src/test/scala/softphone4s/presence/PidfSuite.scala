@@ -215,6 +215,22 @@ class PidfSuite extends FunSuite {
     )
   }
 
+  test("the presence of an account names its own address") {
+    import softphone4s.SipLiterals.uri
+    assertEquals(
+      Presence
+        .forAccount(softphone4s.model.AccountId(uri("sip:alice@example.com")))
+        .entity,
+      "pres:alice@example.com"
+    )
+    assertEquals(
+      Presence
+        .forAccount(softphone4s.model.AccountId(uri("sips:bob@secure.example")))
+        .entity,
+      "pres:bob@secure.example"
+    )
+  }
+
   test("a document is read outside a NOTIFY too") {
     assertEquals(
       Presence.parse(
