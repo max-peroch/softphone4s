@@ -3,6 +3,7 @@ package softphone4s.loopback
 import cats.effect.{IO, Resource}
 import cats.syntax.all.*
 import com.comcast.ip4s.*
+import org.typelevel.log4cats.StructuredLogger
 import org.typelevel.log4cats.noop.NoOpLogger
 import softphone4s.{Softphone, SoftphoneStreaming}
 import softphone4s.config.{AccountConfig, SoftphoneConfig}
@@ -71,19 +72,21 @@ object Loopback {
   def pair(
       settings: Settings = Settings(),
       aliceMetrics: Option[Metrics[IO]] = None,
-      bobMetrics: Option[Metrics[IO]] = None
+      bobMetrics: Option[Metrics[IO]] = None,
+      aliceLogger: StructuredLogger[IO] = NoOpLogger.impl[IO],
+      bobLogger: StructuredLogger[IO] = NoOpLogger.impl[IO]
   ): Resource[IO, Pair] =
     (
       SoftphoneStreaming.resource[IO](
         config("alice", AlicePort, 19430, settings),
         audio,
-        NoOpLogger.impl[IO],
+        aliceLogger,
         metrics = aliceMetrics
       ),
       SoftphoneStreaming.resource[IO](
         config("bob", BobPort, 19450, settings),
         audio,
-        NoOpLogger.impl[IO],
+        bobLogger,
         metrics = bobMetrics
       )
     ).mapN(Pair(_, _))

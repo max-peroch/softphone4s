@@ -4,7 +4,9 @@ import cats.effect.IO
 import cats.syntax.all.*
 import cats.effect.testkit.TestControl
 import munit.CatsEffectSuite
+import org.typelevel.log4cats.StructuredLogger
 import org.typelevel.log4cats.noop.NoOpLogger
+import org.typelevel.log4cats.testing.StructuredTestingLogger
 import softphone4s.SipLiterals.*
 import softphone4s.model.*
 import softphone4s.transaction.TransactionExamples.*
@@ -38,7 +40,8 @@ class TransactionManagerSuite extends CatsEffectSuite {
       dropB: (Int, SipMessage) => Boolean = (_, _) => false,
       withB: Boolean = true,
       eventsA: TransactionEvent => IO[Unit] = _ => IO.unit,
-      eventsB: TransactionEvent => IO[Unit] = _ => IO.unit
+      eventsB: TransactionEvent => IO[Unit] = _ => IO.unit,
+      logger: StructuredLogger[IO] = NoOpLogger.impl[IO]
   ) =
     for {
       pair <- cats.effect.Resource.eval(InMemoryTransport.pair[IO])
@@ -47,7 +50,7 @@ class TransactionManagerSuite extends CatsEffectSuite {
       la   <- TransactionManager.resourceObserving(
         ta,
         TransactionConfig(),
-        NoOpLogger.impl[IO],
+        logger,
         _ => IO.unit,
         eventsA
       )
@@ -57,7 +60,7 @@ class TransactionManagerSuite extends CatsEffectSuite {
             .resourceObserving(
               tb,
               TransactionConfig(),
-              NoOpLogger.impl[IO],
+              logger,
               _ => IO.unit,
               eventsB
             )
@@ -406,6 +409,39 @@ class TransactionManagerSuite extends CatsEffectSuite {
           _  <- reply(st, 500)
           _  <- IO.sleep(1.second)
         } yield ()
+      }
+    )
+  }
+
+  test(
+    "a line about a transaction says which one: its branch, method and status"
+  ) {
+    TestControl.executeEmbed(
+      StructuredTestingLogger.ref[IO](true, true, true, true, true).flatMap {
+        logger =>
+          peers(logger = logger).use { (la, lb, _, _) =>
+            for {
+              _  <- client(la, options, b)
+              st <- lb.get.incoming.head.compile.lastOrError
+              _  <- reply(st, 200)
+              _  <- IO
+                .sleep(40.seconds) // Timer J has ended the server transaction
+              _      <- reply(st, 500)
+              _      <- IO.sleep(1.second)
+              logged <- logger.logged
+            } yield {
+              val dropped =
+                logged.filter(_.message.startsWith("Dropping a response"))
+              assertEquals(dropped.size, 1, logged.map(_.message).toString)
+              val ctx = dropped.head.ctx
+              assert(
+                ctx.get("branch").exists(_.startsWith("z9hG4bK")),
+                ctx.toString
+              )
+              assertEquals(ctx.get("method"), Some("OPTIONS"))
+              assertEquals(ctx.get("status"), Some("500"))
+            }
+          }
       }
     )
   }

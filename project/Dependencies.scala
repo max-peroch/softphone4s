@@ -42,6 +42,8 @@ object Dependencies {
   // Logging
   val log4catsCore  = "org.typelevel" %% "log4cats-core"  % log4catsVersion
   val log4catsSlf4j = "org.typelevel" %% "log4cats-slf4j" % log4catsVersion
+  val log4catsTesting =
+    "org.typelevel" %% "log4cats-testing" % log4catsVersion % Test
   val scribe        = "com.outr"      %% "scribe"         % scribeVersion
   val scribeSlf4j   = "com.outr"      %% "scribe-slf4j"   % scribeVersion
 

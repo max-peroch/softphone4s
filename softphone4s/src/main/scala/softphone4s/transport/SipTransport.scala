@@ -8,6 +8,7 @@ import fs2.{Chunk, Stream}
 import scala.concurrent.duration.FiniteDuration
 import fs2.io.net.{Datagram, Network}
 import org.typelevel.log4cats.StructuredLogger
+import softphone4s.logging.LogFields
 import softphone4s.codec.{ParseError, SipCodec}
 import softphone4s.model.SipMessage
 import softphone4s.stun.{Stun, StunClient}
@@ -27,7 +28,7 @@ object SipTransport {
         Network[F]
           .bindDatagramSocket(address = bindAddress)
           .evalTap(socket =>
-            logger.debug(Map("address" -> socket.address.toString))(
+            logger.debug(Map(LogFields.Address -> socket.address.toString))(
               "SIP transport bound"
             )
           )
@@ -57,8 +58,8 @@ object SipTransport {
                         logger
                           .warn(
                             Map(
-                              "error" -> err.message,
-                              "from"  -> datagram.remote.toString
+                              LogFields.Error -> err.message,
+                              "from"          -> datagram.remote.toString
                             )
                           )(
                             "Failed to decode SIP message"

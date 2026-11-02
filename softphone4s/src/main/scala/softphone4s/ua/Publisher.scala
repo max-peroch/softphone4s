@@ -7,6 +7,7 @@ import cats.effect.{Async, Deferred, Fiber, Ref, Resource}
 import cats.syntax.all.*
 import fs2.concurrent.{Channel, Signal, SignallingRef}
 import org.typelevel.log4cats.StructuredLogger
+import softphone4s.logging.LogFields
 import softphone4s.Publication
 import softphone4s.fsm.SipMessages.*
 import softphone4s.fsm.TransactionFailure
@@ -45,12 +46,19 @@ private[softphone4s] object Publisher {
       requested: Expires,
       entropy: Entropy[F],
       stopTimeout: FiniteDuration,
-      logger: StructuredLogger[F]
+      phoneLogger: StructuredLogger[F]
   ): Resource[F, Publication[F]] =
     for {
       supervisor <- Supervisor[F](await = false)
-      timers     <- Timers.resource[F, PublicationTimer]
-      agent      <- Resource.eval(
+      logger = phoneLogger.addContext(
+        Map(
+          LogFields.Account    -> ways.head.endpoint.accountUri.render,
+          LogFields.Event      -> event.render,
+          LogFields.Presentity -> presentity.render
+        )
+      )
+      timers <- Timers.resource[F, PublicationTimer]
+      agent  <- Resource.eval(
         Agent.create(
           layer,
           Aim(ways, presentity, event, requested),
@@ -334,9 +342,9 @@ private[softphone4s] object Publisher {
                 val wait = RegistrationFsm.backoff(failures.max(1))
                 logger.debug(
                   Map(
-                    "presentity" -> presentity.render,
-                    "ending"     -> ending.toString,
-                    "wait"       -> wait.toString
+                    LogFields.Presentity -> presentity.render,
+                    "ending"             -> ending.toString,
+                    "wait"               -> wait.toString
                   )
                 )("A publication failed, trying again") >>
                   signal.set(PublicationStatus.Retrying(ending, wait)) >>

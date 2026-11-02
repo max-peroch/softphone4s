@@ -6,6 +6,7 @@ import cats.syntax.all.*
 import com.comcast.ip4s.{IpAddress, SocketAddress}
 import fs2.Stream
 import org.typelevel.log4cats.StructuredLogger
+import softphone4s.logging.LogFields
 import softphone4s.model.*
 import softphone4s.runtime.Timers
 import softphone4s.transport.{Inbound, Transport}
@@ -80,7 +81,9 @@ object TransactionManager {
             .evalScan(Table[F](Map.empty, Map.empty)) { (table, command) =>
               engine.step(table, command).handleErrorWith { error =>
                 logger
-                  .error(Map("error" -> String.valueOf(error.getMessage)))(
+                  .error(
+                    Map(LogFields.Error -> String.valueOf(error.getMessage))
+                  )(
                     "Transaction layer failed on a command"
                   )
                   .as(table)

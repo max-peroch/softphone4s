@@ -6,6 +6,7 @@ import cats.effect.{Async, Deferred, Ref}
 import cats.syntax.all.*
 import com.comcast.ip4s.{IpAddress, SocketAddress}
 import org.typelevel.log4cats.StructuredLogger
+import softphone4s.logging.LogFields
 import softphone4s.codec.SdpCodec
 import softphone4s.sdp.Capabilities
 import softphone4s.codec.SdpCodec.AudioOffer
@@ -61,7 +62,7 @@ private[softphone4s] final class SessionAcks[F[_]: Async] private (
       case Left(_)  => Async[F].unit
       case Right(_) =>
         pending.update(_ - cseq) >>
-          logger.warn(Map("cseq" -> cseq.value.toString))(
+          logger.warn(Map(LogFields.Cseq -> cseq.value.toString))(
             "No ACK for the 200 to a re-INVITE"
           )
     }

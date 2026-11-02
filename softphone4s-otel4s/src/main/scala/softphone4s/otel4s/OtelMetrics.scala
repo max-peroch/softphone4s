@@ -184,6 +184,6 @@ object OtelMetrics {
           case TransactionSide.Server => "server"
         }
       ),
-      Attribute("method", method.toString.toUpperCase)
+      Attribute("method", method.token)
     )
 }

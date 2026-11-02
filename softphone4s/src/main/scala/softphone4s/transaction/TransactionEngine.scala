@@ -6,6 +6,7 @@ import cats.syntax.all.*
 import com.comcast.ip4s.{IpAddress, SocketAddress}
 import fs2.Stream
 import org.typelevel.log4cats.StructuredLogger
+import softphone4s.logging.LogFields
 import softphone4s.model.*
 import softphone4s.runtime.Timers
 import softphone4s.transport.{Inbound, Transport}
@@ -66,7 +67,13 @@ private[transaction] final class TransactionEngine[F[_]: Concurrent](
       case request: SipRequest =>
         ServerKey.forRequest(request) match {
           case Left(error) =>
-            logger.debug(Map("reason" -> error.message))(
+            logger.debug(
+              Map(
+                LogFields.Reason -> error.message,
+                LogFields.Method -> request.method.token,
+                LogFields.CallId -> request.headers.callId.value
+              )
+            )(
               "Request has no usable branch"
             ) >>
               unmatchedQueue.offer(inbound).as(table)
@@ -255,7 +262,13 @@ private[transaction] final class TransactionEngine[F[_]: Concurrent](
       serverEvent(table, key, ServerEvent.Respond(response))
     else
       logger
-        .debug(Map("status" -> response.statusCode.toString))(
+        .debug(
+          Map(
+            LogFields.Status -> response.statusCode.toString,
+            LogFields.Branch -> key.branch.value,
+            LogFields.Method -> key.method.token
+          )
+        )(
           "Dropping a response to a transaction that has ended"
         )
         .as(table)
@@ -313,10 +326,29 @@ private[transaction] final class TransactionEngine[F[_]: Concurrent](
       message: SipMessage
   ): F[Unit] =
     transport.send(to, message).handleErrorWith { error =>
-      logger.warn(Map("error" -> String.valueOf(error.getMessage)))(
+      logger.warn(
+        Map(LogFields.Error -> String.valueOf(error.getMessage)) ++ describe(id)
+      )(
         "Send failed"
       ) >>
         commands.offer(Command.SendFailed(id))
+    }
+
+  /** The fields that say which transaction a log line is about. */
+  private def describe(id: TransactionId): Map[String, String] =
+    id match {
+      case TransactionId.Client(key) =>
+        Map(
+          LogFields.Branch -> key.branch.value,
+          LogFields.Method -> key.method.token,
+          LogFields.Side   -> "client"
+        )
+      case TransactionId.Server(key) =>
+        Map(
+          LogFields.Branch -> key.branch.value,
+          LogFields.Method -> key.method.token,
+          LogFields.Side   -> "server"
+        )
     }
 
   private def cancelTimers(id: TransactionId): F[Unit] =

@@ -8,6 +8,7 @@ import com.comcast.ip4s.*
 import fs2.io.net.Socket
 import fs2.{Chunk, Stream}
 import org.typelevel.log4cats.StructuredLogger
+import softphone4s.logging.LogFields
 import softphone4s.codec.SipCodec
 import softphone4s.model.{SipMessage, SipRequest, SoftphoneError}
 
@@ -128,8 +129,8 @@ object StreamTransport {
       write(to, name, bytes).handleErrorWith { error =>
         logger.debug(
           Map(
-            "to"    -> to.toString,
-            "error" -> String.valueOf(error.getMessage)
+            "to"            -> to.toString,
+            LogFields.Error -> String.valueOf(error.getMessage)
           )
         )("Send failed; trying a new connection") >>
           evict(to, name) >> write(to, name, bytes)
@@ -201,8 +202,8 @@ object StreamTransport {
           slot.ready.complete(Left(error)).void >>
             logger.debug(
               Map(
-                "to"    -> key.address.toString,
-                "error" -> String.valueOf(error.getMessage)
+                "to"            -> key.address.toString,
+                LogFields.Error -> String.valueOf(error.getMessage)
               )
             )("Connection ended")
         }
@@ -216,7 +217,7 @@ object StreamTransport {
           .handleErrorWith { error =>
             slot.ready.complete(Left(error)).void >>
               logger.debug(
-                Map("error" -> String.valueOf(error.getMessage))
+                Map(LogFields.Error -> String.valueOf(error.getMessage))
               )("An incoming connection ended")
           }
           .guarantee(forget(slot))
@@ -331,7 +332,9 @@ object StreamTransport {
       frame match {
         case Left(error) =>
           logger
-            .warn(Map("from" -> from.toString, "error" -> error.message))(
+            .warn(
+              Map("from" -> from.toString, LogFields.Error -> error.message)
+            )(
               "Closing a connection that cannot be framed"
             )
             .as(false)
@@ -351,7 +354,7 @@ object StreamTransport {
             case Left(error) =>
               logger
                 .warn(
-                  Map("from" -> from.toString, "error" -> error.message)
+                  Map("from" -> from.toString, LogFields.Error -> error.message)
                 )("Failed to decode SIP message")
                 .as(true)
           }

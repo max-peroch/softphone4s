@@ -9,6 +9,7 @@ import com.comcast.ip4s.{IpAddress, SocketAddress}
 import fs2.Stream
 import fs2.concurrent.{Channel, Signal, SignallingRef}
 import org.typelevel.log4cats.StructuredLogger
+import softphone4s.logging.LogFields
 import softphone4s.Subscription
 import softphone4s.fsm.SipMessages.*
 import softphone4s.fsm.{TransactionFailure}
@@ -58,12 +59,19 @@ private[softphone4s] object Subscriber {
       nextHop: (TransportProtocol, SipUri) => F[SocketAddress[IpAddress]],
       entropy: Entropy[F],
       stopTimeout: FiniteDuration,
-      logger: StructuredLogger[F]
+      phoneLogger: StructuredLogger[F]
   ): Resource[F, Subscription[F]] =
     for {
       supervisor <- Supervisor[F](await = false)
-      timers     <- Timers.resource[F, SubscriptionTimer]
-      agent      <- Resource.eval(
+      logger = phoneLogger.addContext(
+        Map(
+          LogFields.Account -> ways.head.endpoint.accountUri.render,
+          LogFields.Event   -> event.render,
+          LogFields.Target  -> target.render
+        )
+      )
+      timers <- Timers.resource[F, SubscriptionTimer]
+      agent  <- Resource.eval(
         Agent.create(
           layer,
           ways,
@@ -256,7 +264,7 @@ private[softphone4s] object Subscriber {
             else
               NotifyInfo.from(request) match {
                 case Left(error) =>
-                  logger.debug(Map("error" -> error.message))(
+                  logger.debug(Map(LogFields.Error -> error.message))(
                     "Refusing a NOTIFY"
                   ) >>
                     refuse(400, "Bad Request")

@@ -7,6 +7,8 @@ import com.comcast.ip4s.{IpAddress, SocketAddress}
 import fs2.concurrent.Channel
 import fs2.{Pipe, Stream}
 import org.typelevel.log4cats.StructuredLogger
+import softphone4s.metrics.CallDirection
+import softphone4s.logging.LogFields
 import softphone4s.Call
 import softphone4s.codec.{SdpCodec, SipCodec}
 import softphone4s.sdp.Capabilities
@@ -209,17 +211,15 @@ private[softphone4s] class OutboundCall[F[_]: Async] private (
     case SipEvent.RequestReceived(req) =>
       logger.debug(
         Map(
-          "callId" -> req.headers.callId.value,
-          "method" -> req.method.toString
+          LogFields.Method -> req.method.token
         )
       )("Received SIP request")
     case SipEvent.ResponseReceived(res) =>
       logger.debug(
         Map(
-          "callId"     -> res.headers.callId.value,
-          "cseq"       -> res.headers.cseq.method.toString,
-          "statusCode" -> res.statusCode.toString,
-          "reason"     -> res.reason
+          LogFields.Cseq   -> res.headers.cseq.method.toString,
+          LogFields.Status -> res.statusCode.toString,
+          LogFields.Reason -> res.reason
         )
       )("Received SIP response")
     case SipEvent.TransactionFailed(failure) =>
@@ -329,8 +329,8 @@ private[softphone4s] class OutboundCall[F[_]: Async] private (
               uplink.set(next) >>
                 logger.info(
                   Map(
-                    "to"        -> next.peer.toString,
-                    "transport" -> next.endpoint.transport.token
+                    "to"                -> next.peer.toString,
+                    LogFields.Transport -> next.endpoint.transport.token
                   )
                 )("No answer; trying the next server") >>
                 retry.as(true)
@@ -355,7 +355,7 @@ private[softphone4s] class OutboundCall[F[_]: Async] private (
         newBranch().flatMap { branch =>
           inviteBranch.set(branch) >>
             logger.debug(
-              Map("callee" -> callee.render, "callId" -> callId.value)
+              Map("callee" -> callee.render)
             )("Sending INVITE") >>
             startClient(
               endpoint.buildInvite(
@@ -392,9 +392,8 @@ private[softphone4s] class OutboundCall[F[_]: Async] private (
           _      <- inviteBranch.set(branch)
           _      <- logger.debug(
             Map(
-              "callId"     -> ctx.callId.value,
-              "cseq"       -> ctx.cseq.value.toString,
-              "nonceCount" -> nonceCount.render
+              LogFields.Cseq -> ctx.cseq.value.toString,
+              "nonceCount"   -> nonceCount.render
             )
           )("Retrying INVITE with authentication")
           _ <- startClient(
@@ -540,7 +539,7 @@ private[softphone4s] class OutboundCall[F[_]: Async] private (
             }
           case Left(reject) =>
             // An answer we cannot use: no media can flow, so the call goes.
-            logger.warn(Map("reason" -> reject.message))(
+            logger.warn(Map(LogFields.Reason -> reject.message))(
               "The answer cannot be used; hanging up"
             ) >> hangup
         }
@@ -565,7 +564,7 @@ private[softphone4s] class OutboundCall[F[_]: Async] private (
           case LocalHangup => Async[F].unit
           case _           => callEnded.complete(err).void
         }
-        logger.debug(Map("reason" -> reason.toString))("Call ended") >>
+        logger.debug(Map(LogFields.Reason -> reason.toString))("Call ended") >>
           // Early media may have started it, and a call that never got to be
           // answered would otherwise leave it running.
           media.stop() >>
@@ -605,11 +604,19 @@ private[softphone4s] object OutboundCall {
       media: MediaSession[F],
       timers: Timers[F, CallTimer],
       inviteTimeout: FiniteDuration,
-      logger: StructuredLogger[F],
+      phoneLogger: StructuredLogger[F],
       extraHeaders: List[ExtensionHeader] = Nil
   ): F[OutboundCall[F]] =
     for {
-      localTag     <- entropy.tag
+      localTag <- entropy.tag
+      // Every line the call logs says which call it is.
+      logger = phoneLogger.addContext(
+        Map(
+          LogFields.CallId    -> callId.value,
+          LogFields.Direction -> LogFields.direction(CallDirection.Outgoing),
+          LogFields.Account   -> first.endpoint.accountUri.render
+        )
+      )
       branch       <- entropy.branch
       inviteBranch <- Ref[F].of(branch)
       uplink       <- Ref[F].of(first)
@@ -672,7 +679,7 @@ private[softphone4s] object OutboundCall {
       )
       _ <- timers.start(CallTimer.InviteTimeout, inviteTimeout)
       _ <- logger.debug(
-        Map("callee" -> callee.render, "callId" -> callId.value)
+        Map("callee" -> callee.render)
       )("Sending INVITE")
       _ <- call.sendInitialInvite(callee, callId, localTag, extraHeaders)
     } yield call

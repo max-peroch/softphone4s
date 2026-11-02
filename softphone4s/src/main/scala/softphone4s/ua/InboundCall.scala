@@ -8,6 +8,8 @@ import com.comcast.ip4s.{IpAddress, SocketAddress}
 import fs2.concurrent.Channel
 import fs2.{Pipe, Stream}
 import org.typelevel.log4cats.StructuredLogger
+import softphone4s.metrics.CallDirection
+import softphone4s.logging.LogFields
 import softphone4s.{Call, IncomingCall}
 import softphone4s.codec.SdpCodec
 import softphone4s.fsm.*
@@ -346,7 +348,7 @@ private[softphone4s] final class InboundCall[F[_]: Async] private (
           case Right(plan) =>
             media.start(plan, supervisor, dtmfChannel.send(_).void).void
           case Left(reject) =>
-            logger.error(Map("reason" -> reject.message))(
+            logger.error(Map(LogFields.Reason -> reject.message))(
               "The offer we accepted cannot be answered; no media"
             )
         }
@@ -372,7 +374,9 @@ private[softphone4s] final class InboundCall[F[_]: Async] private (
           case TerminationReason.LocalHangup => Async[F].unit
           case _                             => callEnded.complete(err).void
         }
-        logger.debug(Map("reason" -> reason.toString))("Incoming call ended") >>
+        logger.debug(Map(LogFields.Reason -> reason.toString))(
+          "Incoming call ended"
+        ) >>
           cancelledByCaller
             .complete(())
             .void
@@ -420,10 +424,18 @@ private[softphone4s] object InboundCall {
       transactionConfig: TransactionConfig,
       answerTimeout: FiniteDuration,
       hangupTimeout: FiniteDuration,
-      logger: StructuredLogger[F]
+      phoneLogger: StructuredLogger[F]
   ): F[InboundCall[F]] =
     for {
       localTag <- entropy.tag
+      // Every line the call logs says which call it is.
+      logger = phoneLogger.addContext(
+        Map(
+          LogFields.CallId    -> invite.request.headers.callId.value,
+          LogFields.Direction -> LogFields.direction(CallDirection.Incoming),
+          LogFields.Account   -> account.render
+        )
+      )
       (state, firstActions) = InboundCallFsm.start(
         invite.request,
         localTag,

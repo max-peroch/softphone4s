@@ -6,6 +6,7 @@ import cats.effect.Ref
 import cats.syntax.all.*
 import com.comcast.ip4s.{IpAddress, SocketAddress}
 import org.typelevel.log4cats.StructuredLogger
+import softphone4s.logging.LogFields
 import softphone4s.fsm.{StreamSwitch, TransactionFailure}
 import softphone4s.model.*
 import softphone4s.transaction.{
@@ -66,7 +67,7 @@ private[ua] final class DialogWire[F[_]: Async](
       resolve(uplink.endpoint.transport, dialog.route.nextHop)
         .handleErrorWith { error =>
           logger
-            .warn(Map("error" -> String.valueOf(error.getMessage)))(
+            .warn(Map(LogFields.Error -> String.valueOf(error.getMessage)))(
               s"Cannot resolve the next hop; using $fallback"
             )
             .as(uplink.peer)
@@ -90,7 +91,7 @@ private[ua] final class DialogWire[F[_]: Async](
           for {
             tcpTo <- resolve(TransportProtocol.Tcp, dialog.route.nextHop)
               .handleError(_ => to)
-            _ <- logger.info(Map("method" -> request.method.toString))(
+            _ <- logger.info(Map(LogFields.Method -> request.method.token))(
               "Request too big for UDP; sending it over TCP"
             )
             _ <- startClient(
@@ -141,7 +142,7 @@ private[ua] final class DialogWire[F[_]: Async](
       case Right(transaction) =>
         supervisor.supervise(forward(transaction, failover)).void
       case Left(error) =>
-        logger.warn(Map("error" -> error.message))(
+        logger.warn(Map(LogFields.Error -> error.message))(
           "Cannot start a transaction"
         ) >> report(
           DialogWire.Notice.Failed(TransactionFailure.TransportFailed)
@@ -188,7 +189,7 @@ private[ua] final class DialogWire[F[_]: Async](
       case Some(transaction) =>
         transaction.respond(response).as(transaction.from)
       case None =>
-        logger.warn(Map("method" -> request.method.toString))(
+        logger.warn(Map(LogFields.Method -> request.method.token))(
           "No server transaction to answer; sending the response directly"
         ) >> current.flatMap(uplink =>
           layer.transmit(response, uplink.peer).as(uplink.peer)

@@ -10,6 +10,7 @@ import fs2.Stream
 import fs2.concurrent.{Channel, SignallingRef}
 import fs2.io.net.Network
 import org.typelevel.log4cats.StructuredLogger
+import softphone4s.logging.LogFields
 import softphone4s.config.{ObservedAddresses, SoftphoneConfig, StunConfig}
 import softphone4s.dns.{DnsJavaRecords, DnsRecords, TargetResolver}
 import softphone4s.fsm.CallTimer
@@ -126,7 +127,9 @@ class SoftphoneStreaming[F[_]: Async: Network] private (
         endpoints
           .localIpFor(calleeAddr)
           .flatTap(ip =>
-            logger.info(Map("address" -> ip.toString))("Advertising local IP")
+            logger.info(Map(LogFields.Address -> ip.toString))(
+              "Advertising local IP"
+            )
           )
       )
       endpoint <- endpoints
@@ -452,7 +455,7 @@ object SoftphoneStreaming {
     val round: F[Unit] =
       records.addresses(stun.host).flatMap {
         case Nil =>
-          logger.warn(Map("host" -> stun.host.toString))(
+          logger.warn(Map(LogFields.Host -> stun.host.toString))(
             "The STUN server has no address"
           )
         case address :: _ =>
@@ -464,17 +467,20 @@ object SoftphoneStreaming {
             )
             .flatMap {
               case Right(seen) =>
-                logger.debug(Map("address" -> seen.toString))(
+                logger.debug(Map(LogFields.Address -> seen.toString))(
                   "STUN says we are seen at"
                 ) >> publicSip.set(Some(seen))
               case Left(error) =>
                 logger.warn(
-                  Map("host" -> stun.host.toString, "error" -> error.toString)
+                  Map(
+                    LogFields.Host  -> stun.host.toString,
+                    LogFields.Error -> error.toString
+                  )
                 )("The STUN server did not tell us our address")
             }
       }
     (round.handleErrorWith(e =>
-      logger.warn(Map("error" -> e.toString))("STUN round failed")
+      logger.warn(Map(LogFields.Error -> e.toString))("STUN round failed")
     ) >> Async[F].sleep(stun.refresh)).foreverM
   }
 }

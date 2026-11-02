@@ -8,6 +8,7 @@ import cats.syntax.all.*
 import com.comcast.ip4s.{IpAddress, SocketAddress}
 import fs2.concurrent.{Channel, Signal, SignallingRef}
 import org.typelevel.log4cats.StructuredLogger
+import softphone4s.logging.LogFields
 import softphone4s.fsm.{TimerAction, TransactionFailure}
 import softphone4s.fsm.SipMessages.*
 import softphone4s.model.*
@@ -57,12 +58,15 @@ object Registration {
       entropy: Entropy[F],
       requested: Expires,
       stopTimeout: FiniteDuration,
-      logger: StructuredLogger[F]
+      phoneLogger: StructuredLogger[F]
   ): Resource[F, Registration[F]] =
     for {
       supervisor <- Supervisor[F](await = false)
-      timers     <- Timers.resource[F, RegistrationTimer]
-      agent      <- Resource.eval(
+      logger = phoneLogger.addContext(
+        Map(LogFields.Account -> uplinks.head.endpoint.accountUri.render)
+      )
+      timers <- Timers.resource[F, RegistrationTimer]
+      agent  <- Resource.eval(
         Agent.create(
           layer,
           uplinks,
@@ -225,16 +229,16 @@ object Registration {
             )
             _ <- logger.debug(
               Map(
-                "cseq"     -> context.cseq.value.toString,
-                "lifetime" -> lifetime.value.toString,
-                "auth"     -> auth.isDefined.toString
+                LogFields.Cseq -> context.cseq.value.toString,
+                "lifetime"     -> lifetime.value.toString,
+                "auth"         -> auth.isDefined.toString
               )
             )("Sending REGISTER")
             _ <- layer.client(request, uplink.peer).flatMap {
               case Right(transaction) =>
                 supervisor.supervise(forward(transaction)).void
               case Left(error) =>
-                logger.warn(Map("error" -> error.message))(
+                logger.warn(Map(LogFields.Error -> error.message))(
                   "Cannot start a REGISTER"
                 ) >>
                   events
@@ -344,8 +348,8 @@ object Registration {
           case other =>
             logger.debug(
               Map(
-                "contact" -> old.render,
-                "status"  -> other.fold("none")(_.statusCode.toString)
+                "contact"        -> old.render,
+                LogFields.Status -> other.fold("none")(_.statusCode.toString)
               )
             )("Removed the old binding")
         }

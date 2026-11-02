@@ -5,6 +5,7 @@ import cats.effect.*
 import cats.syntax.all.*
 import com.comcast.ip4s.*
 import org.typelevel.log4cats.StructuredLogger
+import softphone4s.logging.LogFields
 import softphone4s.dns.{ResolvedTarget, TargetResolver}
 import softphone4s.model.*
 
@@ -97,8 +98,8 @@ private[softphone4s] final class Uplinks[F[_]: Async](
         logger
           .debug(
             Map(
-              "target" -> other.address.toString,
-              "error"  -> String.valueOf(error.getMessage)
+              LogFields.Target -> other.address.toString,
+              LogFields.Error  -> String.valueOf(error.getMessage)
             )
           )("Not using this target as a fallback")
           .as(Nil)
@@ -132,8 +133,8 @@ private[softphone4s] final class Uplinks[F[_]: Async](
             logger
               .debug(
                 Map(
-                  "target" -> other.address.toString,
-                  "error"  -> String.valueOf(error.getMessage)
+                  LogFields.Target -> other.address.toString,
+                  LogFields.Error  -> String.valueOf(error.getMessage)
                 )
               )("Not using this target as a fallback")
               .as(Nil)

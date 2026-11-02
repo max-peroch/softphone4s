@@ -6,6 +6,7 @@ import com.comcast.ip4s.{GenSocketAddress, IpAddress, SocketAddress}
 import fs2.Stream
 import fs2.io.net.{Network, Socket}
 import org.typelevel.log4cats.StructuredLogger
+import softphone4s.logging.LogFields
 import softphone4s.model.SoftphoneError
 import softphone4s.transport.StreamTransport.{Accepted, Connected, Listener}
 
@@ -38,7 +39,7 @@ object StreamListener {
                     )
                     .handleErrorWith(error =>
                       logger.debug(
-                        Map("error" -> String.valueOf(error.getMessage))
+                        Map(LogFields.Error -> String.valueOf(error.getMessage))
                       )("An incoming connection could not be served")
                     )
                 )

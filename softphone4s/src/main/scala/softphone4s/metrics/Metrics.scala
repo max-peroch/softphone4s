@@ -3,6 +3,7 @@ package softphone4s.metrics
 import cats.MonadThrow
 import cats.syntax.all.*
 import org.typelevel.log4cats.StructuredLogger
+import softphone4s.logging.LogFields
 import softphone4s.model.AccountId
 import softphone4s.registration.RegistrationState
 import softphone4s.transaction.TransactionEvent
@@ -49,7 +50,10 @@ object Metrics {
     def safely(what: String)(effect: F[Unit]): F[Unit] =
       effect.handleErrorWith(error =>
         logger.warn(
-          Map("metric" -> what, "error" -> String.valueOf(error.getMessage))
+          Map(
+            "metric"        -> what,
+            LogFields.Error -> String.valueOf(error.getMessage)
+          )
         )("A metric could not be recorded")
       )
     new Metrics[F] {

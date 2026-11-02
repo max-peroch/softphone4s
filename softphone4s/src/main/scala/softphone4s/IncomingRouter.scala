@@ -9,6 +9,7 @@ import fs2.Stream
 import fs2.concurrent.Channel
 import fs2.io.net.Network
 import org.typelevel.log4cats.StructuredLogger
+import softphone4s.logging.LogFields
 import softphone4s.config.SoftphoneConfig
 import softphone4s.fsm.CallTimer
 import softphone4s.metrics.CallDirection
@@ -94,7 +95,7 @@ private[softphone4s] final class IncomingRouter[F[_]: Async: Network](
       case None if request.method == SipMethod.Message =>
         acceptMessage(transaction)
       case None =>
-        logger.debug(Map("callId" -> request.headers.callId.value))(
+        logger.debug(Map(LogFields.CallId -> request.headers.callId.value))(
           "Request for a call that does not exist"
         ) >>
           transaction.respond(
@@ -144,7 +145,7 @@ private[softphone4s] final class IncomingRouter[F[_]: Async: Network](
             messageQueue.tryOffer(message).flatMap {
               case true  => transaction.respond(SipMessages.messageOk(request))
               case false =>
-                logger.warn(Map("account" -> account.id.render))(
+                logger.warn(Map(LogFields.Account -> account.id.render))(
                   "A message was refused: nobody is reading them"
                 ) >> refuse(FailureStatus.ServiceUnavailable)
             }
@@ -162,7 +163,9 @@ private[softphone4s] final class IncomingRouter[F[_]: Async: Network](
           case Some(channel) =>
             channel.send(DialogInput.Unmatched(inbound)).void
           case None =>
-            logger.debug(Map("callId" -> inbound.message.headers.callId.value))(
+            logger.debug(
+              Map(LogFields.CallId -> inbound.message.headers.callId.value)
+            )(
               "Dropping a message for a call that does not exist"
             )
         })
@@ -188,7 +191,9 @@ private[softphone4s] final class IncomingRouter[F[_]: Async: Network](
               inboundCall(invite, account, channel)
                 .handleErrorWith { error =>
                   logger
-                    .error(Map("error" -> String.valueOf(error.getMessage)))(
+                    .error(
+                      Map(LogFields.Error -> String.valueOf(error.getMessage))
+                    )(
                       "Could not take the incoming call"
                     ) >> invite.respond(
                     TransactionMessages.responseTo(
