@@ -4,9 +4,11 @@ import com.comcast.ip4s.*
 import munit.FunSuite
 import softphone4s.SipLiterals.*
 import softphone4s.config.{AccountConfig, SoftphoneConfig}
+import softphone4s.codec.SipCodec
 import softphone4s.fsm.SipMessages.*
 import softphone4s.messaging.MessageContent
 import softphone4s.model.*
+import softphone4s.publication.{EntityTag, PublicationBody}
 
 import scala.concurrent.duration.*
 
@@ -588,6 +590,76 @@ class SipMessagesSuite extends FunSuite {
       accept,
       auth
     )
+
+  private def etag(text: String) =
+    EntityTag.parse(text).fold(e => fail(e), identity)
+
+  private def publish(
+      entityTag: Option[EntityTag],
+      body: Option[PublicationBody],
+      lifetime: Int = 3600,
+      auth: Option[ExtensionHeader] = None
+  ) =
+    endpoint.buildPublish(
+      uri("sip:alice@sip.example.com"),
+      callId("pub@host"),
+      tag("ltag"),
+      cseqNumber(1),
+      branch("z9hG4bKpub"),
+      presenceEvent,
+      Expires(lifetime).fold(e => fail(e), identity),
+      entityTag,
+      body,
+      auth
+    )
+
+  private val document = PublicationBody(pidf, "<presence/>")
+
+  test("the first PUBLISH carries the state and no tag") {
+    val request = publish(None, Some(document))
+    assertEquals(request.method, SipMethod.Publish)
+    assertEquals(request.requestUri.render, "sip:alice@sip.example.com")
+    assertEquals(
+      request.headers.from.render,
+      "<sip:alice@sip.example.com>;tag=ltag"
+    )
+    assertEquals(request.headers.to.render, "<sip:alice@sip.example.com>")
+    assertEquals(request.headers.cseq, cseq(1, SipMethod.Publish))
+    assertEquals(extra(request, "Event"), Some("presence"))
+    assertEquals(extra(request, "SIP-If-Match"), None)
+    assertEquals(request.headers.expires.map(_.value), Some(3600))
+    assertEquals(request.headers.contentType, Some(pidf))
+    assertEquals(request.body, "<presence/>")
+    // Nothing comes back to us in a PUBLISH.
+    assertEquals(request.headers.contacts, Nil)
+  }
+
+  test(
+    "a refresh has the tag and no body, a change has both, a removal Expires 0"
+  ) {
+    val refresh = publish(Some(etag("dx200xyz")), None)
+    assertEquals(extra(refresh, "SIP-If-Match"), Some("dx200xyz"))
+    assertEquals(refresh.body, "")
+    assertEquals(refresh.headers.contentType, None)
+    val change = publish(Some(etag("dx200xyz")), Some(document))
+    assertEquals(extra(change, "SIP-If-Match"), Some("dx200xyz"))
+    assertEquals(change.body, "<presence/>")
+    val removal = publish(Some(etag("dx200xyz")), None, lifetime = 0)
+    assert(removal.headers.expires.exists(_.isZero))
+  }
+
+  test("a retry after a challenge carries the Authorization") {
+    val auth = ExtensionHeader(FieldName.Authorization, "Digest x")
+    assertEquals(
+      extra(publish(None, Some(document), auth = Some(auth)), "Authorization"),
+      Some("Digest x")
+    )
+  }
+
+  test("a PUBLISH is encoded and read back") {
+    val request = publish(Some(etag("t1")), Some(document))
+    assertEquals(SipCodec.decode(SipCodec.encode(request)), Right(request))
+  }
 
   private def extra(request: SipRequest, name: String) =
     request.headers.others.find(_.name.matches(name)).map(_.value)

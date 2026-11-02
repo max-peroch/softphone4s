@@ -507,6 +507,7 @@ object SipParser {
       case "MESSAGE"   => Right(SipMethod.Message)
       case "SUBSCRIBE" => Right(SipMethod.Subscribe)
       case "NOTIFY"    => Right(SipMethod.Notify)
+      case "PUBLISH"   => Right(SipMethod.Publish)
       case other       => Left(ParseError.UnknownMethod(other))
     }
 }

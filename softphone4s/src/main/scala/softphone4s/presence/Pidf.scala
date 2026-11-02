@@ -38,6 +38,90 @@ private[presence] object Pidf {
       found  <- presence(root).leftMap(malformed)
     } yield found
 
+  // ---- Presence to XML -----------------------------------------------------------------
+
+  /** Whether `s` is made of characters XML 1.0 allows (§2.2). */
+  private def validText(s: String): Boolean =
+    s.codePoints.allMatch(c =>
+      c == 0x9 || c == 0xa || c == 0xd || (c >= 0x20 && c <= 0xd7ff) ||
+        (c >= 0xe000 && c <= 0xfffd) || (c >= 0x10000 && c <= 0x10ffff)
+    )
+
+  /** A name the `id` of a tuple can be: XML's `NCName`, which is what the
+    * schema of PIDF asks of an `xs:ID`.
+    */
+  private def validId(s: String): Boolean =
+    s.nonEmpty && isNCNameStart(s.head) && s.forall(isNCNameChar)
+
+  private val Escapes: Map[Char, String] =
+    Map('&' -> "amp", '<' -> "lt", '>' -> "gt", '"' -> "quot", '\'' -> "apos")
+
+  /** The text as events, the markup characters as references. The renderer
+    * writes what it is given as it is, so this is where it is made safe.
+    */
+  private def escaped(s: String): List[XmlTexty] =
+    s.foldRight(List.empty[XmlTexty]) { (c, rest) =>
+      Escapes
+        .get(c)
+        .fold {
+          rest match {
+            case XmlString(t, false) :: tail =>
+              XmlString(c.toString + t, false) :: tail
+            case _ => XmlString(c.toString, false) :: rest
+          }
+        }(name => XmlEntityRef(name) :: rest)
+    }
+
+  private def element(name: String, attributes: List[(String, String)])(
+      inside: List[XmlEvent]
+  ): List[XmlEvent] =
+    StartTag(
+      QName(name),
+      attributes.map((n, v) => Attr(QName(n), escaped(v))),
+      false
+    ) :: inside ::: List(EndTag(QName(name)))
+
+  private def leaf(name: String, value: String): List[XmlEvent] =
+    element(name, Nil)(escaped(value))
+
+  private def tupleEvents(t: PresenceTuple): List[XmlEvent] =
+    element("tuple", List("id" -> t.id))(
+      element("status", Nil)(
+        t.basic.toList.flatMap(b => leaf("basic", b.toString.toLowerCase))
+      ) ++
+        t.contact.toList.flatMap(leaf("contact", _)) ++
+        t.notes.flatMap(leaf("note", _))
+    )
+
+  def render(presence: Presence): Either[String, String] = {
+    val texts = presence.entity :: presence.notes ::: presence.tuples.flatMap(
+      t => t.id :: t.contact.toList ::: t.notes
+    )
+    for {
+      _ <- Either.cond(presence.entity.nonEmpty, (), "an empty entity")
+      _ <- presence.tuples
+        .find(t => !validId(t.id))
+        .fold(Right(()))(t => Left(s"not a tuple id: '${t.id}'"))
+      _ <- Either.cond(texts.forall(validText), (), "a character XML lacks")
+      events = XmlDecl("1.0", Some("UTF-8"), None) ::
+        element(
+          "presence",
+          List("xmlns" -> Namespace, "entity" -> presence.entity)
+        )(
+          presence.tuples.flatMap(tupleEvents) ++ presence.notes.flatMap(
+            leaf("note", _)
+          )
+        )
+      xml <- Stream
+        .emits(events)
+        .covary[Fallible]
+        .through(fs2.data.xml.render.raw[Fallible]())
+        .compile
+        .string
+        .leftMap(_.getMessage)
+    } yield xml
+  }
+
   private def malformed(reason: String): PackageError =
     PackageError.Malformed(reason)
 

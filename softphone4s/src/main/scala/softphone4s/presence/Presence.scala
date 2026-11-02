@@ -23,6 +23,13 @@ object Presence {
   /** The `presence` package: subscribe with it, and read PIDF. */
   val Package: EventPackage[Presence] = Pidf.Package
 
+  /** Our own presence as a PIDF document, for a PUBLISH. Refused if the entity
+    * is empty, a tuple's id is not a name XML allows, or a text has a character
+    * XML does not.
+    */
+  def render(presence: Presence): Either[String, String] =
+    Pidf.render(presence)
+
   /** Reads a PIDF document (RFC 3863), whether it came in a NOTIFY or not. */
   def parse(document: String): Either[PackageError, Presence] =
     Pidf.parse(document)

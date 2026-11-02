@@ -127,6 +127,20 @@ class SipParserSuite extends FunSuite {
     assertEquals(SipParser.parse(bytes("\r\n\r\n")), Left(ParseError.Empty))
   }
 
+  test("PUBLISH is a method") {
+    assertEquals(
+      parsed(
+        invite
+          .replace("INVITE sip", "PUBLISH sip")
+          .replace("CSeq: 1 INVITE", "CSeq: 1 PUBLISH")
+      ) match {
+        case r: SipRequest => r.method
+        case other         => fail(s"not a request: $other")
+      },
+      SipMethod.Publish
+    )
+  }
+
   test("an unknown method is a typed error") {
     assertEquals(
       failure(invite.replace("INVITE sip", "FROBNICATE sip")),

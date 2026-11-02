@@ -21,6 +21,8 @@ object FieldName {
   val Allow: FieldName              = "Allow"
   val Accept: FieldName             = "Accept"
   val Event: FieldName              = "Event"
+  val SipETag: FieldName            = "SIP-ETag"
+  val SipIfMatch: FieldName         = "SIP-If-Match"
 
   extension (n: FieldName) {
     def value: String                   = n

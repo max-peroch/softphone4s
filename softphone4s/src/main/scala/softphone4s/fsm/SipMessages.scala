@@ -3,6 +3,7 @@ package softphone4s.fsm
 import cats.data.NonEmptyList
 import softphone4s.codec.{DigestAuth, SdpCodec}
 import softphone4s.messaging.MessageContent
+import softphone4s.publication.{EntityTag, PublicationBody}
 import softphone4s.subscription.EventHeader
 import softphone4s.model.*
 import softphone4s.transaction.TransactionMessages
@@ -365,6 +366,45 @@ object SipMessages {
           expires = Some(expires),
           others = subscribeHeaders(event, accept) ++ authHeader.toList
         )
+      )
+
+    /** A PUBLISH of the state of `presentity` (RFC 3903), outside any dialog.
+      *
+      * With no `tag` and a `body` it publishes the state for the first time.
+      * With a `tag` it acts on the state that tag names: with a `body` it
+      * changes it, with none it refreshes it, and with `Expires: 0` it removes
+      * it. A PUBLISH with neither tag nor body says nothing and is refused by
+      * notifiers; the caller does not send one.
+      */
+    def buildPublish(
+        presentity: SipUri,
+        callId: CallId,
+        localTag: Tag,
+        cseq: CSeqNumber,
+        branch: Branch,
+        event: EventHeader,
+        expires: Expires,
+        tag: Option[EntityTag],
+        body: Option[PublicationBody],
+        authHeader: Option[ExtensionHeader] = None
+    ): SipRequest =
+      SipRequest(
+        method = SipMethod.Publish,
+        requestUri = presentity,
+        headers = SipHeaders(
+          callId = callId,
+          from = NameAddr.withTag(e.accountUri, localTag),
+          to = NameAddr(presentity),
+          vias = vias(e, branch),
+          cseq = CSeq(cseq, SipMethod.Publish),
+          expires = Some(expires),
+          contentType = body.map(_.contentType),
+          others = ExtensionHeader(FieldName.Event, event.render) ::
+            tag.toList.map(t =>
+              ExtensionHeader(FieldName.SipIfMatch, t.value)
+            ) ++ authHeader.toList
+        ),
+        body = body.fold("")(_.text)
       )
 
     /** A SUBSCRIBE within the subscription's `dialog`, to refresh it or to end

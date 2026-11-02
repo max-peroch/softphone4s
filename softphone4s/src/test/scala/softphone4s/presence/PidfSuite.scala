@@ -229,4 +229,83 @@ class PidfSuite extends FunSuite {
     assertEquals(Presence.Package.accept, List(MediaType.PidfXml))
     assertEquals(MediaType.PidfXml.render, "application/pidf+xml")
   }
+
+  // ---- Writing it -----------------------------------------------------------------
+
+  private val mine = Presence(
+    "pres:alice@example.com",
+    List(
+      PresenceTuple(
+        "t1",
+        Some(Availability.Open),
+        Some("sip:alice@192.0.2.1"),
+        List("at my desk")
+      ),
+      PresenceTuple("t2", Some(Availability.Closed), None, Nil),
+      PresenceTuple("t3", None, None, Nil)
+    ),
+    List("overall")
+  )
+
+  test("what is written is read back as it was") {
+    val xml = Presence.render(mine).fold(e => fail(e), identity)
+    assertEquals(Presence.parse(xml), Right(mine))
+    assert(xml.contains("""xmlns="urn:ietf:params:xml:ns:pidf""""), xml)
+  }
+
+  test("text with markup in it is escaped, and read back as it was") {
+    val tricky = Presence(
+      "pres:a&b<c>@\"d'",
+      List(
+        PresenceTuple(
+          "x",
+          Some(Availability.Open),
+          None,
+          List("1 < 2 && 3 > 2 \"yes\" 'ok' ]]>")
+        )
+      ),
+      Nil
+    )
+    val xml = Presence.render(tricky).fold(e => fail(e), identity)
+    assert(!xml.contains("<c>"), xml)
+    assertEquals(Presence.parse(xml), Right(tricky))
+  }
+
+  test("a note cannot close its element and add tuples of its own") {
+    val evil =
+      "</note><tuple id=\"evil\"><status><basic>open</basic></status></tuple><note>"
+    val sent = Presence("pres:a@b", Nil, List(evil))
+    val xml  = Presence.render(sent).fold(e => fail(e), identity)
+    assert(!xml.contains("<tuple"), xml)
+    assertEquals(Presence.parse(xml), Right(sent))
+    // Nor can an attribute value end its attribute.
+    val attr = Presence("pres:a\" x=\"y", Nil, Nil)
+    assertEquals(
+      Presence.parse(Presence.render(attr).fold(e => fail(e), identity)),
+      Right(attr)
+    )
+  }
+
+  test("a presence with nothing in it is a document") {
+    val none = Presence("pres:a@b", Nil, Nil)
+    assertEquals(
+      Presence.parse(Presence.render(none).fold(e => fail(e), identity)),
+      Right(none)
+    )
+  }
+
+  test("what XML cannot hold is refused and not written") {
+    assert(Presence.render(mine.copy(entity = "")).isLeft)
+    List("", "1abc", "has space", "a:b", "<x>").foreach(id =>
+      assert(
+        Presence
+          .render(mine.copy(tuples = List(PresenceTuple(id, None, None, Nil))))
+          .isLeft,
+        id
+      )
+    )
+    assert(Presence.render(mine.copy(notes = List("bell \u0007"))).isLeft)
+    assert(Presence.render(mine.copy(notes = List("nul \u0000"))).isLeft)
+    assert(Presence.render(mine.copy(notes = List("lone \ud800"))).isLeft)
+  }
 }
