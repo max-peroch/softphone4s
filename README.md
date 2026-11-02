@@ -690,6 +690,30 @@ transaction's, the ACK of a 2xx is the call's. The four transaction state
 machines (`InviteClientTransaction` and its three siblings) are pure too and
 emit timer actions that `Timers` runs.
 
+## Robustness
+
+What comes off the network is not trusted. Every decoder answers any input with
+a value, never an exception, and in time that grows with the input: SIP (bytes
+and text), stream framing, header values and URIs, SDP and `a=crypto`, RTP,
+RTCP, SRTP and SRTCP, STUN, PIDF and message-summary bodies. Two suites in
+`softphone4s/src/test/scala/softphone4s/robustness` check it:
+
+- `DecoderFuzzSuite` feeds each decoder random bytes and real messages damaged in
+  the ways that break parsers (bit flips, cut-offs, ranges removed or repeated,
+  bytes inserted), 4 000 cases each, and fails on any exception, a stack overflow
+  included, or on an input that takes more than half a second.
+- `HostileInputSuite` feeds inputs made to cost more than they cost to send: a
+  hundred thousand headers, a four-megabyte header line, lengths that overflow,
+  quotes and brackets that never close, a million parameters, SDP and RTCP with
+  counts far beyond the datagram, deeply nested XML, entity bombs, and streams of
+  keep-alives or one-byte reads.
+
+Bounds that came out of it: on a TCP or TLS connection the time to frame is
+linear in the bytes read, however they are cut up (a flood of keep-alives, or a
+body trickling in a few bytes at a time, used to cost a copy of the whole buffer
+each time); a body for an event package is read only up to 128 KiB
+(`PackageError.TooLarge`), far above a presence document or message summary.
+
 ## Interop tests
 
 The unit and loopback tests check the library against our reading of the RFCs.
