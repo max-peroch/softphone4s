@@ -29,8 +29,12 @@ private[srtp] object SrtcpPacket {
       )
 
   /** The index word as it goes on the wire. */
-  def word(encrypted: Boolean, index: Long): Array[Byte] = {
-    val value = (if encrypted then 0x80000000L else 0L) | index
+  def word(protection: SrtcpProtection, index: Long): Array[Byte] = {
+    val flag = protection match {
+      case SrtcpProtection.Encrypted => 0x80000000L
+      case SrtcpProtection.Plain     => 0L
+    }
+    val value = flag | index
     Array[Byte](
       (value >>> 24).toByte,
       (value >>> 16).toByte,

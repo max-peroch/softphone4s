@@ -179,7 +179,7 @@ class SrtcpProtectionSuite extends FunSuite {
   ) {
     // Built by hand, as a sender that does not encrypt would.
     val keys   = SessionKeys.srtcp(master)
-    val body   = rtcp.toArray ++ SrtcpPacket.word(encrypted = false, 3)
+    val body   = rtcp.toArray ++ SrtcpPacket.word(SrtcpProtection.Plain, 3)
     val tagged =
       Chunk.array(body ++ SrtpPacket.mac(keys, body, SrtcpPacket.TagLength))
     val Right((_, opened)) = SrtcpInbound(master).unprotect(tagged): @unchecked

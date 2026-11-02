@@ -53,7 +53,7 @@ private[softphone4s] class MediaSession[F[_]: Async: Network] private (
     latching: RtpLatching,
     latch: Ref[F, RtpLatch],
     playback: Ref[F, MediaSession.Playback],
-    remoteSends: Ref[F, Boolean],
+    remote: Ref[F, MediaSession.Remote],
     jitterConfig: JitterConfig,
     stats: Ref[F, JitterStats],
     receptions: Ref[F, Map[Ssrc, RtpReception]],
@@ -91,7 +91,7 @@ private[softphone4s] class MediaSession[F[_]: Async: Network] private (
       direction: MediaDirection
   ): F[Unit] =
     latch.set(RtpLatch.empty) >>
-      remoteSends.set(direction.sends) >>
+      remote.set(MediaSession.Remote.of(direction.sends)) >>
       // A party that sends nothing makes no noise either.
       playback.update(_.copy(noise = None)).whenA(!direction.sends) >>
       target.set(
@@ -344,11 +344,11 @@ private[softphone4s] class MediaSession[F[_]: Async: Network] private (
           audioChannel.send(pcm).void.whenA(pcm.nonEmpty)
       case Playout.Frame(packet)
           if plan.comfortNoiseType.contains(packet.payloadType) =>
-        noiseHeard(packet.payload) >> fill(frameBytes, lost = false)
+        noiseHeard(packet.payload) >> fill(frameBytes, MediaSession.Gap.Quiet)
       // A telephone event: its digit was acted on when it arrived.
-      case Playout.Frame(_) => fill(frameBytes, lost = false)
-      case Playout.Lost     => fill(frameBytes, lost = true)
-      case Playout.Waiting  => fill(frameBytes, lost = false)
+      case Playout.Frame(_) => fill(frameBytes, MediaSession.Gap.Quiet)
+      case Playout.Lost     => fill(frameBytes, MediaSession.Gap.Lost)
+      case Playout.Waiting  => fill(frameBytes, MediaSession.Gap.Quiet)
     }
 
   /** How the jitter buffer stands: what it has received, played, concealed and
@@ -378,10 +378,10 @@ private[softphone4s] class MediaSession[F[_]: Async: Network] private (
     * before it again and fading, else nothing. Decided and recorded in one
     * step.
     */
-  private def fill(frameBytes: Int, lost: Boolean): F[Unit] =
-    (Async[F].monotonic, remoteSends.get).flatMapN { (now, sends) =>
+  private def fill(frameBytes: Int, gap: MediaSession.Gap): F[Unit] =
+    (Async[F].monotonic, remote.get).flatMapN { (now, sends) =>
       playback
-        .modify(_.silent(now, sends, frameBytes, lost))
+        .modify(_.silent(now, sends, frameBytes, gap))
         .flatMap(_.traverse_(audioChannel.send(_).void))
     }
 
@@ -565,20 +565,42 @@ private[softphone4s] object MediaSession {
     /** The frame to play in place of speech, if any, and the state after it. */
     def silent(
         now: FiniteDuration,
-        remoteSends: Boolean,
+        remote: MediaSession.Remote,
         frameBytes: Int,
-        lost: Boolean
+        gap: MediaSession.Gap
     ): (Playback, Option[Chunk[Byte]]) =
       noise match {
-        case Some(current) if remoteSends && current.isCurrent(now) =>
+        case Some(current)
+            if remote == MediaSession.Remote.Sending && current.isCurrent(
+              now
+            ) =>
           val (next, frame) = current.frame(frameBytes / 2)
           (Playback(Some(next), Concealment.Empty), Some(frame))
-        case Some(_)      => (Playback.Start, None)
-        case None if lost =>
+        case Some(_)                              => (Playback.Start, None)
+        case None if gap == MediaSession.Gap.Lost =>
           val (next, frame) = concealment.fill(frameBytes)
           (copy(concealment = next), Some(frame))
         case None => (Playback.Start, None)
       }
+  }
+
+  /** Whether the other side is sending us media. */
+  private[ua] enum Remote {
+    case Sending
+    case NotSending
+  }
+
+  private[ua] object Remote {
+    def of(sends: Boolean): Remote =
+      if sends then Sending else NotSending
+  }
+
+  /** Why a frame is being made up: nothing was expected of the network, or a
+    * packet that was is missing.
+    */
+  private[ua] enum Gap {
+    case Quiet
+    case Lost
   }
 
   private[ua] object Playback {
@@ -605,10 +627,10 @@ private[softphone4s] object MediaSession {
       agreed        <- Ref[F].of(Option.empty[MediaPlan])
       latch         <- Ref[F].of(RtpLatch.empty)
       playback      <- Ref[F].of(Playback.Start)
-      remoteSends   <- Ref[F].of(true)
-      stats         <- Ref[F].of(JitterStats())
-      receptions    <- Ref[F].of(Map.empty[Ssrc, RtpReception])
-      peerBlock     <- Ref[F].of(Option.empty[ReportBlock])
+      remote     <- Ref[F].of[MediaSession.Remote](MediaSession.Remote.Sending)
+      stats      <- Ref[F].of(JitterStats())
+      receptions <- Ref[F].of(Map.empty[Ssrc, RtpReception])
+      peerBlock  <- Ref[F].of(Option.empty[ReportBlock])
     } yield new MediaSession(
       bindAddress,
       localRtpPort,
@@ -622,7 +644,7 @@ private[softphone4s] object MediaSession {
       latching,
       latch,
       playback,
-      remoteSends,
+      remote,
       jitter,
       stats,
       receptions,

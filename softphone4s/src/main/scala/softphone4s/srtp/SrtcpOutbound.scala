@@ -22,7 +22,8 @@ final class SrtcpOutbound private (keys: SessionKeys, index: Long) {
         rtcp.toArray,
         SrtcpPacket.ClearLength
       )
-      val authenticated = encrypted ++ SrtcpPacket.word(encrypted = true, index)
+      val authenticated =
+        encrypted ++ SrtcpPacket.word(SrtcpProtection.Encrypted, index)
       val tag = SrtpPacket.mac(keys, authenticated, SrtcpPacket.TagLength)
       (
         new SrtcpOutbound(keys, (index + 1) & 0x7fffffffL),

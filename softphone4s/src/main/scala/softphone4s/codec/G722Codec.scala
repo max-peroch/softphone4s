@@ -84,6 +84,13 @@ object G722Codec {
 
   /** The predictor and the step size of one band (blocks 3 and 4 of the
     * standard). `s` is what the predictor expects the next sample to be.
+    *
+    * It is mutable on purpose: it is updated for every sample, 16 000 times a
+    * second in each band, and a new value for each would load the garbage
+    * collector on the audio path. That is safe because a band belongs to one
+    * encoder or one decoder, which belongs to one session, and a session is
+    * used by one pipe, one frame after another; nothing else holds or shares
+    * it.
     */
   private final class Band(initialStep: Int) {
     var s: Int   = 0

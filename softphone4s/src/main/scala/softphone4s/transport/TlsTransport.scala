@@ -8,6 +8,7 @@ import fs2.io.net.tls.{TLSContext, TLSParameters, TLSSocket}
 import org.typelevel.log4cats.StructuredLogger
 import softphone4s.model.{SipMessage, SipRequest, SipResponse, SoftphoneError}
 
+import java.security.SecureRandom
 import java.nio.file.Files
 import java.security.KeyStore
 import java.security.cert.X509Certificate
@@ -215,8 +216,10 @@ object TlsTransport {
       factory.getKeyManagers
     }
     val context = SSLContext.getInstance("TLS")
-    // `null` asks for the JVM's own key and trust managers.
-    context.init(keys.orNull, trust.orNull, null)
+    // The Java API takes `null` for the JVM's own key and trust managers, which
+    // is the only way to ask for them; the source of randomness is made here
+    // and not left to default.
+    context.init(keys.orNull, trust.orNull, new SecureRandom())
     context
   }
 

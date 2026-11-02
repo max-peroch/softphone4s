@@ -123,27 +123,43 @@ final class RtpSender[F[_]: Async] private (
     val total = (duration.toMillis * EventTicksPerMilli).toInt
     val steps = math.max(1, (total + Interval - 1) / Interval)
 
-    def packet(elapsed: Int, end: Boolean, marker: Boolean): F[Unit] =
+    def packet(
+        elapsed: Int,
+        phase: DigitPacket.Phase,
+        place: DigitPacket.Place
+    ): F[Unit] =
       target.flatMap(
         _.traverse_(
           transmit(
             _,
             payloadType,
             start,
-            marker,
+            place == DigitPacket.Place.First,
             SoftphoneEvent.encode(
-              SoftphoneEvent(digit.code, end, Volume, elapsed)
+              SoftphoneEvent(
+                digit.code,
+                phase == DigitPacket.Phase.Ending,
+                Volume,
+                elapsed
+              )
             )
           )
         )
       )
 
+    def placeOf(first: Boolean): DigitPacket.Place =
+      if first then DigitPacket.Place.First else DigitPacket.Place.Later
+
     val running = (1 until steps).toList.traverse_(k =>
-      packet(k * Interval, end = false, marker = k == 1) >>
+      packet(k * Interval, DigitPacket.Phase.Running, placeOf(k == 1)) >>
         Async[F].sleep(PacketTime)
     )
     val ending = (0 until EndRepeats).toList.traverse_(i =>
-      packet(total, end = true, marker = steps == 1 && i == 0) >>
+      packet(
+        total,
+        DigitPacket.Phase.Ending,
+        placeOf(steps == 1 && i == 0)
+      ) >>
         Async[F].sleep(PacketTime).whenA(i < EndRepeats - 1)
     )
     running >> ending
