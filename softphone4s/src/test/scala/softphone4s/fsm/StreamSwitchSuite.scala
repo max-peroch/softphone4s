@@ -11,7 +11,7 @@ class StreamSwitchSuite extends FunSuite {
 
   private val udp = LocalEndpoint
     .from(
-      AccountConfig("alice", "pw", "sip.example.com"),
+      AccountConfig(sipUser("alice"), Secret("pw"), host"sip.example.com"),
       ip"0.0.0.0",
       ip"192.168.1.5",
       port"5060",

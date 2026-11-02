@@ -32,7 +32,11 @@ class RegistrationSuite extends CatsEffectSuite {
   private val them = InMemoryTransport.AddressB
 
   private val config =
-    SoftphoneConfig(user = "test", password = "secret", realm = "test.local")
+    SoftphoneConfig(
+      user = sipUser("test"),
+      password = Secret("secret"),
+      realm = host"test.local"
+    )
 
   private val endpoint = LocalEndpoint
     .from(config, ip"127.0.0.1", port"19060", port"19000")

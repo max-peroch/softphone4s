@@ -3,15 +3,15 @@ package softphone4s.config
 import com.comcast.ip4s.*
 import pureconfig.*
 import pureconfig.generic.semiauto.*
-import softphone4s.model.TransportProtocol
+import softphone4s.model.{Secret, TransportProtocol, User}
 
 import scala.concurrent.duration.*
 
 /** One SIP account: who we are at which server. */
 final case class AccountConfig(
-    user: String,
-    password: String,
-    realm: String,
+    user: User,
+    password: Secret,
+    realm: Host,
     serverPort: Port = port"5060",
     registerExpires: FiniteDuration = 1.hour,
     transport: TransportProtocol = TransportProtocol.Udp

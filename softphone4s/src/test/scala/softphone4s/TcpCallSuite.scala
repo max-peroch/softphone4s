@@ -90,9 +90,9 @@ class TcpCallSuite extends CatsEffectSuite {
   ) =
     SoftphoneStreaming.resource[IO](
       SoftphoneConfig(
-        user = "test",
-        password = "test",
-        realm = "127.0.0.1",
+        user = sipUser("test"),
+        password = Secret("test"),
+        realm = host"127.0.0.1",
         localSipPort = ours,
         serverPort = serverPort,
         baseRtpPort = port"19500",

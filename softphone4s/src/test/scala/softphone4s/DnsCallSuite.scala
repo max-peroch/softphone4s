@@ -108,9 +108,9 @@ class DnsCallSuite extends CatsEffectSuite {
   private def phone(dns: FakeDns, ours: Port) =
     SoftphoneStreaming.resourceWith[IO](
       SoftphoneConfig(
-        user = "test",
-        password = "test",
-        realm = "example.org",
+        user = sipUser("test"),
+        password = Secret("test"),
+        realm = host"example.org",
         localSipPort = ours,
         baseRtpPort = port"19700",
         bindAddress = ip"127.0.0.1",

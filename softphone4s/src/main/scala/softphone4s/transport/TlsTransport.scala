@@ -212,7 +212,7 @@ object TlsTransport {
     val keys = identity.map { store =>
       val factory =
         KeyManagerFactory.getInstance(KeyManagerFactory.getDefaultAlgorithm)
-      factory.init(keyStore(store), store.password.toCharArray)
+      factory.init(keyStore(store), store.password.reveal.toCharArray)
       factory.getKeyManagers
     }
     val context = SSLContext.getInstance("TLS")
@@ -226,7 +226,7 @@ object TlsTransport {
   private def keyStore(config: KeyStoreConfig): KeyStore = {
     val store = KeyStore.getInstance(config.storeType.javaName)
     Using.resource(Files.newInputStream(config.path))(in =>
-      store.load(in, config.password.toCharArray)
+      store.load(in, config.password.reveal.toCharArray)
     )
     store
   }

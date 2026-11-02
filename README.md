@@ -589,9 +589,9 @@ account every call is taken. Two accounts cannot have the same user.
 
 | Key                 | Type        | Default      | Description                                        |
 |---------------------|-------------|--------------|-----------------------------------------------------|
-| `user`              | `String`    | required     | SIP username                                       |
-| `password`            | `String`    | required     | SIP password                                       |
-| `realm`             | `String`    | required     | SIP realm / server hostname                        |
+| `user`              | `User`      | required     | SIP username: letters, digits and the characters a SIP URI allows in its user part (so `al ice` is refused when the configuration is read) |
+| `password`            | `Secret`    | required     | SIP password. Read as text, but held as a `Secret`: it prints as `***` wherever the configuration, an account or a key store is printed or logged, and is had only with `.reveal` |
+| `realm`             | `Host`      | required     | SIP realm / server host name or IP address         |
 | `local-sip-port`    | `Port`      | `5060`       | Local UDP port for SIP                             |
 | `server-port`       | `Port`      | `5060`       | Remote SIP server port. 5060 leaves the port to SRV records and the transport's default; any other value is used as it is and skips SRV |
 | `base-rtp-port`     | `Port`      | `8000`       | First RTP port of the range media is received on; a call takes a pair (RTP on an even port, RTCP on the next) for as long as it lasts |
@@ -606,15 +606,15 @@ account every call is taken. Two accounts cannot have the same user.
 | `tcp.connect-timeout` | `Duration` | `5 seconds` | How long to wait for a TCP connection           |
 | `tcp.idle-timeout`  | `Duration`  | `5 minutes`  | A TCP connection with nothing sent or received for this long is closed |
 | `tcp.keep-alive.interval` / `timeout` | `Duration` | 2 minutes / 10 seconds (off unless set) | Ping a quiet TCP connection with a double CRLF (RFC 5626) and close it if nothing at all comes back within the timeout; pings from the other side are always answered with a pong |
-| `tcp.framing.max-header-bytes` / `max-body-bytes` | `Int` | 16 KiB / 1 MiB | Largest message a TCP connection may carry before it is dropped |
+| `tcp.framing.max-header-bytes` / `max-body-bytes` | `ByteLimit` (at least 1) | 16 KiB / 1 MiB | Largest message a TCP connection may carry before it is dropped |
 | `tls.trust-store` / `tls.client-certificate` | `{ path, password, store-type }` | JVM trust / none | Key stores for the certificates we trust and the one we present (`store-type` is `PKCS12` or `JKS`) |
-| `nat.stun.host` / `port` / `retransmit` / `attempts` / `refresh` | name, `Port`, `Duration`, `Int`, `Duration` | none / 3478 / 500 ms / 5 / 5 minutes | A STUN server to ask what address we have outside a NAT |
+| `nat.stun.host` / `port` / `retransmit` / `attempts` / `refresh` | `Host`, `Port`, `Duration`, `Attempts` (at least 1), `Duration` | none / 3478 / 500 ms / 5 / 5 minutes | A STUN server to ask what address we have outside a NAT |
 | `nat.rtp-latching` | `follow`/`ignore` | `follow` | Send media to where the remote party's media comes from, when that is not where its SDP said |
 | `srtp` | `off` / `optional` / `required` | `off` | Whether media is encrypted with SRTP (keys exchanged in the SDP, so the signalling should be on TLS) |
 | `jitter-buffer.depth` / `max-depth` / `capacity` | `Int` | 3 / 6 / 12 | Frames of 20 ms held before playing, how far that grows when the network is bad (`max-depth = depth` for a fixed cushion), and the most ever held |
 | `codecs` | list of names: `pcmu`, `pcma`, `g722`, or one you add | `[pcmu, pcma]` | The audio codecs to offer and accept, most wanted first |
 | `nat.observed-address` | `use`/`ignore` | `use` | Advertise the address servers say they see us at (Contact, SDP) |
-| `max-udp-message`   | `Int`       | `1300`       | An INVITE longer than this many bytes goes over TCP instead of UDP |
+| `max-udp-message`   | `ByteLimit` (at least 1) | `1300` | An INVITE longer than this many bytes goes over TCP instead of UDP |
 | `listen`            | list of `tcp`/`tls` | empty | Transports we also accept connections on (UDP is always on) |
 | `tls-port`          | `Port`      | `5061`       | Port for the TLS listener                           |
 | `tls.server-certificate` | `{ path, password, store-type }` | none | The key and certificate we show to clients that connect to us |

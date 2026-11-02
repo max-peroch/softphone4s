@@ -24,5 +24,5 @@ final case class StreamConfig(
     idleTimeout: FiniteDuration = 5.minutes,
     framing: FramingLimits = FramingLimits(),
     keepAlive: Option[KeepAlive] = None,
-    maxIncoming: Int = 256
+    maxIncoming: MaxConnections = MaxConnections.Default
 ) derives ConfigReader

@@ -87,18 +87,22 @@ object StreamFraming {
     else
       endOfHeaders(bytes) match {
         case -1 =>
-          if bytes.length > limits.maxHeaderBytes then
-            Step.Failed(FramingError.HeadersTooLarge(limits.maxHeaderBytes))
+          if limits.maxHeaderBytes.isExceededBy(bytes.length) then
+            Step.Failed(
+              FramingError.HeadersTooLarge(limits.maxHeaderBytes.value)
+            )
           else Step.NeedMore
-        case end if end > limits.maxHeaderBytes =>
-          Step.Failed(FramingError.HeadersTooLarge(limits.maxHeaderBytes))
+        case end if limits.maxHeaderBytes.isExceededBy(end) =>
+          Step.Failed(
+            FramingError.HeadersTooLarge(limits.maxHeaderBytes.value)
+          )
         case end =>
           contentLength(new String(bytes, 0, end, ISO_8859_1)) match {
             case Left(error)   => Step.Failed(error)
             case Right(length) =>
-              if length > limits.maxBodyBytes then
+              if length > limits.maxBodyBytes.value then
                 Step.Failed(
-                  FramingError.BodyTooLarge(length, limits.maxBodyBytes)
+                  FramingError.BodyTooLarge(length, limits.maxBodyBytes.value)
                 )
               else if bytes.length - end < length then Step.NeedMore
               else {

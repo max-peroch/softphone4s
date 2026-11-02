@@ -1,6 +1,8 @@
 package softphone4s.model
 
 import cats.{Eq, Show}
+import pureconfig.ConfigReader
+import pureconfig.error.CannotConvert
 
 /** The user part of a SIP URI: unreserved characters and `%HH` escapes, kept
   * percent-encoded.
@@ -17,4 +19,8 @@ object User {
 
   given Eq[User]   = Eq.fromUniversalEquals
   given Show[User] = Show.show(identity)
+
+  given ConfigReader[User] = ConfigReader[String].emap(s =>
+    apply(s).left.map(CannotConvert(s, "User", _))
+  )
 }

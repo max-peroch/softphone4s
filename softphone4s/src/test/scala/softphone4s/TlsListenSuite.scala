@@ -26,9 +26,9 @@ class TlsListenSuite extends CatsEffectSuite {
   private def phone =
     SoftphoneStreaming.resource[IO](
       SoftphoneConfig(
-        user = "test",
-        password = "test",
-        realm = "127.0.0.1",
+        user = sipUser("test"),
+        password = Secret("test"),
+        realm = host"127.0.0.1",
         localSipPort = port"19151",
         baseRtpPort = port"19900",
         bindAddress = ip"127.0.0.1",

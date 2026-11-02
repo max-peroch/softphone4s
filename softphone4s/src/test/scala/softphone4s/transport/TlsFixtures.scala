@@ -1,5 +1,6 @@
 package softphone4s.transport
 
+import softphone4s.model.Secret
 import cats.effect.IO
 import cats.effect.kernel.Resource
 import fs2.io.net.Network
@@ -13,7 +14,11 @@ import scala.sys.process.*
 /** Certificates for the TLS tests, made once with the JDK's `keytool`. */
 object TlsFixtures {
 
+  /** What keytool is told, and the store is opened with. */
   val password = "changeit"
+
+  /** The same, as the configuration holds it. */
+  val secret: Secret = Secret(password)
 
   final case class Files_(
       directory: Path,
@@ -149,7 +154,7 @@ object TlsFixtures {
       Network[IO].tlsContext.fromSSLContext(context)
     })
 
-  def trusting(path: Path): KeyStoreConfig = KeyStoreConfig(path, password)
+  def trusting(path: Path): KeyStoreConfig = KeyStoreConfig(path, secret)
 
   /** A client's side: it trusts what `trusts` holds, and shows `identity` if
     * given.

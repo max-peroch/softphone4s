@@ -252,7 +252,7 @@ class TlsTransportSuite extends CatsEffectSuite {
 
   test("a key store that cannot be read stops the transport being built") {
     val missing = TlsConfig(trustStore =
-      Some(KeyStoreConfig(Path.of("/no/such/store.p12"), "x"))
+      Some(KeyStoreConfig(Path.of("/no/such/store.p12"), Secret("x")))
     )
     client(missing).use_.attempt.map {
       case Left(SoftphoneError.TlsConfigurationInvalid(_)) => ()
@@ -262,7 +262,7 @@ class TlsTransportSuite extends CatsEffectSuite {
 
   test("a wrong key store password is a configuration error too") {
     val wrong = TlsConfig(trustStore =
-      Some(KeyStoreConfig(files.trustsServer, "not the password"))
+      Some(KeyStoreConfig(files.trustsServer, Secret("not the password")))
     )
     client(wrong).use_.attempt.map {
       case Left(SoftphoneError.TlsConfigurationInvalid(_)) => ()

@@ -39,7 +39,11 @@ class SubscriberSuite extends CatsEffectSuite {
   private val contact = nameAddr("<sip:bob@198.51.100.7:5070>")
 
   private val config =
-    SoftphoneConfig(user = "test", password = "test", realm = "test.local")
+    SoftphoneConfig(
+      user = sipUser("test"),
+      password = Secret("test"),
+      realm = host"test.local"
+    )
 
   private val endpoint =
     LocalEndpoint

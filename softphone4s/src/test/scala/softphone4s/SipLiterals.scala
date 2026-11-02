@@ -20,4 +20,5 @@ object SipLiterals extends munit.Assertions {
   def cseqNumber(n: Int): CSeqNumber      = get(CSeqNumber(n))
   def challenge(s: String): AuthChallenge = AuthChallenge.parse(s)
   def pt(n: Int): PayloadType             = get(PayloadType(n))
+  def sipUser(s: String): User            = get(User(s))
 }

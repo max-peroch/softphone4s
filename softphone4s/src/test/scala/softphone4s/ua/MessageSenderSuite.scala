@@ -32,7 +32,11 @@ class MessageSenderSuite extends CatsEffectSuite {
   private val content = MessageContent.plain("hello bob")
 
   private val config =
-    SoftphoneConfig(user = "test", password = "test", realm = "test.local")
+    SoftphoneConfig(
+      user = sipUser("test"),
+      password = Secret("test"),
+      realm = host"test.local"
+    )
 
   private val endpoint =
     LocalEndpoint

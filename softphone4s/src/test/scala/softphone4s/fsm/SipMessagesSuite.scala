@@ -21,21 +21,25 @@ class SipMessagesSuite extends FunSuite {
     Callee(s).fold(err => fail(err), identity)
 
   private val config =
-    SoftphoneConfig(user = "alice", password = "pw", realm = "sip.example.com")
+    SoftphoneConfig(
+      user = sipUser("alice"),
+      password = Secret("pw"),
+      realm = host"sip.example.com"
+    )
 
   private val endpoint =
     ok(LocalEndpoint.from(config, ip"192.168.1.5", port"5060", port"8000"))
 
   test("toSipUri puts a bare number at the account's realm") {
     assertEquals(
-      ok(callee("1234").toSipUri("sip.example.com")).render,
+      ok(callee("1234").toSipUri(host"sip.example.com")).render,
       "sip:1234@sip.example.com"
     )
   }
 
   test("toSipUri keeps an explicit host and port") {
     val uri = ok(
-      callee("bob@10.0.0.2:5070").toSipUri("ignored.com")
+      callee("bob@10.0.0.2:5070").toSipUri(host"ignored.com")
     )
     assertEquals(uri.render, "sip:bob@10.0.0.2:5070")
     assertEquals(uri.port, Some(port"5070"))
@@ -43,18 +47,19 @@ class SipMessagesSuite extends FunSuite {
 
   test("toSipUri percent-encodes '#' and keeps '*' and '+'") {
     assertEquals(
-      ok(callee("*67#").toSipUri("h.com")).render,
+      ok(callee("*67#").toSipUri(host"h.com")).render,
       "sip:*67%23@h.com"
     )
     assertEquals(
-      ok(callee("+15551234567").toSipUri("h.com")).render,
+      ok(callee("+15551234567").toSipUri(host"h.com")).render,
       "sip:+15551234567@h.com"
     )
   }
 
-  test("toSipUri fails on an invalid realm") {
-    assert(
-      callee("1234").toSipUri("not a host").isLeft
+  test("toSipUri puts an IPv6 realm in brackets") {
+    assertEquals(
+      ok(callee("1234").toSipUri(ip"::1")).render,
+      "sip:1234@[::1]"
     )
   }
 
@@ -63,7 +68,7 @@ class SipMessagesSuite extends FunSuite {
   ) {
     assertEquals(endpoint.accountUri.render, "sip:alice@sip.example.com")
     val invite = endpoint.buildInvite(
-      ok(callee("1234").toSipUri("sip.example.com")),
+      ok(callee("1234").toSipUri(host"sip.example.com")),
       callId("cid"),
       tag("ltag"),
       cseqNumber(1),
@@ -82,19 +87,6 @@ class SipMessagesSuite extends FunSuite {
     assertEquals(
       invite.headers.topVia.render,
       "SIP/2.0/UDP 192.168.1.5:5060;branch=z9hG4bKx;rport"
-    )
-  }
-
-  test("LocalEndpoint.from fails on an unusable user or realm") {
-    List(
-      config.copy(user = "al ice"),
-      config.copy(realm = "not a host")
-    ).foreach(bad =>
-      assert(
-        LocalEndpoint
-          .from(bad, ip"192.168.1.5", port"5060", port"8000")
-          .isLeft
-      )
     )
   }
 
@@ -313,7 +305,7 @@ class SipMessagesSuite extends FunSuite {
   test("an endpoint speaking TCP says so in its Via, and in its Contact") {
     val tcp = ok(
       LocalEndpoint.from(
-        AccountConfig("alice", "pw", "sip.example.com"),
+        AccountConfig(sipUser("alice"), Secret("pw"), host"sip.example.com"),
         ip"0.0.0.0",
         ip"192.168.1.5",
         port"5060",
@@ -350,7 +342,7 @@ class SipMessagesSuite extends FunSuite {
   ) {
     val tls = ok(
       LocalEndpoint.from(
-        AccountConfig("alice", "pw", "sip.example.com"),
+        AccountConfig(sipUser("alice"), Secret("pw"), host"sip.example.com"),
         ip"0.0.0.0",
         ip"192.168.1.5",
         port"5061",

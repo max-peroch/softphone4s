@@ -7,7 +7,7 @@ import pureconfig.generic.semiauto.*
 import softphone4s.dns.DnsConfig
 import softphone4s.media.{AudioCodecs, JitterConfig}
 import softphone4s.srtp.SrtpPolicy
-import softphone4s.model.TransportProtocol
+import softphone4s.model.{ByteLimit, Secret, TransportProtocol, User}
 import softphone4s.sdp.Capabilities
 import softphone4s.transport.{StreamConfig, TlsConfig}
 
@@ -20,9 +20,9 @@ import scala.concurrent.duration.*
   * ConfigReader[SoftphoneConfig]` below.
   */
 final case class SoftphoneConfig(
-    user: String,
-    password: String,
-    realm: String,
+    user: User,
+    password: Secret,
+    realm: Host,
     localSipPort: Port = port"5060",
     serverPort: Port = port"5060",
     baseRtpPort: Port = port"8000",
@@ -40,7 +40,7 @@ final case class SoftphoneConfig(
     dns: DnsConfig = DnsConfig(),
     listen: Set[TransportProtocol] = Set.empty,
     tlsPort: Port = port"5061",
-    maxUdpMessage: Int = 1300,
+    maxUdpMessage: ByteLimit = ByteLimit.Datagram,
     nat: NatConfig = NatConfig(),
     codecs: List[CodecChoice] = List(CodecChoice.Pcmu, CodecChoice.Pcma),
     jitterBuffer: JitterConfig = JitterConfig.Default,

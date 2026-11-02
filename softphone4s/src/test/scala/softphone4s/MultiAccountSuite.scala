@@ -32,13 +32,14 @@ class MultiAccountSuite extends CatsEffectSuite {
   private val theirs = port"19091"
   private val target = SocketAddress(ip"127.0.0.1", ours)
 
-  private val second = AccountConfig("alt", "pw2", "127.0.0.1", theirs)
+  private val second =
+    AccountConfig(sipUser("alt"), Secret("pw2"), host"127.0.0.1", theirs)
 
   private def config(more: List[AccountConfig]) =
     SoftphoneConfig(
-      user = "test",
-      password = "test",
-      realm = "127.0.0.1",
+      user = sipUser("test"),
+      password = Secret("test"),
+      realm = host"127.0.0.1",
       localSipPort = ours,
       serverPort = theirs,
       baseRtpPort = port"19400",
@@ -119,7 +120,8 @@ class MultiAccountSuite extends CatsEffectSuite {
   }
 
   test("two accounts cannot share a user") {
-    val duplicate = second.copy(user = "test", realm = "other.example")
+    val duplicate =
+      second.copy(user = sipUser("test"), realm = host"other.example")
     SoftphoneStreaming
       .resource[IO](config(List(duplicate)), audio, NoOpLogger.impl[IO])
       .use_
@@ -127,19 +129,30 @@ class MultiAccountSuite extends CatsEffectSuite {
       .map(r => assertEquals(r, Left(SoftphoneError.DuplicateAccount("test"))))
   }
 
-  test("an account that is not a SIP address stops the softphone being built") {
-    SoftphoneStreaming
-      .resource[IO](
-        config(List(second.copy(realm = "not a host"))),
-        audio,
-        NoOpLogger.impl[IO]
-      )
-      .use_
-      .attempt
-      .map {
-        case Left(SoftphoneError.InvalidSipUri(_, _)) => ()
-        case other => fail(s"unexpected $other")
-      }
+  test(
+    "an account whose user or realm is not usable is refused when the configuration is read"
+  ) {
+    def load(account: String) =
+      ConfigSource
+        .string(
+          s"""user = alice
+             |password = pw
+             |realm = example.com
+             |additional-accounts = [ { $account } ]""".stripMargin
+        )
+        .load[SoftphoneConfig]
+    assert(load("""user = bob, password = pw, realm = example.org""").isRight)
+    assert(
+      load("""user = "al ice", password = pw, realm = example.org""").isLeft
+    )
+    assert(load("""user = bob, password = pw, realm = "not a host"""").isLeft)
+    assert(load("""user = "", password = pw, realm = example.org""").isLeft)
+    assert(
+      ConfigSource
+        .string("""user = "a b", password = pw, realm = example.com""")
+        .load[SoftphoneConfig]
+        .isLeft
+    )
   }
 
   test("configuration lists further accounts under additional-accounts") {
@@ -155,13 +168,18 @@ class MultiAccountSuite extends CatsEffectSuite {
       .load[SoftphoneConfig]
       .fold(failures => fail(failures.prettyPrint()), identity)
     assertEquals(
-      parsed.accounts.map(a => (a.user, a.realm, a.serverPort.value)).toList,
+      parsed.accounts
+        .map(a => (a.user.value, a.realm.toString, a.serverPort.value))
+        .toList,
       List(("alice", "example.com", 5060), ("bob", "example.org", 5070))
     )
   }
 
   test("a single-account configuration has just the one account") {
-    assertEquals(SoftphoneConfig("a", "b", "c").accounts.size, 1)
+    assertEquals(
+      SoftphoneConfig(sipUser("a"), Secret("b"), host"c").accounts.size,
+      1
+    )
   }
 
   // ---- Incoming calls -------------------------------------------------------------
@@ -555,7 +573,7 @@ class MultiAccountSuite extends CatsEffectSuite {
         .load[SoftphoneConfig]
     val store = (kind: String) =>
       load(
-        s"""tls.trust-store { path = "/x", password = "p", store-type = "$kind" }"""
+        s"""tls.trust-store { path = "/x", password = Secret("p"), store-type = "$kind" }"""
       )
         .map(_.tls.trustStore.map(_.storeType))
     assertEquals(store("jks"), Right(Some(KeyStoreType.Jks)))
@@ -634,11 +652,63 @@ class MultiAccountSuite extends CatsEffectSuite {
       .fold(failures => fail(failures.prettyPrint()), identity)
     assertEquals(
       parsed.nat.stun.map(s =>
-        (s.host, s.port.value, s.attempts, s.retransmit)
+        (s.host.toString, s.port.value, s.attempts.value, s.retransmit)
       ),
       Some(("stun.example.com", 19302, 3, 500.millis))
     )
     assertEquals(parsed.nat.rtpLatching, softphone4s.config.RtpLatching.Ignore)
+  }
+
+  test(
+    "a STUN setting that makes no sense is an error at load, not at the first round"
+  ) {
+    def stun(settings: String) =
+      ConfigSource
+        .string(
+          s"""user = alice
+             |password = pw
+             |realm = example.com
+             |nat { stun { $settings } }""".stripMargin
+        )
+        .load[SoftphoneConfig]
+    assert(stun("""host = "stun.example.com", attempts = 0""").isLeft)
+    assert(stun("""host = "stun.example.com", attempts = -2""").isLeft)
+    assert(stun("""host = "not a host!"""").isLeft)
+    assert(stun("""host = "stun.example.com", attempts = 1""").isRight)
+  }
+
+  test(
+    "the size and connection limits are read, and refuse a number below one"
+  ) {
+    def load(settings: String) =
+      ConfigSource
+        .string(
+          s"""user = alice
+             |password = pw
+             |realm = example.com
+             |$settings""".stripMargin
+        )
+        .load[SoftphoneConfig]
+    val parsed = load(
+      """max-udp-message = 1200
+        |tcp { max-incoming = 8, framing { max-header-bytes = 4096, max-body-bytes = 65536 } }""".stripMargin
+    ).fold(e => fail(e.prettyPrint()), identity)
+    assertEquals(parsed.maxUdpMessage.value, 1200)
+    assertEquals(parsed.tcp.maxIncoming.value, 8)
+    assertEquals(
+      (
+        parsed.tcp.framing.maxHeaderBytes.value,
+        parsed.tcp.framing.maxBodyBytes.value
+      ),
+      (4096, 65536)
+    )
+    List(
+      "max-udp-message = 0",
+      "max-udp-message = -1",
+      "tcp.max-incoming = 0",
+      "tcp.framing.max-header-bytes = 0",
+      "tcp.framing.max-body-bytes = -5"
+    ).foreach(bad => assert(load(bad).isLeft, bad))
   }
 
   test("an unknown transport in configuration is an error") {
@@ -656,8 +726,8 @@ class MultiAccountSuite extends CatsEffectSuite {
           |realm = example.com
           |transport = tls
           |tls {
-          |  trust-store { path = "/etc/sip/trust.p12", password = "t" }
-          |  client-certificate { path = "/etc/sip/me.jks", password = "c", store-type = "JKS" }
+          |  trust-store { path = "/etc/sip/trust.p12", password = Secret("t") }
+          |  client-certificate { path = "/etc/sip/me.jks", password = Secret("c"), store-type = "JKS" }
           |  min-version = "1.3"
           |  hostname-verification = "skip"
           |  cipher-suites = ["TLS_AES_128_GCM_SHA256"]
@@ -686,7 +756,7 @@ class MultiAccountSuite extends CatsEffectSuite {
   }
 
   test("TLS is verified by default, from 1.2 up") {
-    val defaults = SoftphoneConfig("a", "b", "c").tls
+    val defaults = SoftphoneConfig(sipUser("a"), Secret("b"), host"c").tls
     assertEquals(defaults.hostnameVerification, HostnameVerification.Verify)
     assertEquals(defaults.minVersion, TlsVersion.Tls12)
     assertEquals(defaults.trustStore, None)
@@ -717,7 +787,10 @@ class MultiAccountSuite extends CatsEffectSuite {
       List("10.0.0.53:53", "192.0.2.1:5353", "[2001:db8::53]:53")
     )
     assertEquals(parsed.dns.timeout, 2.seconds)
-    assertEquals(SoftphoneConfig("a", "b", "c").dns.servers, Nil)
+    assertEquals(
+      SoftphoneConfig(sipUser("a"), Secret("b"), host"c").dns.servers,
+      Nil
+    )
   }
 
   test("a DNS server that is not an address is an error") {
@@ -738,7 +811,7 @@ class MultiAccountSuite extends CatsEffectSuite {
           |listen = [tcp, tls]
           |tls-port = 5071
           |tls {
-          |  server-certificate { path = "/etc/sip/server.p12", password = "s" }
+          |  server-certificate { path = "/etc/sip/server.p12", password = Secret("s") }
           |  client-authentication = "require"
           |}""".stripMargin
       )
@@ -759,7 +832,7 @@ class MultiAccountSuite extends CatsEffectSuite {
   test(
     "by default we listen for nothing but UDP, and ask for no client certificate"
   ) {
-    val defaults = SoftphoneConfig("a", "b", "c")
+    val defaults = SoftphoneConfig(sipUser("a"), Secret("b"), host"c")
     assertEquals(defaults.listen, Set.empty[TransportProtocol])
     assertEquals(defaults.tls.clientAuthentication, ClientAuthentication.Off)
   }

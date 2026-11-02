@@ -1,5 +1,6 @@
 package softphone4s.model
 
+import com.comcast.ip4s.host
 import munit.FunSuite
 
 class CalleeSuite extends FunSuite {
@@ -63,7 +64,7 @@ class CalleeSuite extends FunSuite {
 
   private def dialled(s: String): SipUri =
     Callee(s)
-      .flatMap(_.toSipUri("default.example").left.map(_.getMessage))
+      .flatMap(_.toSipUri(host"default.example").left.map(_.getMessage))
       .fold(err => fail(err), identity)
 
   test("a whole SIP URI is accepted and dialled as it is, whatever the realm") {

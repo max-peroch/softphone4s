@@ -1,6 +1,6 @@
 package softphone4s.model
 
-import com.comcast.ip4s.{Host, IpAddress, Port, SocketAddress}
+import com.comcast.ip4s.{IpAddress, Port, SocketAddress}
 import softphone4s.config.{AccountConfig, SoftphoneConfig}
 import softphone4s.sdp.Capabilities
 
@@ -92,8 +92,8 @@ final case class LocalEndpoint private (
 
 object LocalEndpoint {
 
-  /** Fails with `InvalidSipUri` if `config.user` or `config.realm` cannot form
-    * a SIP URI.
+  /** Fails with `InvalidSipUri` if the account's user and realm cannot form a
+    * SIP URI.
     */
   def from(
       config: SoftphoneConfig,
@@ -122,10 +122,9 @@ object LocalEndpoint {
       capabilities: Capabilities = Capabilities.Default
   ): Either[SoftphoneError, LocalEndpoint] =
     for {
-      user    <- User(config.user).left.map(invalid(config.user, _))
       account <- addressOfRecord(config)
       contact <- contactUri(
-        Some(UserInfo(user, None)),
+        Some(UserInfo(config.user, None)),
         ip,
         sipPort,
         transport,
@@ -138,7 +137,7 @@ object LocalEndpoint {
       bindAddress,
       account,
       contact,
-      Credentials(config.user, config.password),
+      Credentials(config.user.value, config.password),
       transport,
       SipScheme.Sip,
       None,
@@ -175,16 +174,10 @@ object LocalEndpoint {
   def addressOfRecord(
       config: AccountConfig
   ): Either[SoftphoneError, SipUri] =
-    for {
-      user  <- User(config.user).left.map(invalid(config.user, _))
-      realm <- Host
-        .fromString(config.realm)
-        .toRight(invalid(config.realm, "not a valid host"))
-      aor <- SipUri
-        .from(SipScheme.Sip, realm, Some(UserInfo(user, None)))
-        .left
-        .map(invalid(config.user, _))
-    } yield aor
+    SipUri
+      .from(SipScheme.Sip, config.realm, Some(UserInfo(config.user, None)))
+      .left
+      .map(invalid(config.user.value, _))
 
   private def invalid(input: String, reason: String): SoftphoneError =
     SoftphoneError.InvalidSipUri(input, reason)

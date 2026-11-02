@@ -6,11 +6,14 @@ import munit.ScalaCheckSuite
 import org.scalacheck.Gen
 import org.scalacheck.Prop.forAll
 import softphone4s.codec.{SipCodec, SipGen}
-import softphone4s.model.SipMessage
+import softphone4s.model.{ByteLimit, SipMessage}
 
 import java.nio.charset.StandardCharsets.ISO_8859_1
 
 class StreamFramingSuite extends ScalaCheckSuite {
+
+  private def limit(n: Int): ByteLimit =
+    ByteLimit(n).fold(e => fail(e), identity)
 
   private def bytes(s: String): Chunk[Byte] =
     Chunk.array(s.getBytes(ISO_8859_1))
@@ -129,7 +132,7 @@ class StreamFramingSuite extends ScalaCheckSuite {
   }
 
   test("headers that never end are refused once past the limit") {
-    val limits = FramingLimits(maxHeaderBytes = 64)
+    val limits = FramingLimits(maxHeaderBytes = limit(64))
     val m      = "OPTIONS sip:a@b SIP/2.0\r\n" + ("X: " + "a" * 100 + "\r\n")
     assertEquals(
       frame(List(bytes(m)), limits),
@@ -138,7 +141,7 @@ class StreamFramingSuite extends ScalaCheckSuite {
   }
 
   test("a body past the limit is refused before it is read") {
-    val limits = FramingLimits(maxBodyBytes = 10)
+    val limits = FramingLimits(maxBodyBytes = limit(10))
     val m      = "OPTIONS sip:a@b SIP/2.0\r\nContent-Length: 11\r\n\r\n"
     assertEquals(
       frame(List(bytes(m)), limits),

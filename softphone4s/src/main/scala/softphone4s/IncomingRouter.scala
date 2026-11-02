@@ -53,7 +53,7 @@ private[softphone4s] final class IncomingRouter[F[_]: Async: Network](
     if accountList.tail.isEmpty then Some(accountList.head)
     else
       request.requestUri.user.flatMap(user =>
-        accountList.find(_.config.user == user.value)
+        accountList.find(_.config.user == user)
       )
 
   def calls: Stream[F, IncomingCall[F]] =
@@ -240,7 +240,7 @@ private[softphone4s] final class IncomingRouter[F[_]: Async: Network](
           account.id,
           layer,
           (transport, uri) => uplinks.nextHopOver(transport)(uri),
-          config.maxUdpMessage,
+          config.maxUdpMessage.value,
           endpoint,
           callSupervisor,
           entropy,

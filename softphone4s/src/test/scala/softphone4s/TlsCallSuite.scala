@@ -90,13 +90,13 @@ class TlsCallSuite extends CatsEffectSuite {
       serverPort: Port,
       ours: Port,
       trust: Path,
-      realm: String = "127.0.0.1",
+      realm: Host = host"127.0.0.1",
       transport: TransportProtocol = TransportProtocol.Tls
   ) =
     SoftphoneStreaming.resource[IO](
       SoftphoneConfig(
-        user = "test",
-        password = "test",
+        user = sipUser("test"),
+        password = Secret("test"),
         realm = realm,
         localSipPort = ours,
         serverPort = serverPort,
@@ -171,7 +171,12 @@ class TlsCallSuite extends CatsEffectSuite {
   ) {
     server(files.server)
       .flatMap(srv =>
-        phone(srv.port, port"19122", files.trustsServer, realm = "localhost")
+        phone(
+          srv.port,
+          port"19122",
+          files.trustsServer,
+          realm = host"localhost"
+        )
           .map(srv -> _)
       )
       .use { (srv, phone) =>

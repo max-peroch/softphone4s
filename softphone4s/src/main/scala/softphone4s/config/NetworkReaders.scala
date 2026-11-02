@@ -31,6 +31,13 @@ private[softphone4s] object NetworkReaders {
           .CannotConvert(s, "SocketAddress", "expected address or address:port")
       )
   )
+
+  /** A host name or an IP address. */
+  given ConfigReader[Host] = ConfigReader[String].emap(s =>
+    Host
+      .fromString(s)
+      .toRight(error.CannotConvert(s, "Host", "not a host name or address"))
+  )
   given ConfigReader[IpAddress] = ConfigReader[String].emap(s =>
     IpAddress
       .fromString(s)

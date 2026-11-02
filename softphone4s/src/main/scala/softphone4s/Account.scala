@@ -30,6 +30,6 @@ private[softphone4s] object Account {
         .groupBy(_.config.user)
         .collectFirst { case (user, held) if held.sizeIs > 1 => user }
         .toLeft(())
-        .leftMap(SoftphoneError.DuplicateAccount(_))
+        .leftMap(user => SoftphoneError.DuplicateAccount(user.value))
     } yield accounts
 }

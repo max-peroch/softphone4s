@@ -384,7 +384,7 @@ object StreamTransport {
       _ <- listen.traverse_ { listener =>
         Resource.eval(
           supervisor.supervise(
-            listener.serve(config.maxIncoming, connections.accept)
+            listener.serve(config.maxIncoming.value, connections.accept)
           )
         )
       }

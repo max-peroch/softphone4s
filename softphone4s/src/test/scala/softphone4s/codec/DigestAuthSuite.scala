@@ -14,7 +14,7 @@ class DigestAuthSuite extends FunSuite {
   private def cnonce(s: String): Cnonce =
     Cnonce(s).fold(err => fail(err), identity)
 
-  private val credentials = Credentials("Mufasa", "Circle Of Life")
+  private val credentials = Credentials("Mufasa", Secret("Circle Of Life"))
 
   // RFC 2617 §3.5 test vector
   test("respond with qop=auth matches the RFC 2617 test vector") {
@@ -44,7 +44,8 @@ class DigestAuthSuite extends FunSuite {
 
   // ---- RFC 7616 §3.9.1: the same request under MD5 and SHA-256 --------------
 
-  private val rfc7616Credentials = Credentials("Mufasa", "Circle of Life")
+  private val rfc7616Credentials =
+    Credentials("Mufasa", Secret("Circle of Life"))
   private val rfc7616Nonce  = "7ypf/xlj9XXwfDPEoM4URrv/xwf94BcCAzFZH4GiTo0v"
   private val rfc7616Cnonce = "f2/wE4q74E6zIJEtWaHKaf5wv/H5QzzpXusqGemxURZJ"
 

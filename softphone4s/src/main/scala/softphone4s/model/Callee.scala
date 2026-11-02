@@ -1,6 +1,7 @@
 package softphone4s.model
 
 import cats.syntax.all.*
+import com.comcast.ip4s.Host
 import pureconfig.ConfigReader
 import pureconfig.error.CannotConvert
 
@@ -32,13 +33,14 @@ object Callee {
       * when it names a host (`alice@sip.example.com`), else at `realm`. A `#`
       * is percent-encoded, as the user part of a SIP URI requires.
       */
-    def toSipUri(realm: String): Either[SoftphoneError, SipUri] =
+    def toSipUri(realm: Host): Either[SoftphoneError, SipUri] =
       if Scheme.matches(c) then
         SipUri.parse(c).left.map(SoftphoneError.InvalidSipUri(c, _))
       else {
         val user  = c.replace("#", "%23")
         val input =
-          if user.contains('@') then s"sip:$user" else s"sip:$user@$realm"
+          if user.contains('@') then s"sip:$user"
+          else s"sip:$user@${HostPort.render(realm, None)}"
         SipUri.parse(input).left.map(SoftphoneError.InvalidSipUri(input, _))
       }
   }

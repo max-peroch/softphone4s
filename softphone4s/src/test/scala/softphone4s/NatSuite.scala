@@ -34,9 +34,9 @@ class NatSuite extends CatsEffectSuite {
 
   private def config(mode: ObservedAddresses, stun: Option[StunConfig]) =
     SoftphoneConfig(
-      user = "test",
-      password = "test",
-      realm = "127.0.0.1",
+      user = sipUser("test"),
+      password = Secret("test"),
+      realm = host"127.0.0.1",
       localSipPort = ours,
       serverPort = theirs,
       baseRtpPort = port"19950",
@@ -185,7 +185,7 @@ class NatSuite extends CatsEffectSuite {
   }
 
   private def stunAt(server: StunServer.Running) =
-    StunConfig("127.0.0.1", server.address.port, refresh = 1.hour)
+    StunConfig(host"127.0.0.1", server.address.port, refresh = 1.hour)
 
   test(
     "a STUN server's answer is registered as the Contact, though the registrar says nothing"

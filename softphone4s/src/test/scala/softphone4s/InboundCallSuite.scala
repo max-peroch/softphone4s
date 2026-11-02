@@ -28,9 +28,9 @@ class InboundCallSuite extends CatsEffectSuite {
 
   private def config(answerTimeout: FiniteDuration) =
     SoftphoneConfig(
-      user = "test",
-      password = "test",
-      realm = "127.0.0.1",
+      user = sipUser("test"),
+      password = Secret("test"),
+      realm = host"127.0.0.1",
       localSipPort = ours,
       serverPort = theirs,
       baseRtpPort = port"19200",

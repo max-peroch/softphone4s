@@ -156,18 +156,14 @@ class SoftphoneStreaming[F[_]: Async: Network] private (
 
   override def registerAs(id: AccountId): Resource[F, Registration[F]] =
     for {
-      account <- Resource.eval(accountNamed(id))
-      host    <- Resource.eval(
-        Async[F].fromOption(
-          Host.fromString(account.config.realm),
-          SoftphoneError.InvalidSipUri(account.config.realm, "not a valid host")
-        )
-      )
+      account      <- Resource.eval(accountNamed(id))
       registrarUri <- Resource.eval(
         Async[F].fromEither(
           SipUri
-            .from(SipScheme.Sip, host)
-            .leftMap(SoftphoneError.InvalidSipUri(account.config.realm, _))
+            .from(SipScheme.Sip, account.config.realm)
+            .leftMap(
+              SoftphoneError.InvalidSipUri(account.config.realm.toString, _)
+            )
         )
       )
       found <- Resource.eval(uplinks.allTargets(account, registrarUri))
@@ -223,7 +219,7 @@ class SoftphoneStreaming[F[_]: Async: Network] private (
           first,
           alternatives,
           streamWay,
-          config.maxUdpMessage,
+          config.maxUdpMessage.value,
           (transport, uri) => uplinks.nextHopOver(transport)(uri),
           supervisor,
           entropy,
@@ -434,33 +430,28 @@ object SoftphoneStreaming {
       logger: StructuredLogger[F]
   ): F[Unit] = {
     val round: F[Unit] =
-      Host.fromString(stun.host) match {
-        case None =>
-          logger.warn(Map("host" -> stun.host))("Not a valid STUN server name")
-        case Some(host) =>
-          records.addresses(host).flatMap {
-            case Nil =>
-              logger.warn(Map("host" -> stun.host))(
-                "The STUN server has no address"
-              )
-            case address :: _ =>
-              client
-                .bindingRequest(
-                  SocketAddress(address, stun.port),
-                  stun.retransmit,
-                  stun.attempts
-                )
-                .flatMap {
-                  case Right(seen) =>
-                    logger.debug(Map("address" -> seen.toString))(
-                      "STUN says we are seen at"
-                    ) >> publicSip.set(Some(seen))
-                  case Left(error) =>
-                    logger.warn(
-                      Map("host" -> stun.host, "error" -> error.toString)
-                    )("The STUN server did not tell us our address")
-                }
-          }
+      records.addresses(stun.host).flatMap {
+        case Nil =>
+          logger.warn(Map("host" -> stun.host.toString))(
+            "The STUN server has no address"
+          )
+        case address :: _ =>
+          client
+            .bindingRequest(
+              SocketAddress(address, stun.port),
+              stun.retransmit,
+              stun.attempts.value
+            )
+            .flatMap {
+              case Right(seen) =>
+                logger.debug(Map("address" -> seen.toString))(
+                  "STUN says we are seen at"
+                ) >> publicSip.set(Some(seen))
+              case Left(error) =>
+                logger.warn(
+                  Map("host" -> stun.host.toString, "error" -> error.toString)
+                )("The STUN server did not tell us our address")
+            }
       }
     (round.handleErrorWith(e =>
       logger.warn(Map("error" -> e.toString))("STUN round failed")

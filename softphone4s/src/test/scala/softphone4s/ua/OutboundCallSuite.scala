@@ -45,7 +45,11 @@ class OutboundCallSuite extends CatsEffectSuite {
   private val us         = InMemoryTransport.AddressA
   private val them       = InMemoryTransport.AddressB
   private val testConfig =
-    SoftphoneConfig(user = "test", password = "test", realm = "test.local")
+    SoftphoneConfig(
+      user = sipUser("test"),
+      password = Secret("test"),
+      realm = host"test.local"
+    )
 
   private def endpointOn(rtp: Port) = LocalEndpoint
     .from(testConfig, localIp, sipPort, rtp)

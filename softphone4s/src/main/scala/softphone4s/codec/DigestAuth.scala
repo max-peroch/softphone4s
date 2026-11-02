@@ -29,7 +29,7 @@ object DigestAuth {
     val nonce                           = challenge.nonce.value
     val hash: String => String          = hex(algorithm.javaName, _)
 
-    val a1  = hash(s"$username:$realm:$password")
+    val a1  = hash(s"$username:$realm:${password.reveal}")
     val ha1 =
       if algorithm.session then hash(s"$a1:$nonce:${cnonce.value}") else a1
 

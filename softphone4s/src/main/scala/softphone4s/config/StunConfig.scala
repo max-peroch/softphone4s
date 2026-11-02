@@ -1,6 +1,6 @@
 package softphone4s.config
 
-import com.comcast.ip4s.{Port, port}
+import com.comcast.ip4s.{Host, Port, port}
 import pureconfig.ConfigReader
 
 import scala.concurrent.duration.*
@@ -18,10 +18,10 @@ import scala.concurrent.duration.*
   *   how long between rounds, since a NAT can change its mind.
   */
 final case class StunConfig(
-    host: String,
+    host: Host,
     port: Port = port"3478",
     retransmit: FiniteDuration = 500.millis,
-    attempts: Int = 5,
+    attempts: Attempts = Attempts.Default,
     refresh: FiniteDuration = 5.minutes
 ) derives ConfigReader
 
