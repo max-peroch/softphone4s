@@ -18,6 +18,7 @@ import softphone4s.runtime.Entropy
 import softphone4s.subscription.*
 import softphone4s.transaction.{
   TransactionConfig,
+  TransactionLayer,
   TransactionManager,
   TransactionMessages
 }
@@ -62,6 +63,17 @@ class SubscriberSuite extends CatsEffectSuite {
     * does.
     */
   private def rig(requested: Int = 120): Resource[IO, Rig] =
+    wire().flatMap(w => subscribed(w, requested))
+
+  /** The wire as the test sees it, apart from the subscription. */
+  private final case class Wire(
+      peer: Transport[IO],
+      layer: TransactionLayer[IO],
+      random: Random[IO],
+      routes: Ref[IO, Map[CallId, Channel[IO, DialogInput[IO]]]]
+  )
+
+  private def wire(): Resource[IO, Wire] =
     for {
       pair  <- Resource.eval(InMemoryTransport.pair[IO])
       layer <- TransactionManager.resource(
@@ -88,20 +100,39 @@ class SubscriberSuite extends CatsEffectSuite {
         .compile
         .drain
         .background
-      subscription <- Subscriber.resource[IO](
-        layer,
-        NonEmptyList.one(Uplink(endpoint, them)),
-        routes,
-        target,
-        presence,
-        List(pidf),
-        expires(requested),
-        (_, _) => IO.pure(them),
-        Entropy.fromRandom(random),
-        stopTimeout = 5.seconds,
-        NoOpLogger.impl[IO]
+    } yield Wire(pair._2, layer, random, routes)
+
+  private def subscription(
+      w: Wire,
+      requested: Int
+  ): Resource[IO, Subscription[IO]] =
+    Subscriber.resource[IO](
+      w.layer,
+      NonEmptyList.one(Uplink(endpoint, them)),
+      w.routes,
+      target,
+      presence,
+      List(pidf),
+      expires(requested),
+      (_, _) => IO.pure(them),
+      Entropy.fromRandom(w.random),
+      stopTimeout = 5.seconds,
+      NoOpLogger.impl[IO]
+    )
+
+  private def subscribed(w: Wire, requested: Int): Resource[IO, Rig] =
+    subscription(w, requested).map(Rig(_, w.peer, w.routes))
+
+  /** The subscription's release apart from the wire's, for a test of what the
+    * wire carries as the subscription ends: released together, the layer can be
+    * closed before it has written the answer to the last NOTIFY.
+    */
+  private def releasable(requested: Int = 120): Resource[IO, (Rig, IO[Unit])] =
+    wire().evalMap(w =>
+      subscription(w, requested).allocated.map((s, release) =>
+        (Rig(s, w.peer, w.routes), release)
       )
-    } yield Rig(subscription, pair._2, routes)
+    )
 
   // ---- The notifier's side ---------------------------------------------------------
 
@@ -644,7 +675,7 @@ class SubscriberSuite extends CatsEffectSuite {
     "releasing it sends a SUBSCRIBE for nothing in the dialog and finishes when the last NOTIFY comes"
   ) {
     virtual {
-      rig().allocated.flatMap { (r, release) =>
+      releasable().use { (r, release) =>
         for {
           first <- nextSubscribe(r.peer)
           _     <- acceptSubscribe(r.peer, first)
