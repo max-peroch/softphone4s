@@ -729,6 +729,26 @@ for {
 } yield phone
 ```
 
+## Traces
+
+`TracedSoftphone` makes spans of what a program does with a phone (a call, its
+audio, DTMF, a message, a subscription). `SoftphoneStreaming.resource(...,
+tracing = Some(t))` takes a `TransactionTracing[F]`, which is told of each SIP
+transaction: it begins with the request, sent or received, and its span ends with
+the final answer (not with the timers that keep the transaction around after
+it), a timeout or a send that failed. `OtelTransactionTracing` in
+`softphone4s-otel4s` makes a span `SIP INVITE`, `SIP BYE`... of each, with
+`sip.method`, `sip.transaction.side`, `sip.call_id`, `sip.branch`,
+`sip.transaction.outcome` and `sip.status_code`; a timeout, a failed send and a
+refusal received (4xx and up) are errors. The spans are roots, not children of
+the call's span, because the transaction layer runs apart from the calls: find
+the transactions of a call by its `sip.call_id`, which is also the `call-id` of
+its log lines. A span that could not be recorded is logged and dropped.
+
+```scala
+OtelTransactionTracing[IO](tracer)   // pass as tracing = Some(...)
+```
+
 ## Robustness
 
 What comes off the network is not trusted. Every decoder answers any input with

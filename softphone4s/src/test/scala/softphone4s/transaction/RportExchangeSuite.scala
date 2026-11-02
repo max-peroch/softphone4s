@@ -102,7 +102,8 @@ class RportExchangeSuite extends CatsEffectSuite {
           TransactionConfig(),
           NoOpLogger.impl[IO],
           o => seen.update(_ :+ o),
-          _ => IO.unit
+          _ => IO.unit,
+          TransactionTracing.noop[IO]
         )
         .use { layer =>
           for {

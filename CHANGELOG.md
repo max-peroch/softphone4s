@@ -28,7 +28,9 @@ what to change when it does.
   `softphone4s-otel4s`.
 - **Observability.** A `Metrics[F]` hook (calls, registrations, SIP
   retransmissions and timeouts, what the jitter buffer did) with
-  `OtelMetrics` in `softphone4s-otel4s`; log lines carry named fields
+  `OtelMetrics` in `softphone4s-otel4s`; a `TransactionTracing[F]` hook with
+  `OtelTransactionTracing`, one span per SIP transaction from the request to the
+  final answer; log lines carry named fields
   (`call-id`, `direction`, `account`, `branch`, `method`...), documented in
   `LogFields`.
 - **Tests and tools.** Fuzzing of every decoder and hostile-input suites; two

@@ -41,7 +41,9 @@ class TransactionManagerSuite extends CatsEffectSuite {
       withB: Boolean = true,
       eventsA: TransactionEvent => IO[Unit] = _ => IO.unit,
       eventsB: TransactionEvent => IO[Unit] = _ => IO.unit,
-      logger: StructuredLogger[IO] = NoOpLogger.impl[IO]
+      logger: StructuredLogger[IO] = NoOpLogger.impl[IO],
+      tracingA: TransactionTracing[IO] = TransactionTracing.noop[IO],
+      tracingB: TransactionTracing[IO] = TransactionTracing.noop[IO]
   ) =
     for {
       pair <- cats.effect.Resource.eval(InMemoryTransport.pair[IO])
@@ -52,7 +54,8 @@ class TransactionManagerSuite extends CatsEffectSuite {
         TransactionConfig(),
         logger,
         _ => IO.unit,
-        eventsA
+        eventsA,
+        tracingA
       )
       lb <-
         if withB then
@@ -62,7 +65,8 @@ class TransactionManagerSuite extends CatsEffectSuite {
               TransactionConfig(),
               logger,
               _ => IO.unit,
-              eventsB
+              eventsB,
+              tracingB
             )
             .map(Some(_))
         else cats.effect.Resource.pure[IO, Option[TransactionLayer[IO]]](None)
@@ -585,6 +589,130 @@ class TransactionManagerSuite extends CatsEffectSuite {
           } yield assertEquals((a, s), (Vector.empty, Vector.empty))
         }
       }
+    )
+  }
+
+  // ---- Tracing ----------------------------------------------------------------
+
+  test(
+    "an INVITE refused: one span on each side, ended by the final response"
+  ) {
+    TestControl.executeEmbed(
+      for {
+        ta <- RecordingTracing()
+        tb <- RecordingTracing()
+        r  <- peers(tracingA = ta, tracingB = tb).use { (la, lb, _, _) =>
+          for {
+            c  <- client(la, invite, b)
+            st <- lb.get.incoming.head.compile.lastOrError
+            _  <- reply(st, 486)
+            _  <- c.notices.compile.toList // both transactions have ended
+            ca <- ta.ended(TransactionSide.Client)
+            sb <- tb.ended(TransactionSide.Server)
+            ba <- ta.began(TransactionSide.Client)
+            bb <- tb.began(TransactionSide.Server)
+          } yield (ba, ca, bb, sb)
+        }
+      } yield {
+        val (clientBegan, clientEnded, serverBegan, serverEnded) = r
+        assertEquals(clientBegan.map(_.method), Vector(SipMethod.Invite))
+        assertEquals(
+          clientEnded.map(_._2),
+          Vector(TransactionOutcome.Answered(486))
+        )
+        assertEquals(serverBegan.map(_.method), Vector(SipMethod.Invite))
+        assertEquals(
+          serverEnded.map(_._2),
+          Vector(TransactionOutcome.Responded(486))
+        )
+        // the two sides of one transaction are the same branch of the same call
+        assertEquals(clientBegan.map(_.branch), serverBegan.map(_.branch))
+        assertEquals(clientBegan.map(_.callId), serverBegan.map(_.callId))
+      }
+    )
+  }
+
+  test(
+    "a provisional response does not end the span; the final one does, at once"
+  ) {
+    TestControl.executeEmbed(
+      for {
+        ta <- RecordingTracing()
+        tb <- RecordingTracing()
+        r  <- peers(tracingA = ta, tracingB = tb).use { (la, lb, _, _) =>
+          for {
+            _      <- client(la, options, b)
+            st     <- lb.get.incoming.head.compile.lastOrError
+            _      <- reply(st, 180)
+            _      <- IO.sleep(100.millis)
+            before <- (
+              ta.ended(TransactionSide.Client),
+              tb.ended(TransactionSide.Server)
+            ).tupled
+            _ <- reply(st, 200)
+            // well before the timers (K, J) that keep the transactions around
+            _     <- IO.sleep(100.millis)
+            after <- (
+              ta.ended(TransactionSide.Client),
+              tb.ended(TransactionSide.Server)
+            ).tupled
+          } yield (before, after)
+        }
+      } yield {
+        val (before, after) = r
+        assertEquals((before._1, before._2), (Vector.empty, Vector.empty))
+        assertEquals(
+          after._1.map(_._2),
+          Vector(TransactionOutcome.Answered(200))
+        )
+        assertEquals(
+          after._2.map(_._2),
+          Vector(TransactionOutcome.Responded(200))
+        )
+      }
+    )
+  }
+
+  test(
+    "a span ends once, however often the request or the response is repeated"
+  ) {
+    TestControl.executeEmbed(
+      for {
+        tb <- RecordingTracing()
+        r  <- peers(
+          dropB =
+            (_, m) => isStatus(m, 200), // the answer is lost, over and over
+          tracingB = tb
+        ).use { (la, lb, _, _) =>
+          for {
+            _  <- client(la, options, b)
+            st <- lb.get.incoming.head.compile.lastOrError
+            _  <- reply(st, 200)
+            _  <- IO.sleep(
+              30.seconds
+            ) // A retransmits; B answers again each time
+            ended <- tb.ended(TransactionSide.Server)
+          } yield ended
+        }
+      } yield assertEquals(
+        r.map(_._2),
+        Vector(TransactionOutcome.Responded(200))
+      )
+    )
+  }
+
+  test("a request nobody answers: the span ends as timed out, once") {
+    TestControl.executeEmbed(
+      for {
+        ta <- RecordingTracing()
+        r  <- peers(withB = false, tracingA = ta).use { (la, _, _, _) =>
+          for {
+            c     <- client(la, options, b)
+            _     <- c.notices.compile.toList
+            ended <- ta.ended(TransactionSide.Client)
+          } yield ended
+        }
+      } yield assertEquals(r.map(_._2), Vector(TransactionOutcome.TimedOut))
     )
   }
 }

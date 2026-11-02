@@ -23,7 +23,8 @@ import softphone4s.stun.StunClient
 import softphone4s.transaction.{
   TransactionConfig,
   TransactionLayer,
-  TransactionManager
+  TransactionManager,
+  TransactionTracing
 }
 import softphone4s.transport.{
   RoutedTransport,
@@ -272,7 +273,8 @@ object SoftphoneStreaming {
       audioFormat: AudioFormat,
       logger: StructuredLogger[F],
       extraCodecs: List[AudioCodec] = Nil,
-      metrics: Option[Metrics[F]] = None
+      metrics: Option[Metrics[F]] = None,
+      tracing: Option[TransactionTracing[F]] = None
   ): Resource[F, SoftphoneStreaming[F]] =
     resourceWith(
       config,
@@ -280,7 +282,8 @@ object SoftphoneStreaming {
       logger,
       DnsJavaRecords.configured[F](config.dns),
       extraCodecs,
-      metrics
+      metrics,
+      tracing
     )
 
   /** As [[resource]], looking names up with `dns` instead of the system's DNS
@@ -292,11 +295,17 @@ object SoftphoneStreaming {
       logger: StructuredLogger[F],
       dns: F[DnsRecords[F]],
       extraCodecs: List[AudioCodec] = Nil,
-      metrics: Option[Metrics[F]] = None
+      metrics: Option[Metrics[F]] = None,
+      tracing: Option[TransactionTracing[F]] = None
   ): Resource[F, SoftphoneStreaming[F]] =
     for {
-      // What goes to `metrics` cannot break the stack: an error is logged.
+      // What goes to `metrics` or `tracing` cannot break the stack: an error is
+      // logged.
       measured = Metrics.guarded(metrics.getOrElse(Metrics.noop[F]), logger)
+      traced   = TransactionTracing.guarded(
+        tracing.getOrElse(TransactionTracing.noop[F]),
+        logger
+      )
       codecs <- Resource.eval(
         Async[F].fromEither(audioCodecs(config, audioFormat, extraCodecs))
       )
@@ -333,7 +342,8 @@ object SoftphoneStreaming {
           publicSip
             .set(Some(observed.address))
             .whenA(config.nat.observedAddress == ObservedAddresses.Use),
-        measured.transaction
+        measured.transaction,
+        traced
       )
       routes <- Resource.eval(
         Ref[F].of(Map.empty[CallId, Channel[F, DialogInput[F]]])

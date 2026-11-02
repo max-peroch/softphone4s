@@ -7,7 +7,7 @@ import pureconfig.*
 import softphone4s.{Softphone, SoftphoneStreaming}
 import softphone4s.config.SoftphoneConfig
 import softphone4s.model.Callee
-import softphone4s.otel4s.TracedSoftphone
+import softphone4s.otel4s.{OtelMetrics, OtelTransactionTracing, TracedSoftphone}
 import sound4s.{AudioFile, SoundStreaming, ResourceName}
 import fs2.Stream
 
@@ -96,12 +96,16 @@ object Demo extends IOApp {
     (for {
       otel         <- OtelJava.autoConfigured[IO]()
       tracer       <- Resource.eval(otel.tracerProvider.get("softphone4s-demo"))
+      meter        <- Resource.eval(otel.meterProvider.get("softphone4s-demo"))
+      metrics      <- Resource.eval(OtelMetrics[IO](meter))
       logger       <- Resource.eval(Slf4jLogger.create[IO])
       jss          <- SoundStreaming.resource[IO](audioFormat, logger)
       rawSoftphone <- SoftphoneStreaming.resource(
         config.softphone,
         audioFormat,
-        logger
+        logger,
+        metrics = Some(metrics),
+        tracing = Some(OtelTransactionTracing[IO](tracer))
       )
       softphone = TracedSoftphone(rawSoftphone, tracer)
       _ <- Resource.eval(makeCall(logger, softphone, jss))

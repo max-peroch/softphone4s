@@ -23,6 +23,7 @@ private[transaction] final class TransactionEngine[F[_]: Concurrent](
     unmatchedQueue: Queue[F, Inbound],
     observed: ObservedAddress => F[Unit],
     events: TransactionEvent => F[Unit],
+    tracing: TransactionTracing[F],
     logger: StructuredLogger[F]
 ) {
 
@@ -131,7 +132,15 @@ private[transaction] final class TransactionEngine[F[_]: Concurrent](
             ClientMachine.start(request, reliabilityOf(request), config)
           for {
             notices <- Queue.unbounded[F, Option[ClientNotice]]
-            entry = ClientEntry[F](machine, to, notices)
+            span    <- tracing.began(
+              TransactionInfo(
+                TransactionSide.Client,
+                key.method,
+                key.branch,
+                request.headers.callId
+              )
+            )
+            entry = ClientEntry[F](machine, to, notices, Some(span))
             _ <- actions.traverse_(
               runClient(TransactionId.Client(key), entry, _)
             )
@@ -151,7 +160,15 @@ private[transaction] final class TransactionEngine[F[_]: Concurrent](
       ServerMachine.start(request, reliabilityOf(request), config)
     for {
       notices <- Queue.unbounded[F, Option[ServerNotice]]
-      entry = ServerEntry[F](machine, from, notices)
+      span    <- tracing.began(
+        TransactionInfo(
+          TransactionSide.Server,
+          key.method,
+          key.branch,
+          request.headers.callId
+        )
+      )
+      entry = ServerEntry[F](machine, from, notices, Some(span))
       _ <- actions.traverse_(runServer(key, entry, _))
     } yield table.copy(servers = table.servers.updated(key, entry))
   }
@@ -168,8 +185,11 @@ private[transaction] final class TransactionEngine[F[_]: Concurrent](
       case Some(entry) =>
         val (next, actions) = entry.machine.step(event)
         val id              = TransactionId.Client(key)
+        val outcome         = clientOutcome(event, actions, next.isTerminated)
+        val after = if outcome.isDefined then entry.copy(span = None) else entry
         clientTrouble(key, event, actions).traverse_(events) >>
-          actions.traverse_(runClient(id, entry, _)) >> {
+          actions.traverse_(runClient(id, entry, _)) >>
+          (entry.span, outcome).tupled.traverse_((span, o) => span.end(o)) >> {
             if next.isTerminated then
               cancelTimers(id) >> entry.notices
                 .offer(None)
@@ -179,7 +199,7 @@ private[transaction] final class TransactionEngine[F[_]: Concurrent](
             else
               table
                 .copy(clients =
-                  table.clients.updated(key, entry.copy(machine = next))
+                  table.clients.updated(key, after.copy(machine = next))
                 )
                 .pure[F]
           }
@@ -195,8 +215,11 @@ private[transaction] final class TransactionEngine[F[_]: Concurrent](
       case Some(entry) =>
         val (next, actions) = entry.machine.step(event)
         val id              = TransactionId.Server(key)
+        val outcome         = serverOutcome(event, actions, next.isTerminated)
+        val after = if outcome.isDefined then entry.copy(span = None) else entry
         serverTrouble(key, event, actions).traverse_(events) >>
-          actions.traverse_(runServer(key, entry, _)) >> {
+          actions.traverse_(runServer(key, entry, _)) >>
+          (entry.span, outcome).tupled.traverse_((span, o) => span.end(o)) >> {
             if next.isTerminated then
               cancelTimers(id) >> entry.notices
                 .offer(None)
@@ -206,11 +229,49 @@ private[transaction] final class TransactionEngine[F[_]: Concurrent](
             else
               table
                 .copy(servers =
-                  table.servers.updated(key, entry.copy(machine = next))
+                  table.servers.updated(key, after.copy(machine = next))
                 )
                 .pure[F]
           }
     }
+
+  /** How a client transaction's wait for an answer ended in this step, if it
+    * did: with a final response, with no response, with a send that failed, or,
+    * if the transaction is over and none of those was seen, with nothing.
+    */
+  private def clientOutcome(
+      event: ClientEvent,
+      actions: List[ClientAction],
+      terminated: Boolean
+  ): Option[TransactionOutcome] =
+    if actions.contains(ClientAction.TimedOut) then
+      Some(TransactionOutcome.TimedOut)
+    else if actions.contains(ClientAction.TransportFailed) then
+      Some(TransactionOutcome.SendFailed)
+    else
+      event match {
+        case ClientEvent.Response(response) if response.statusCode >= 200 =>
+          Some(TransactionOutcome.Answered(response.statusCode))
+        case _ => Option.when(terminated)(TransactionOutcome.Abandoned)
+      }
+
+  /** As [[clientOutcome]]: a server transaction ends its wait by sending a
+    * final response.
+    */
+  private def serverOutcome(
+      event: ServerEvent,
+      actions: List[ServerAction],
+      terminated: Boolean
+  ): Option[TransactionOutcome] =
+    if actions.contains(ServerAction.AckTimedOut) then
+      Some(TransactionOutcome.TimedOut)
+    else
+      event match {
+        case ServerEvent.TransportError => Some(TransactionOutcome.SendFailed)
+        case ServerEvent.Respond(response) if response.statusCode >= 200 =>
+          Some(TransactionOutcome.Responded(response.statusCode))
+        case _ => Option.when(terminated)(TransactionOutcome.Abandoned)
+      }
 
   /** What a client transaction's step says of the network: a request sent again
     * because a timer fired (not the ACK of a failure, which a response causes),

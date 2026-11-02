@@ -6,5 +6,6 @@ import com.comcast.ip4s.{IpAddress, SocketAddress}
 private[transaction] final case class ClientEntry[F[_]](
     machine: ClientMachine,
     to: SocketAddress[IpAddress],
-    notices: Queue[F, Option[ClientNotice]]
+    notices: Queue[F, Option[ClientNotice]],
+    span: Option[TransactionSpan[F]]
 )
