@@ -720,6 +720,14 @@ ending. Breaking the port release makes the first fail, and keeping a socket
 reachable makes the second (an unreachable one is closed by the JDK's cleaner,
 and does not count).
 
+`softphone4s-bench` has a load and soak program on the same pair
+(`LoadTest`, see `softphone4s-bench/LOAD.md`): a burst of calls held with audio,
+or calls kept going for minutes, reporting setup and hang-up times, how much audio
+arrives, CPU, allocation, file descriptors and drift, and failing on limits given
+on the command line. On a 2014 laptop with both phones in one process it holds
+about 40 calls before setup times grow and audio is lost; a media packet costs
+about 0.7 ms of CPU, which is the main thing left to improve.
+
 Bounds that came out of it: on a TCP or TLS connection the time to frame is
 linear in the bytes read, however they are cut up (a flood of keep-alives, or a
 body trickling in a few bytes at a time, used to cost a copy of the whole buffer

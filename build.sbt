@@ -87,7 +87,11 @@ lazy val softphone4sBench = project
   .dependsOn(softphone4s)
   .settings(
     name           := "softphone4s-bench",
-    publish / skip := true
+    publish / skip := true,
+    // The load and soak tests are programs, run in a JVM of their own
+    run / fork         := true,
+    run / javaOptions ++= Seq("-Xmx2g"),
+    run / connectInput := true
   )
 
 lazy val softphone4sDemo = project
