@@ -708,6 +708,18 @@ RTCP, SRTP and SRTCP, STUN, PIDF and message-summary bodies. Two suites in
   counts far beyond the datagram, deeply nested XML, entity bombs, and streams of
   keep-alives or one-byte reads.
 
+`LoopbackCallSuite` puts two softphones in one process, talking over real UDP on
+`127.0.0.1` (the in-process stand-in for a remote party, needing no server). It
+checks that a call connects and audio goes both ways, that the caller's hang-up
+reaches the callee, and how calls end when they go wrong: cancelled before
+pickup, rejected, never answered (`480`), for a user an account-holding phone
+does not hold (`404`), and to an address where nobody listens. It also checks
+that nothing is left behind: forty calls one after another through a pool of four
+RTP port pairs, and the process's open file descriptors over calls of every
+ending. Breaking the port release makes the first fail, and keeping a socket
+reachable makes the second (an unreachable one is closed by the JDK's cleaner,
+and does not count).
+
 Bounds that came out of it: on a TCP or TLS connection the time to frame is
 linear in the bytes read, however they are cut up (a flood of keep-alives, or a
 body trickling in a few bytes at a time, used to cost a copy of the whole buffer
