@@ -13,6 +13,8 @@ A purely functional SIP/VoIP client for the Typelevel ecosystem, built on
 |----------------------|-------------|
 | `softphone4s`        | Core SIP/RTP client (this README) |
 | `softphone4s-otel4s` | OpenTelemetry tracing wrapper around `Softphone[F]` |
+| `softphone4s-opus`   | The Opus codec, through libopus (JDK 22 or later) |
+| `softphone4s-interop`| Tests against a real Asterisk in Docker (not published; see [Interop tests](#interop-tests)) |
 | `softphone4s-demo`   | Runnable example app (not published) |
 | `softphone4s-bench`  | JMH benchmarks for the SIP codec (not published) |
 
@@ -674,7 +676,8 @@ SoftphoneStreaming          — the public API; a thin facade over the parts bel
       └─ AudioCodec                — G.711, G.722, Opus (plug-in)
 ```
 
-The packages `model`, `codec`, `fsm`, `sdp`, `srtp` and `messaging` are pure:
+The packages `model`, `codec`, `fsm`, `sdp`, `srtp`, `messaging`,
+`subscription` and `publication` are pure:
 they import no `cats.effect` and no `fs2` stream, pipe or I/O (`fs2.Chunk` is
 data and is allowed). A test (`PuritySuite`) scans them and fails if that
 changes.
@@ -686,6 +689,41 @@ CANCEL go out as client transactions; the ACK of a failure is the
 transaction's, the ACK of a 2xx is the call's. The four transaction state
 machines (`InviteClientTransaction` and its three siblings) are pure too and
 emit timer actions that `Timers` runs.
+
+## Interop tests
+
+The unit and loopback tests check the library against our reading of the RFCs.
+The module `softphone4s-interop` checks it against a real server: it starts
+Asterisk 20 (the `andrius/asterisk` image, pinned to `20.7-cert12_debian-trixie`)
+in a container, configured from `softphone4s-interop/src/test/resources/asterisk`,
+with its SIP port published on a free port of the machine, and drives it with
+the library from outside. It needs Docker and is not part of `sbt testFull`:
+
+```
+sbt softphone4sInterop/testFull
+```
+
+The first run pulls the image (about 130 MB). Without a Docker daemon the tests
+are skipped. What is covered:
+
+- **Registration**, with Digest authentication, and the contact Asterisk holds.
+- **MESSAGE** (RFC 3428): one account sends to another through Asterisk, which
+  delivers it to the contact it holds; text with accents and symbols arrives as
+  sent.
+- **Message waiting** (RFC 3842): a subscription to a mailbox is told of its
+  state, and of a message that arrives in it.
+- **Presence** (RFC 3856, PIDF): a subscription to a hint follows a device as it
+  changes state.
+
+If a test fails, the output includes what Asterisk logged, with its SIP logger
+on, which shows the messages it sent and received. Not covered: PUBLISH (Asterisk
+keeps no PIDF state published to it), calls with media, TLS and SRTP; FreeSWITCH
+is not tried.
+
+What running against Asterisk showed: after a REGISTER it sends an unsolicited
+message-waiting NOTIFY to an endpoint that has `mailboxes`, with no subscription;
+the library answers it `481`, as RFC 6665 asks. A solicited MWI subscription
+resolves its request-URI to an AOR, and the mailbox must be listed on the AOR.
 
 ## Inspirations
 

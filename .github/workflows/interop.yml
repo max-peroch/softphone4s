@@ -1,0 +1,31 @@
+name: Interop
+
+# Tests against a real Asterisk in Docker. They need Docker and a pull of the
+# image, so they are not part of every push: run them by hand, or weekly.
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: '0 5 * * 1'
+
+jobs:
+  asterisk:
+    name: Asterisk (Java 25)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout current branch (full)
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Setup Java
+        uses: actions/setup-java@v5
+        with:
+          distribution: zulu
+          java-version: '25'
+          cache: sbt
+
+      - name: Setup sbt
+        uses: sbt/setup-sbt@v1
+
+      - name: Interop tests
+        run: sbt softphone4sInterop/testFull

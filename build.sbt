@@ -67,6 +67,19 @@ lazy val softphone4sOpus = project
     Test / javaOptions ++= Seq("--enable-native-access=ALL-UNNAMED")
   )
 
+// Interop tests against real servers in Docker. Not part of the root, so that
+// `sbt testFull` does not need Docker: sbt softphone4sInterop/test
+lazy val softphone4sInterop = project
+  .in(file("softphone4s-interop"))
+  .dependsOn(softphone4s)
+  .settings(
+    name           := "softphone4s-interop",
+    publish / skip := true,
+    // Each suite starts its own Asterisk, and one at a time is plenty.
+    Test / parallelExecution := false,
+    libraryDependencies ++= Seq(munit, munitCatsEffect)
+  )
+
 // JMH benchmarks: sbt "softphone4sBench/Jmh/run"
 lazy val softphone4sBench = project
   .in(file("softphone4s-bench"))
@@ -104,4 +117,19 @@ lazy val softphone4sDemo = project
       "-Dotel.metrics.exporter=none",
       "-Dotel.logs.exporter=none"
     )
+  )
+
+// The modules that are built, tested and published together. The interop tests
+// need Docker and are run on their own.
+lazy val root = (project in file("."))
+  .aggregate(
+    softphone4s,
+    softphone4sOtel4s,
+    softphone4sOpus,
+    softphone4sBench,
+    softphone4sDemo
+  )
+  .settings(
+    name           := "softphone4s-root",
+    publish / skip := true
   )

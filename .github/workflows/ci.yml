@@ -37,7 +37,11 @@ jobs:
 
       - name: Check formatting
         if: matrix.java == '25'
-        run: sbt "scalafmtSbtCheck;scalafmtCheckAll"
+        run: sbt "scalafmtSbtCheck;scalafmtCheckAll;softphone4sInterop/scalafmtCheckAll"
+
+      - name: Compile the interop tests
+        if: matrix.java == '25'
+        run: sbt softphone4sInterop/Test/compile
 
       - name: Test the library
         if: matrix.java == '17'
