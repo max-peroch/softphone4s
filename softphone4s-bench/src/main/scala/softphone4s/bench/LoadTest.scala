@@ -84,17 +84,35 @@ object LoadTest extends IOApp {
       failure: Option[String]
   )
 
-  /** Talks into `call` a frame every 20 ms and counts the bytes that come out
-    * of it, until `until` completes. Gives the count.
+  /** Whether the phones send audio. `Silent` holds the calls open and sends
+    * nothing, which shows what a call costs apart from its media packets: the
+    * playout ticks, the timers and the reports.
     */
-  private def talk(call: Call[IO], until: IO[Unit]): IO[Long] =
+  private enum Talking {
+    case Speaking
+    case Silent
+  }
+
+  /** Talks into `call` a frame every 20 ms (unless `talking` is `Silent`) and
+    * counts the bytes that come out of it, until `until` completes. Gives the
+    * count.
+    */
+  private def talk(
+      call: Call[IO],
+      until: IO[Unit],
+      talking: Talking
+  ): IO[Long] =
     Ref.of[IO, Long](0L).flatMap { heard =>
-      val speak = Stream
-        .fixedRate[IO](FrameMillis.millis)
-        .flatMap(_ => Stream.chunk(frame))
-        .through(call.sink)
-        .compile
-        .drain
+      val speak = talking match {
+        case Talking.Silent   => IO.never[Unit]
+        case Talking.Speaking =>
+          Stream
+            .fixedRate[IO](FrameMillis.millis)
+            .flatMap(_ => Stream.chunk(frame))
+            .through(call.sink)
+            .compile
+            .drain
+      }
       val listen = call.source.chunks
         .evalMap(c => heard.update(_ + c.size))
         .compile
@@ -109,14 +127,15 @@ object LoadTest extends IOApp {
     */
   private def answerAll(
       bob: Softphone[IO],
-      results: Ref[IO, Map[String, Long]]
+      results: Ref[IO, Map[String, Long]],
+      talking: Talking
   ): IO[Unit] =
     bob.incoming
       .parEvalMapUnordered(Int.MaxValue) { incoming =>
         incoming.accept
           .use { call =>
             call.awaitPickup.attempt >>
-              talk(call, call.awaitHangup).flatMap(n =>
+              talk(call, call.awaitHangup, talking).flatMap(n =>
                 results.update(
                   _ + (incoming.caller.toString + System.nanoTime -> n)
                 )
@@ -129,7 +148,11 @@ object LoadTest extends IOApp {
       .drain
 
   /** A call from `alice`, held for `hold`. */
-  private def oneCall(alice: Softphone[IO], hold: FiniteDuration): IO[Outcome] =
+  private def oneCall(
+      alice: Softphone[IO],
+      hold: FiniteDuration,
+      talking: Talking
+  ): IO[Outcome] =
     for {
       begun   <- IO.monotonic
       outcome <- alice.call(bobAddress).allocated.attempt.flatMap {
@@ -144,7 +167,7 @@ object LoadTest extends IOApp {
             case Right(_) =>
               for {
                 setup <- millisSince(begun)
-                heard <- talk(call, IO.sleep(hold))
+                heard <- talk(call, IO.sleep(hold), talking)
                 hung  <- IO.monotonic
                 _     <- release.attempt
                 hang  <- millisSince(hung)
@@ -214,18 +237,21 @@ object LoadTest extends IOApp {
       calls: Int,
       hold: FiniteDuration,
       perSecond: Int,
-      limits: Limits
+      limits: Limits,
+      talking: Talking
   ): IO[ExitCode] =
     pair.use { p =>
       for {
         bobResults <- Ref.of[IO, Map[String, Long]](Map.empty)
-        report     <- answerAll(p.bob, bobResults).background.use { _ =>
+        report <- answerAll(p.bob, bobResults, talking).background.use { _ =>
           for {
             _ <- IO.println(
               s"== load: $calls calls, held ${hold.toSeconds} s, started at $perSecond a second =="
             )
             // Warm the JIT with real calls, which are not counted.
-            _ <- (1 to 30).toList.parTraverse_(_ => oneCall(p.alice, 1.second))
+            _ <- (1 to 30).toList.parTraverse_(_ =>
+              oneCall(p.alice, 1.second, talking)
+            )
             _ <- IO.sleep(1.second)
             _ <- bobResults.set(Map.empty)
             cpu0 = Process.cpuNanos
@@ -240,7 +266,11 @@ object LoadTest extends IOApp {
               .delay((Process.openFiles, Process.threads))
               .flatMap(peak.set)).start
             outcomes <- (0 until calls).toList.parTraverse(i =>
-              IO.sleep((i * 1000L / perSecond).millis) >> oneCall(p.alice, hold)
+              IO.sleep((i * 1000L / perSecond).millis) >> oneCall(
+                p.alice,
+                hold,
+                talking
+              )
             )
             elapsed    <- millisSince(start)
             _          <- sampling.cancel
@@ -364,7 +394,7 @@ object LoadTest extends IOApp {
           .repeatEval(IO.monotonic)
           .takeWhile(_ < deadline)
           .evalMap(_ =>
-            oneCall(p.alice, callSeconds.seconds).flatMap(o =>
+            oneCall(p.alice, callSeconds.seconds, Talking.Speaking).flatMap(o =>
               if o.failure.isEmpty then completed.update(_ + 1)
               else
                 failed.update(_ + 1) >>
@@ -397,10 +427,11 @@ object LoadTest extends IOApp {
           }
           .compile
           .drain
-        _ <- answerAll(p.bob, bobResults).background.use { _ =>
-          sampling.background.use(_ =>
-            (1 to concurrent).toList.parTraverse_(_ => slot)
-          )
+        _ <- answerAll(p.bob, bobResults, Talking.Speaking).background.use {
+          _ =>
+            sampling.background.use(_ =>
+              (1 to concurrent).toList.parTraverse_(_ => slot)
+            )
         }
         all    <- samples.get
         total  <- completed.get
@@ -443,7 +474,11 @@ object LoadTest extends IOApp {
 
   def run(args: List[String]): IO[ExitCode] =
     args match {
-      case "load" :: calls :: hold :: rest =>
+      case "load" :: calls :: hold :: more =>
+        // `silent` anywhere after the hold time: the calls send no audio.
+        val talking =
+          if more.contains("silent") then Talking.Silent else Talking.Speaking
+        val rest = more.filterNot(_ == "silent")
         (
           calls.toIntOption,
           hold.toIntOption,
@@ -457,7 +492,8 @@ object LoadTest extends IOApp {
               Limits(
                 rest.lift(1).flatMap(_.toLongOption),
                 rest.lift(2).flatMap(_.toDoubleOption)
-              )
+              ),
+              talking
             )
           case None => usage
         }
@@ -475,6 +511,6 @@ object LoadTest extends IOApp {
 
   private val usage: IO[ExitCode] =
     IO.println(
-      "usage: load <calls> <hold seconds> [calls per second [setup p99 limit ms [least fraction heard]]]\n       soak <concurrent calls> <minutes> [seconds per call]"
+      "usage: load <calls> <hold seconds> [calls per second [setup p99 limit ms [least fraction heard]]] [silent]\n       soak <concurrent calls> <minutes> [seconds per call]"
     ).as(ExitCode.Error)
 }

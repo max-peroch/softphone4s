@@ -1,6 +1,7 @@
 package softphone4s.media
 
-import cats.effect.Async
+import cats.effect.{Async, Deferred, Ref}
+import cats.syntax.all.*
 import fs2.Stream
 
 import scala.concurrent.duration.FiniteDuration
@@ -15,24 +16,28 @@ object JitterPlayout {
       config: JitterConfig,
       period: FiniteDuration,
       packets: Stream[F, JitterPacket]
-  ): Stream[F, (Playout, JitterStats)] = {
-    val arrivals = packets.map(Event.Arrived(_))
-    val ticks    = Stream.fixedRate[F](period).map(_ => Event.Tick)
-    arrivals
-      .mergeHaltL(ticks)
-      .mapAccumulate(JitterBuffer.empty(config)) {
-        case (buffer, Event.Arrived(packet)) => (buffer.push(packet)._1, None)
-        case (buffer, Event.Tick)            =>
-          val (next, out) = buffer.pull
-          (next, Some((out, next.stats)))
+  ): Stream[F, (Playout, JitterStats)] =
+    Stream
+      .eval(
+        (
+          Ref.of[F, JitterBuffer](JitterBuffer.empty(config)),
+          Deferred[F, Unit]
+        ).tupled
+      )
+      .flatMap { (buffer, done) =>
+        val feed = packets
+          .evalMap(packet => buffer.update(_.push(packet)._1))
+          .compile
+          .drain
+        Stream
+          .fixedRate[F](period)
+          .evalMap(_ =>
+            buffer.modify { current =>
+              val (next, out) = current.pull
+              (next, (out, next.stats))
+            }
+          )
+          .interruptWhen(done.get.map(_.asRight[Throwable]))
+          .concurrently(Stream.exec(feed >> done.complete(()).void))
       }
-      .map(_._2)
-      .unNone
-  }
-
-  /** What the buffer is told of. */
-  private enum Event {
-    case Arrived(packet: JitterPacket)
-    case Tick
-  }
 }

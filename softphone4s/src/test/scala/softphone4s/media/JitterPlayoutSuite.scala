@@ -153,4 +153,43 @@ class JitterPlayoutSuite extends CatsEffectSuite {
       )
     }
   }
+
+  test(
+    "an error in the packets is the playout's error, after what was played"
+  ) {
+    val boom   = new RuntimeException("socket closed")
+    val source = Stream.emit(packet(0)).covary[IO] ++
+      Stream.sleep[IO](100.millis).drain ++ Stream.raiseError[IO](boom)
+    TestControl
+      .executeEmbed(
+        JitterPlayout(config, period, source).compile.toList.attempt
+      )
+      .map(result =>
+        assertEquals(result.left.map(_.getMessage), Left("socket closed"))
+      )
+  }
+
+  test("stopping the playout stops what feeds it, and runs its finalizer") {
+    TestControl.executeEmbed(
+      for {
+        stopped <- IO.ref(false)
+        packets = Stream
+          .iterate(0)(_ + 1)
+          .covary[IO]
+          .evalMap(n => IO.sleep(period).as(packet(n)))
+          .onFinalize(stopped.set(true))
+        played <- JitterPlayout(config, period, packets)
+          .take(5)
+          .compile
+          .toList
+        ended <- stopped.get
+      } yield {
+        assertEquals(played.size, 5)
+        assert(
+          ended,
+          "the packets were still being read after the playout stopped"
+        )
+      }
+    )
+  }
 }

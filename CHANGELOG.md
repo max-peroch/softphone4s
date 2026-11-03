@@ -47,6 +47,10 @@ what to change when it does.
 - **Breaking:** `Softphone` and `Call` have more members.
 - **Breaking:** `SoftphoneError.RtpPortExhausted(port)` is now
   `RtpPortsExhausted(first, last)`, and `SoftphoneError` has many more cases.
+- A call that is up costs less when nobody is speaking, and about half the
+  allocation when somebody is: the jitter-buffer playout no longer merges its
+  tick and packet streams. A load of 100 calls in one process now sets up in under
+  3 s, where it took 9 s.
 - Timers, durations and sizes in the configuration are typed (`Attempts`,
   `ByteLimit`, `MaxConnections`); a value below one is a load error.
 - `softphone4s-otel4s` is built against OpenTelemetry Java 1.64.0, which otel4s

@@ -6,7 +6,7 @@ needs no server. Run it in a JVM of its own (`run` forks, with `-Xmx2g`):
 
 ```
 # a burst of calls, held with audio, then hung up
-sbt "softphone4sBench/runMain softphone4s.bench.LoadTest load <calls> <hold s> [calls/s [setup p99 limit ms [least fraction heard]]]"
+sbt "softphone4sBench/runMain softphone4s.bench.LoadTest load <calls> <hold s> [calls/s [setup p99 limit ms [least fraction heard]]] [silent]"
 
 # calls kept going, each ended and replaced, sampled every 30 s
 sbt "softphone4sBench/runMain softphone4s.bench.LoadTest soak <concurrent> <minutes> [s per call]"
@@ -25,6 +25,9 @@ of the audio.
 retained heap (after a collection) between its first sample and its last; it
 exits with 1 if a call fails or one of them drifts more than 20 files, 20 threads
 or the larger of 64 MB and the heap at the start.
+
+`silent` holds the calls open and sends no audio: what is left is the cost of a call
+apart from its media packets (the playout ticks, the timers, the reports).
 
 Both phones share the one JVM, so every call is handled twice: a phone that only
 dialled, or only answered, would take about half as much. Thirty calls are made
@@ -70,3 +73,100 @@ Soak, 15 calls at a time of 6 s for 2 minutes: 300 calls, none failed; open file
   what is done per packet.
 - Nothing is left behind: open files return to 70 after every run, and the heap
   retained after a collection stays at 12 to 13 MB.
+
+## What was ruled out, and what an allocation profile says (2 November 2026)
+
+**fs2's datagram read buffer is not the cost.** `SelectingDatagramSocket.read`
+(the default `Network[IO]`) allocates a zero-filled 64 KiB buffer, and a JMH
+benchmark of calling `read` once per datagram measured 70,739 B/op against 3,344
+with a reused buffer. The media code does not call `read` per datagram, though: it
+uses `socket.reads`, which is `Stream.repeatEval(read)`, and `repeatEval` takes the
+effect by value, so the buffer is allocated once per stream and reused. Moving the
+RTP and RTCP sockets to `Network.forAsync` (fs2's other implementation, with one
+buffer per selector thread) made no difference where it matters: with 5 calls held
+20 s, everything heard, the process allocated 1 523 and 1 525 MB before and 1 517
+and 1 488 MB after, and used 1.21 to 1.26 cores before and 1.42 to 2.15 after. A
+JFR profile of the unchanged code puts `ByteBuffer.allocate` at 0.13% of sampled
+allocation. (That benchmark measured an API the code does not use; it was dropped.
+Benchmark the call that is made.)
+
+**Where the allocation is.** JFR's allocation samples of the 40-call run (6.2 GB
+sampled): the classes are `IO$FlatMap` 7.8%, `IO$Delay` 7.0%, `Object[]` 5.3%,
+`byte[]` 3.3%, `IO$Pure` 3.0%, `IO$Uncancelable` 2.5%, then more of the same
+(`IOFiber`, `ArrayStack`, `Tuple2`, `Right`, fs2 `Pull` lambdas). At least 43% of
+the sampled allocation has an `IOFiber` frame, and at least 16% an fs2 `Stream` or
+`Pull` frame (the stack is cut at 64 frames, so these are lower bounds). None of
+our own code is above 1%: `MediaSession` 1.0%, the jitter buffer 0.7%, `RtpSender`
+0.7%. So the cost is in the number of effect steps and stream combinators per
+packet, not in any one thing a packet does. A 5-call run receives about ten
+thousand packets (a probe counted 10 568 reads, for 1.5 GB allocated), so about
+140 KB per packet sent and received, or 70 KB per packet-op as above.
+
+A profile cannot attribute CPU to our code, because a fiber has no logical stack,
+so the next step was an experiment that can: the `silent` option, which holds calls
+open without sending audio. That is the next section.
+
+**Measuring on a busy machine.** The numbers in the table above need an idle
+machine. On 2 November the load average was 25 to 40 (other programs at 97% CPU),
+and two identical 40-call runs gave a setup p50 of 805 and of 158 ms and 0.75 to
+0.85 of the audio heard, against 82 ms and 0.98 at the baseline. Allocation (5 486
+and 5 514 MB) and CPU time (5.54 and 5.56 cores) did not move, so compare those,
+at a load light enough for everything to be heard (`load 5 20 50`), and look at
+`uptime` first.
+
+## An idle call was the cost, not the packets (2 November 2026)
+
+Holding 10 calls for 20 s with nobody speaking (`load 10 20 50 silent`) cost
+0.84 to 0.96 cores and 1 068 to 1 079 MB, against 1.80 to 1.93 cores and 3 011 to
+3 040 MB with audio. Half the CPU and a third of the allocation had nothing to do
+with media packets. Divided by the number of 20 ms playout ticks (two phones per
+call), an idle call cost about 0.9 ms of CPU and 48 KB per tick, all its costs
+counted, not the tick alone. The old reading of this file, "a media packet costs
+0.7 ms", had put that on the packets.
+
+The tick was `packets.mergeHaltL(ticks).mapAccumulate(...)`. fs2's `merge` runs both
+streams in fibers of their own and hands every element across, so each tick, packet
+or not, paid for a handshake. `JitterPlayout` now keeps the buffer in a `Ref`: the
+receive side pushes into it, and the tick pulls from it. Same behaviour (the
+playout tests are unchanged and pass; it still ends when the packets do, an error
+in them is its error, and stopping it stops the feed: two tests added), no merge.
+
+Taking the merge out cut an idle call's CPU by 35 to 40% and its allocation by 60%,
+and a call with audio's CPU by 25 to 30% and its allocation by half. Before and
+after on the same machine and method (quiet enough for everything to be
+heard, load average about 7):
+
+| Calls | Before: cores, MB allocated | After: cores, MB allocated |
+|------:|-----------------------------|----------------------------|
+| 10 with audio | 1.80 to 1.93, 3 011 to 3 040 | 1.39, 1 498 |
+| 10 silent     | 0.84 to 0.96, 1 068 to 1 079 | 0.56, 413 |
+
+And the table of the end of Phase 5, run again (calls at 50 a second, held 10 s):
+
+| Calls | Cores busy | Setup p50 / p99 (ms) | Audio heard (median) | Allocated |
+|------:|-----------:|---------------------:|---------------------:|----------:|
+| 40    | 4.6 to 4.7 | 16 to 22 / 206 to 237 | 0.99                | 282 MB/s  |
+| 60    | 5.7        | 81 / 1 067           | 0.95 to 0.96         | 379 MB/s  |
+| 80    | 5.5        | 187 / 2 670          | 0.92 to 0.94         | 421 MB/s  |
+| 100   | 6.2        | 1 599 / 2 725        | 0.95                 | 502 MB/s  |
+
+Every call was established in every run. At 40 calls the setup p50 went from 82 to
+16 to 22 ms and the allocation rate from 530 to 282 MB/s; at 100, where setup took
+9 s and a quarter of the audio was lost, calls now set up in under 3 s and 95% of
+the audio arrives. The machine still saturates, between 60 and 80 calls with both
+ends in the process, against 40 before. The target of 500 is still several times
+away.
+
+What is left: a silent call still costs about 0.55 cores per 10 calls and 19 KB per
+tick, so the idle path has more in it (the tick's `evalMap`s, `fill`, `fixedRate`,
+the sender and receiver loops, the reports), and each packet still costs about
+50 KB over an idle call's. The `silent` option is how to tell which of the two a
+change helps.
+
+Two things about measuring, learned the hard way. First, a test run in sbt that
+times out can leave work spinning in the sbt server's JVM: after a mutation check
+that broke the playout's end, the server sat at 650% CPU for half an hour and
+every number after it was wrong, so check `ps` and restart sbt before measuring.
+Second, `uptime` first: another program at 97% CPU, which was there for hours, was
+enough to move a result by several times.
+
