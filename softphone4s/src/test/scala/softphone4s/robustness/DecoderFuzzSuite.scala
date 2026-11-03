@@ -240,7 +240,8 @@ class DecoderFuzzSuite extends ScalaCheckSuite {
   private val pidfSeeds = List(
     """<?xml version="1.0" encoding="UTF-8"?><presence xmlns="urn:ietf:params:xml:ns:pidf" entity="pres:a@b"><tuple id="t1"><status><basic>open</basic></status><contact>sip:a@b</contact><note>hi</note></tuple></presence>""",
     """<p:presence xmlns:p="urn:ietf:params:xml:ns:pidf" xmlns:r="urn:x" entity="e"><p:tuple id="x"><p:status><p:basic>closed</p:basic></p:status><r:a><r:b/></r:a></p:tuple><![CDATA[ <x> ]]></p:presence>""",
-    """<!DOCTYPE presence [<!ENTITY a "aaaa">]><presence xmlns="urn:ietf:params:xml:ns:pidf" entity="e">&a;&#x41;&amp;</presence>"""
+    """<!DOCTYPE presence [<!ENTITY a "aaaa">]><presence xmlns="urn:ietf:params:xml:ns:pidf" entity="e">&a;&#x41;&amp;</presence>""",
+    """<presence xmlns="urn:ietf:params:xml:ns:pidf" xmlns:dm="urn:ietf:params:xml:ns:pidf:data-model" xmlns:rpid="urn:ietf:params:xml:ns:pidf:rpid" entity="e"><tuple id="t"><status><basic>open</basic></status></tuple><dm:person id="p1"><rpid:activities from="2005-05-30T12:00:00+05:00"><rpid:note>n</rpid:note><rpid:away/><rpid:on-the-phone/><rpid:other>reading &amp; more</rpid:other><rpid:lunch/></rpid:activities></dm:person></presence>"""
   )
   textDecoder("Pidf.parse", pidfSeeds)(Presence.parse(_))
 

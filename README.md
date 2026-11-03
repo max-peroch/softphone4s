@@ -514,8 +514,13 @@ stream. Three packages come with the library, and a program can define its own:
   with its `id`, `basic` status (`Open` or `Closed`, or none), contact and notes;
   `presence.isOpen` says whether any is open. The XML is read by `fs2-data-xml`,
   in Scala and fetching nothing: a document with a DOCTYPE, or an entity the XML
-  spec does not define, is refused. Extension elements in other namespaces (RPID
-  and the like) are skipped.
+  spec does not define, is refused. Extension elements in other namespaces are
+  skipped. The rich presence of RFC 4480 is read in part: `presence.activities`
+  are what the person is doing, from the `rpid:activities` of its `dm:person`
+  (`Activity.Busy`, `Away`, `OnThePhone`, `Meeting`... the values of the schema,
+  and `Other(text)` for `other` and for a name it does not know); the times and
+  notes of the element, and the other RPID elements (mood, place, class...), are
+  not read.
 - `DialogInfo.Package` (RFC 4235, the `dialog` event): the dialogs of an entity,
   which is what busy-lamp fields and call pickup are made of. Each `DialogEntry`
   has its `id`, its `state` (`Trying`, `Proceeding`, `Early`, `Confirmed`,
@@ -550,6 +555,8 @@ the state:
 ```scala
 val mine = Presence.forAccount(phone.publications.accounts.head,   // pres:alice@example.com
   List(PresenceTuple("desk", Some(Availability.Open), None, List("at my desk"))))
+
+// rich presence goes too: mine.copy(activities = List(Activity.OnThePhone))
 
 phone.publications.publishPresence(mine).use { publication =>
   publication.awaitPublished >>

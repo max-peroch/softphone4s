@@ -417,6 +417,37 @@ class HostileInputSuite extends FunSuite {
         ) + "</note></presence>"
       )
     )
+    val rich =
+      """xmlns="urn:ietf:params:xml:ns:pidf" xmlns:dm="urn:ietf:params:xml:ns:pidf:data-model" xmlns:rpid="urn:ietf:params:xml:ns:pidf:rpid""""
+    bounded("rpid thousands of activities")(
+      Presence.parse(
+        s"""<presence $rich entity="e"><dm:person id="p"><rpid:activities>""" +
+          rep(
+            "<rpid:busy/>",
+            9000
+          ) + "</rpid:activities></dm:person></presence>"
+      )
+    )
+    bounded("rpid thousands of persons")(
+      Presence.parse(
+        s"""<presence $rich entity="e">""" +
+          rep(
+            """<dm:person id="p"><rpid:activities><rpid:busy/></rpid:activities></dm:person>""",
+            1500
+          ) +
+          "</presence>"
+      )
+    )
+    bounded("rpid rendering thousands of activities")(
+      Presence.render(
+        Presence(
+          "e",
+          Nil,
+          Nil,
+          List.fill(50000)(softphone4s.presence.Activity.Busy)
+        )
+      )
+    )
     bounded("xml entity bomb")(
       Presence.parse(
         """<!DOCTYPE p [<!ENTITY a "aaaaaaaaaa"><!ENTITY b "&a;&a;&a;&a;&a;&a;&a;&a;&a;&a;"><!ENTITY c "&b;&b;&b;&b;&b;&b;&b;&b;&b;&b;">]><presence xmlns="urn:ietf:params:xml:ns:pidf" entity="e"><note>&c;</note></presence>"""

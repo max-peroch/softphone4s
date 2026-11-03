@@ -24,7 +24,8 @@ what to change when it does.
 - **Messaging, subscriptions and publication.** `MESSAGE` (RFC 3428),
   `SUBSCRIBE`/`NOTIFY` (RFC 6665) with the `message-summary`, `presence` (PIDF)
   and `dialog` (RFC 4235, with `DialogInfo.track` for partial notifications)
-  event packages, and `PUBLISH` (RFC 3903), as `phone.messages`,
+  event packages, and `PUBLISH` (RFC 3903); presence carries the activities of
+  rich presence (RFC 4480: Busy, Away, On the phone), read and published, as `phone.messages`,
   `phone.subscriptions` and `phone.publications`, each with a traced decorator in
   `softphone4s-otel4s`.
 - **Observability.** A `Metrics[F]` hook (calls, registrations, SIP

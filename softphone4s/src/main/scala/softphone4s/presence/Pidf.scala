@@ -23,6 +23,13 @@ private[presence] object Pidf {
 
   val Namespace: String = "urn:ietf:params:xml:ns:pidf"
 
+  /** The data model of RFC 4479, which holds the `person` that has activities.
+    */
+  val DataModel: String = "urn:ietf:params:xml:ns:pidf:data-model"
+
+  /** Rich presence, RFC 4480. */
+  val Rpid: String = "urn:ietf:params:xml:ns:pidf:rpid"
+
   val Package: EventPackage[Presence] = new EventPackage[Presence] {
     val event: EventHeader      = EventHeader.Presence
     val accept: List[MediaType] = List(MediaType.PidfXml)
@@ -54,12 +61,42 @@ private[presence] object Pidf {
         t.notes.flatMap(leaf("note", _))
     )
 
+  /** The `person` that says what the entity is doing, with an `id` that is none
+    * of the tuples' (an `xs:ID` is unique in its document); nothing if it is
+    * doing nothing in particular.
+    */
+  private def personEvents(presence: Presence): List[XmlEvent] =
+    if presence.activities.isEmpty then Nil
+    else {
+      val taken = presence.tuples.map(_.id).toSet
+      val id    =
+        (1 to taken.size + 1).map("p" + _).find(!taken(_)).getOrElse("p")
+      element("dm:person", List("id" -> id))(
+        element("rpid:activities", Nil)(presence.activities.flatMap {
+          case Activity.Other(text) => leaf("rpid:other", text)
+          case known                =>
+            Activity
+              .element(known)
+              .toList
+              .flatMap(name => element("rpid:" + name, Nil)(Nil))
+        })
+      )
+    }
+
   def render(presence: Presence): Either[String, String] = {
-    val texts = presence.entity :: presence.notes ::: presence.tuples.flatMap(
-      t => t.id :: t.contact.toList ::: t.notes
-    )
+    val others = presence.activities.collect { case Activity.Other(t) => t }
+    val texts  = presence.entity :: presence.notes ::: others :::
+      presence.tuples.flatMap(t => t.id :: t.contact.toList ::: t.notes)
+    val namespaces =
+      if presence.activities.isEmpty then Nil
+      else List("xmlns:dm" -> DataModel, "xmlns:rpid" -> Rpid)
     for {
       _ <- Either.cond(presence.entity.nonEmpty, (), "an empty entity")
+      _ <- Either.cond(
+        others.forall(_.trim.nonEmpty),
+        (),
+        "an activity with no text"
+      )
       _ <- presence.tuples
         .find(t => !validId(t.id))
         .fold(Right(()))(t => Left(s"not a tuple id: '${t.id}'"))
@@ -67,11 +104,11 @@ private[presence] object Pidf {
       events = XmlDecl("1.0", Some("UTF-8"), None) ::
         element(
           "presence",
-          List("xmlns" -> Namespace, "entity" -> presence.entity)
+          List("xmlns" -> Namespace, "entity" -> presence.entity) ++ namespaces
         )(
           presence.tuples.flatMap(tupleEvents) ++ presence.notes.flatMap(
             leaf("note", _)
-          )
+          ) ++ personEvents(presence)
         )
       xml <- XmlTree.render(events)
     } yield xml
@@ -104,8 +141,22 @@ private[presence] object Pidf {
     } yield Presence(
       entity,
       tuples,
-      root.children.filter(_.is("note")).map(_.text)
+      root.children.filter(_.is("note")).map(_.text),
+      activities(root)
     )
+
+  /** What the persons of the document are doing: the children of their
+    * `activities` that RPID names, in order. Elements of other namespaces, and
+    * the notes of `activities`, are skipped.
+    */
+  private def activities(root: Element): List[Activity] =
+    for {
+      person <- root.children.filter(_.is(DataModel, "person"))
+      listed <- person.children.filter(_.is(Rpid, "activities"))
+      child  <- listed.children
+      if child.namespace.contains(Rpid) && child.name.local != "note"
+      activity <- Activity.fromElement(child.name.local, child.text).toList
+    } yield activity
 
   private def tuple(element: Element): Either[String, PresenceTuple] =
     for {

@@ -9,11 +9,17 @@ import softphone4s.subscription.{EventPackage, PackageError}
   *
   * @param entity
   *   whose presence it is, as the document gives it (`pres:alice@example.com`).
+  * @param activities
+  *   what the person is doing, from the rich presence of RFC 4480: Busy, Away,
+  *   On the phone. Those of every `person` of the document, in order; none if
+  *   it says nothing of it. The `from` and `until` of the element, and its
+  *   notes, are not read.
   */
 final case class Presence(
     entity: String,
     tuples: List[PresenceTuple],
-    notes: List[String]
+    notes: List[String],
+    activities: List[Activity] = Nil
 ) {
 
   /** Whether any tuple is open. */
