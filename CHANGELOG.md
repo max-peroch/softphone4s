@@ -70,6 +70,12 @@ what to change when it does.
   Before, `refresh = 0` made the STUN refresh a hot loop and `register-expires = 0`
   removed the registration. **Breaking:** see [MIGRATION.md](MIGRATION.md).
   `StunClient.bindingRequest` takes `attempts: Attempts` rather than an `Int`.
+- **Behaviour:** `Call.source` keeps only the latest 8 frames (160 ms) of what
+  was heard, and drops the oldest when nobody reads. Before, it held 64 frames
+  and made the call wait: a reader that started late, or that plays at its own
+  pace as a speaker does, kept that backlog as a delay for the rest of the call
+  (1.5 s measured over loopback with a reader 3 s late). A reader that stalls for
+  more than 160 ms now loses audio instead of hearing it late.
 - `softphone4s-otel4s` is built against OpenTelemetry Java 1.64.0, which otel4s
   1.1.0 needs.
 

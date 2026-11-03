@@ -1,11 +1,10 @@
 package softphone4s.ua
 
 import cats.effect.*
-import cats.effect.std.Supervisor
+import cats.effect.std.{Queue, Supervisor}
 import cats.effect.syntax.all.*
 import cats.syntax.all.*
 import com.comcast.ip4s.*
-import fs2.concurrent.Channel
 import fs2.{Chunk, Pipe, Stream}
 import fs2.io.net.{Datagram, DatagramSocket, Network}
 import softphone4s.codec.RtcpCodec
@@ -44,7 +43,7 @@ private[softphone4s] class MediaSession[F[_]: Async: Network] private (
     bindAddress: IpAddress,
     localRtpPort: Port,
     codecs: AudioCodecs,
-    audioChannel: Channel[F, Chunk[Byte]],
+    received: Queue[F, Option[Chunk[Byte]]],
     sendPipeReady: Deferred[F, Pipe[F, Byte, Unit]],
     sender: Deferred[F, RtpSender[F]],
     mediaStop: Deferred[F, Unit],
@@ -62,8 +61,13 @@ private[softphone4s] class MediaSession[F[_]: Async: Network] private (
 ) {
   import MediaSession.RtcpGuard
 
+  /** What was heard, the latest `ReceivedFrames` frames of it: audio that
+    * nobody is reading is dropped, oldest first, not kept. The end of the call
+    * is a `None`, put back when read so that a later reader sees it too.
+    */
   val source: Stream[F, Byte] =
-    audioChannel.stream.flatMap(Stream.chunk)
+    Stream.fromQueueNoneTerminated(received).flatMap(Stream.chunk) ++
+      Stream.exec(received.offer(None))
 
   val sink: Pipe[F, Byte, Unit] = upstream =>
     Stream.eval(sendPipeReady.get).flatMap { pipe =>
@@ -341,7 +345,7 @@ private[softphone4s] class MediaSession[F[_]: Async: Network] private (
         val pcm = Chunk.array(decode(packet.payload.toArray))
         // Speech again: the noise that stood in for it ends.
         playback.update(_.heard(pcm)) >>
-          audioChannel.send(pcm).void.whenA(pcm.nonEmpty)
+          received.offer(Some(pcm)).whenA(pcm.nonEmpty)
       case Playout.Frame(packet)
           if plan.comfortNoiseType.contains(packet.payloadType) =>
         noiseHeard(packet.payload) >> fill(frameBytes, MediaSession.Gap.Quiet)
@@ -382,7 +386,7 @@ private[softphone4s] class MediaSession[F[_]: Async: Network] private (
     (Async[F].monotonic, remote.get).flatMapN { (now, sends) =>
       playback
         .modify(_.silent(now, sends, frameBytes, gap))
-        .flatMap(_.traverse_(audioChannel.send(_).void))
+        .flatMap(_.traverse_(frame => received.offer(Some(frame))))
     }
 
   /** Starts media as `plan` says, sending only if the other side will receive.
@@ -517,7 +521,7 @@ private[softphone4s] class MediaSession[F[_]: Async: Network] private (
                         )
                     }
                 }
-            } >> audioChannel.close.void
+            } >> received.offer(None)
         }
       )
       .void
@@ -535,6 +539,15 @@ private[softphone4s] class MediaSession[F[_]: Async: Network] private (
 }
 
 private[softphone4s] object MediaSession {
+
+  /** How many frames of 20 ms the audio heard keeps for a reader that has not
+    * come yet or is slow: eight, 160 ms. More would be a delay that stays. A
+    * reader that is slower than the audio, as a speaker that plays at its own
+    * pace, never drains a backlog, so a backlog of seconds was seconds of delay
+    * for the rest of the call. A reader that stalls longer than this loses
+    * audio instead of hearing it late.
+    */
+  val ReceivedFrames: Int = 8
 
   /** What an encrypted call protects its RTCP with: the keys, and the state of
     * each direction.
@@ -615,7 +628,7 @@ private[softphone4s] object MediaSession {
       rtcp: RtcpSchedule = RtcpSchedule.Default
   ): F[MediaSession[F]] =
     for {
-      audioChannel  <- Channel.bounded[F, Chunk[Byte]](64)
+      received <- Queue.circularBuffer[F, Option[Chunk[Byte]]](ReceivedFrames)
       sendPipeReady <- Deferred[F, Pipe[F, Byte, Unit]]
       sender        <- Deferred[F, RtpSender[F]]
       mediaStop     <- Deferred[F, Unit]
@@ -631,7 +644,7 @@ private[softphone4s] object MediaSession {
       bindAddress,
       localRtpPort,
       codecs,
-      audioChannel,
+      received,
       sendPipeReady,
       sender,
       mediaStop,
