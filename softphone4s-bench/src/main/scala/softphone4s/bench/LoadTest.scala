@@ -182,10 +182,26 @@ object LoadTest extends IOApp {
     * the libraries'), the difference being the JVM's own threads, which compile
     * code and collect garbage.
     */
-  private final case class Cpu(process: Long, javaThreads: Long)
+  private final case class Cpu(
+      process: Long,
+      javaThreads: Long,
+      javaUser: Long
+  )
 
   private object Process {
-    def cpu: Cpu = Cpu(cpuNanos, javaThreadsNanos)
+    def cpu: Cpu = Cpu(cpuNanos, javaThreadsNanos, javaUserNanos)
+
+    /** The part of the Java threads' CPU time spent in our code and the JVM's,
+      * not in the operating system: system calls, and waking and parking
+      * threads.
+      */
+    private def javaUserNanos: Long = {
+      val threads = ManagementFactory.getThreadMXBean
+      threads.getAllThreadIds.iterator
+        .map(threads.getThreadUserTime)
+        .filter(_ > 0)
+        .sum
+    }
 
     private def javaThreadsNanos: Long = {
       val threads = ManagementFactory.getThreadMXBean
@@ -328,8 +344,11 @@ object LoadTest extends IOApp {
           (cpuNow.process - cpu0.process).toDouble / (elapsed * 1000000L)
         val javaCores =
           (cpuNow.javaThreads - cpu0.javaThreads).toDouble / (elapsed * 1000000L)
-        val (gcN, gcMs) = Process.gc
-        val allocated   = (Process.allocatedBytes - mem0) / (1024 * 1024)
+        val userCores =
+          (cpuNow.javaUser - cpu0.javaUser).toDouble / (elapsed * 1000000L)
+        val userCoresSystem = javaCores - userCores
+        val (gcN, gcMs)     = Process.gc
+        val allocated       = (Process.allocatedBytes - mem0) / (1024 * 1024)
         println(
           f"established ${done.size}/$calls (failed ${failures.size}) in ${elapsed / 1000.0}%.1f s"
         )
@@ -359,7 +378,7 @@ object LoadTest extends IOApp {
           s"audio heard, per call, as a fraction of what was sent: caller ${fractions(atCaller)}; callee ${fractions(atCallee)} (${heardByBob.size} calls)"
         )
         println(
-          f"process: $cores%.2f cores busy on average (Java threads $javaCores%.2f, JIT and GC ${cores - javaCores}%.2f); ${gcN - gc0._1} collections, ${gcMs - gc0._2} ms; allocated $allocated MB (${allocated * 1000.0 / elapsed}%.0f MB/s)"
+          f"process: $cores%.2f cores busy on average (Java threads $javaCores%.2f, of which in the system $userCoresSystem%.2f; JIT and GC ${cores - javaCores}%.2f); ${gcN - gc0._1} collections, ${gcMs - gc0._2} ms; allocated $allocated MB (${allocated * 1000.0 / elapsed}%.0f MB/s)"
         )
         println(
           s"held: $peakFiles open files, $peakThreads threads at the peak; after: $files open files, retained heap $retained MB"

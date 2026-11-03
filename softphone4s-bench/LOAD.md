@@ -259,3 +259,68 @@ cost would have to fall by about three quarters. That is a rewrite of the packet
 as straight-line code with fewer effects per packet, and not something a change of one
 stage will do.
 
+## Where the CPU goes: the scheduler, not the packet (3 November 2026)
+
+`PacketPathBenchmark` (JMH) times each stage of the packet path from memory, with a
+stub in place of the socket, so that no system call or thread wakeup is in it.
+Per frame of 20 ms, on a warm JIT:
+
+| Stage                                                    | µs per frame | Bytes per frame |
+|----------------------------------------------------------|-------------:|----------------:|
+| Send: the frames, the encoder                            | 3.1          | 4 652           |
+| Send: `RtpSender.audio`                                  | 15 to 22     | 8 000           |
+| Send: `interruptWhen` (as `Call.sink` has it)            | 1 to 5       | 100             |
+| Receive: `receiveBytes` (open, decode)                   | 2.6          | 2 460           |
+| Receive: count as `observe` does, push in the buffer     | 2.7          | 3 255           |
+| Tick: push and pull the buffer                           | 1.5          | 1 939           |
+| Tick: decode, hand the frame on                          | 0.5          | 2 850           |
+
+The bytes add up to about 23 KB for a packet sent, one received and a tick, which is
+the 25 KB a packet-op costs in the load test: the allocation is these stages, and
+`RtpSender.audio` is over half of it. The time does not add up. They come to about
+30 µs, and the load test measures about 190 µs of user CPU for a packet-op, with
+another 100 µs in the operating system. So most of the CPU is not our code computing.
+
+`load` now splits the Java threads' CPU into user and system time. For 10 calls with
+audio, a third of the Java threads' CPU is in the operating system (0.27 to 0.30 of
+0.78 to 0.86 cores): waking parked threads. Cats Effect's compute pool has a thread
+for each logical CPU, which park when idle and are woken, from the timer or the
+selector, for each tick and each datagram. Fewer threads was a large saving, for the
+same work and with all the audio heard (10 calls, 20 s):
+
+| Compute threads | Java threads, cores | of which system | Allocated |
+|----------------:|--------------------:|----------------:|----------:|
+| 8 (the default) | 0.78 to 0.86        | 0.27 to 0.30    | 1 147 MB  |
+| 4               | 0.70 to 0.72        | 0.20            | 1 145 MB  |
+| 2               | 0.49 to 0.50        | 0.08            | 1 148 MB  |
+
+And at 100 calls (200 call legs), at a load average under 6, one run each:
+
+| Compute threads | Java threads, cores | Setup p50 / p99 (ms) | Audio heard (median) |
+|----------------:|--------------------:|---------------------:|---------------------:|
+| 8 (the default) | 4.88                | 422 / 1 096          | 0.96                 |
+| 6               | 3.82                | 33 / 1 382           | 0.90 to 0.91         |
+| 4               | 2.92                | 52 / 793             | 0.97 to 0.98         |
+| 3               | 2.29                | 1 114 / 2 345        | 0.96 to 0.99         |
+
+The machine has four physical cores and eight logical ones, and four threads is the
+best of these: 40% less CPU than the default with as good a result. Three is too few
+for the burst of setups. The right number depends on the machine and the load; the
+rule of thumb is the physical cores, measured. (`-Dcats.effect.tracing.mode=none` is
+6 to 8% more.)
+
+An experiment to cut the wakeups themselves: one ticker for every call, which wakes
+once per 20 ms and runs each call's tick, in place of a timer for each call. At the
+default of eight threads it took 10 silent calls from 0.20 to 0.07 Java cores and 10
+audible ones from 0.78 to 0.86 down to 0.63, but at 100 calls it made no difference
+(4.87 against 4.88; 2.67 against 2.92 at four threads), because when the workers are
+busy a wakeup is cheap. It was not kept: a consumer that stops reading would hold up
+the ticks of every call, and the gain is where the load is light.
+
+So the rewrite of the packet path as straight-line code, which this file had named
+as the next step, is not worth it: the effect chains are about 30 of the 190 µs of
+user CPU for a packet-op, and `RtpSender.audio`, the one stage that stands out, is
+worth under 10% of it. What does pay is sizing the pool, and then fewer
+timers and wakeups. With four threads about 100 calls in one process is held with
+all the audio; at 150 it is not (setup of 1 s at the median, 0.86 to 0.93 of the audio).
+

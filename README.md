@@ -716,6 +716,28 @@ transaction's, the ACK of a 2xx is the call's. The four transaction state
 machines (`InviteClientTransaction` and its three siblings) are pure too and
 emit timer actions that `Timers` runs.
 
+## Running many calls
+
+What a call costs is mostly the scheduler waking a thread for each packet and
+each 20 ms tick, not the work done: on a 4-core laptop 100 calls in one process
+(200 call legs) took 4.9 cores of Java threads with Cats Effect's default of one
+compute thread per logical CPU (8), and 2.9 with four, with the same or better
+audio. If a program runs more than a few calls, size the compute pool to the
+physical cores and measure:
+
+```scala
+object Phone extends IOApp.Simple {
+  override protected def computeWorkerThreadCount: Int = 4   // the physical cores
+  def run: IO[Unit] = ...
+}
+```
+
+and, to save a further 6 to 8%, start the JVM with
+`-Dcats.effect.tracing.mode=none`. `softphone4s-bench` has the load test that
+measures it (`LoadTest load <calls> <seconds>`), and `softphone4s-bench/LOAD.md` has
+the numbers. One process holds about 100 calls on that machine with all the audio
+arriving, with both ends of each call in it.
+
 ## Logging
 
 Every log line is a message with a context of fields, named in `LogFields`:
