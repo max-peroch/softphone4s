@@ -178,7 +178,23 @@ object LoadTest extends IOApp {
 
   // ---- What is measured of the process ---------------------------------------------
 
+  /** CPU time taken: by the whole process, and by its Java threads (ours and
+    * the libraries'), the difference being the JVM's own threads, which compile
+    * code and collect garbage.
+    */
+  private final case class Cpu(process: Long, javaThreads: Long)
+
   private object Process {
+    def cpu: Cpu = Cpu(cpuNanos, javaThreadsNanos)
+
+    private def javaThreadsNanos: Long = {
+      val threads = ManagementFactory.getThreadMXBean
+      threads.getAllThreadIds.iterator
+        .map(threads.getThreadCpuTime)
+        .filter(_ > 0)
+        .sum
+    }
+
     def cpuNanos: Long = ManagementFactory.getOperatingSystemMXBean match {
       case os: com.sun.management.OperatingSystemMXBean => os.getProcessCpuTime
       case _                                            => 0L
@@ -254,7 +270,7 @@ object LoadTest extends IOApp {
             )
             _ <- IO.sleep(1.second)
             _ <- bobResults.set(Map.empty)
-            cpu0 = Process.cpuNanos
+            cpu0 = Process.cpu
             gc0  = Process.gc
             mem0 = Process.allocatedBytes
             start <- IO.monotonic
@@ -307,7 +323,11 @@ object LoadTest extends IOApp {
         val done                     = outcomes.filter(_.failure.isEmpty)
         val failures                 = outcomes.flatMap(_.failure)
         val expected                 = hold.toMillis / FrameMillis * frame.size
-        val cores = (Process.cpuNanos - cpu0).toDouble / (elapsed * 1000000L)
+        val cpuNow                   = Process.cpu
+        val cores                    =
+          (cpuNow.process - cpu0.process).toDouble / (elapsed * 1000000L)
+        val javaCores =
+          (cpuNow.javaThreads - cpu0.javaThreads).toDouble / (elapsed * 1000000L)
         val (gcN, gcMs) = Process.gc
         val allocated   = (Process.allocatedBytes - mem0) / (1024 * 1024)
         println(
@@ -339,7 +359,7 @@ object LoadTest extends IOApp {
           s"audio heard, per call, as a fraction of what was sent: caller ${fractions(atCaller)}; callee ${fractions(atCallee)} (${heardByBob.size} calls)"
         )
         println(
-          f"process: $cores%.2f cores busy on average; ${gcN - gc0._1} collections, ${gcMs - gc0._2} ms; allocated $allocated MB (${allocated * 1000.0 / elapsed}%.0f MB/s)"
+          f"process: $cores%.2f cores busy on average (Java threads $javaCores%.2f, JIT and GC ${cores - javaCores}%.2f); ${gcN - gc0._1} collections, ${gcMs - gc0._2} ms; allocated $allocated MB (${allocated * 1000.0 / elapsed}%.0f MB/s)"
         )
         println(
           s"held: $peakFiles open files, $peakThreads threads at the peak; after: $files open files, retained heap $retained MB"

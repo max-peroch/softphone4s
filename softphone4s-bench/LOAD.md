@@ -219,3 +219,43 @@ What is left is the packet: from the 10-call rows, a packet-op costs about 0.5 m
 `flatMap` into `Stream.exec ++ Stream.emit`, `evalTap` (observe) and `evalMap` (push
 into the buffer): five stream stages, and the same on the send side.
 
+## Where the rest is (2 November 2026)
+
+`load` now splits the process's CPU into its Java threads and the JVM's own (the JIT
+compiler and the collector). Over a 20 s run the JVM's share is a nearly constant
+0.27 to 0.36 cores, with or without anybody speaking, because the code is still
+being compiled; it would shrink in a long soak. So the cost of the application is
+the Java threads: for 10 calls, 0.19 to 0.23 cores silent and 0.77 to 0.82 with
+audio, which makes a packet-op (a packet sent or received) cost about 0.28 ms of CPU
+and 25 KB over an idle call's, not the 0.5 ms the total suggests.
+
+A CPU profile (JFR, 30 audible calls) has the cats-effect run loop and fs2 as 22% and
+9% of the leaf frames, `softphone4s` code as 7%, and the nio system calls as 4%. The
+oddest 12% is `ClassValue.get` (6.3%), `DirectMethodHandle.allocateInstance` and
+`Unsafe.allocateInstance`: every `ClassValue.get` comes from
+`TracingPlatform.calculateTracingEvent`, called by `IO.flatMap` and `IO.delay`, which
+is cats-effect's default "cached" stack tracing looking up its call site for each
+effect it builds. An application can turn it off with
+`-Dcats.effect.tracing.mode=none` (the library cannot: it is read when the runtime
+starts). For 10 calls with audio that gave 0.71 to 0.77 Java cores against 0.77 to
+0.82, and 1 068 to 1 076 MB against 1 136 to 1 152: 6 to 8% of the CPU and 6% of the
+allocation. Worth setting in a server that runs many calls, but not a large win.
+
+Tried and not kept:
+
+- Ending the tick stream by checking a flag on each tick instead of `interruptWhen`:
+  no change (437 to 449 MB for 10 silent calls, against 408 to 417).
+- Collapsing the receive chain, `reads`, `evalMapFilter` (open), `flatMap` into
+  `Stream.exec ++ Stream.emit`, `evalTap` (observe), into one `evalMapFilter`: 1 098
+  to 1 123 MB against 1 136 to 1 152, and no gain in CPU within the noise. The number
+  of stream stages is not what costs.
+
+So what is left is spread over the whole path: the effect nodes each packet builds
+on the receive side (decode, count, push, then the tick's take and play), on the
+send side (`RtpSender.sendAudio` is eight effects and a semaphore permit), and in the
+caller's own streams. About 100 calls in one process (200 call legs) is where this
+machine's compute runs out; for 500 calls with one end in the process the packet
+cost would have to fall by about three quarters. That is a rewrite of the packet path
+as straight-line code with fewer effects per packet, and not something a change of one
+stage will do.
+
