@@ -30,7 +30,7 @@ object OtelTransactionTracing {
         .root
         .addAttributes(
           Attribute("sip.method", info.method.token),
-          Attribute("sip.transaction.side", sideOf(info.side)),
+          Attribute("sip.transaction.side", info.side.token),
           Attribute("sip.call_id", info.callId.value),
           Attribute("sip.branch", info.branch.value)
         )
@@ -50,12 +50,6 @@ object OtelTransactionTracing {
     side match {
       case TransactionSide.Client => SpanKind.Client
       case TransactionSide.Server => SpanKind.Server
-    }
-
-  private def sideOf(side: TransactionSide): String =
-    side match {
-      case TransactionSide.Client => "client"
-      case TransactionSide.Server => "server"
     }
 
   private def attributesOf(outcome: TransactionOutcome): List[Attribute[?]] =

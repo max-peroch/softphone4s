@@ -13,6 +13,9 @@ import fs2.{Fallible, Stream}
   * refused, and so is one that uses an entity other than the five XML defines.
   * Elements keep the namespace they were written in, so extensions in other
   * namespaces can be skipped.
+  *
+  * Nothing here bounds the size of what it is given: a caller must, as the
+  * event packages do with `EventPackage.withinLimit`, before it parses.
   */
 private[softphone4s] object XmlTree {
 

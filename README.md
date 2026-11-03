@@ -779,7 +779,9 @@ outcome, talk time, and what the jitter buffer did over the call), `registration
 (each state an account goes through, and `Unregistered` when it is released), and
 `transaction` (a SIP request or response retransmitted, or a transaction that
 timed out, by side and method). A method that fails is logged and dropped, so a
-broken counter cannot break a call. A call ends as `Completed`, `Rejected(status)`
+broken counter cannot break a call, and so is one that takes longer than 50 ms
+(`Metrics.HookBudget`): the methods must not block, since `transaction` is called
+on the fiber that runs every transaction. A call ends as `Completed`, `Rejected(status)`
 (the other side refused it), `Declined` (we turned it away), `Unanswered`
 (cancelled or timed out) or `Failed`.
 
@@ -811,7 +813,8 @@ it), a timeout or a send that failed. `OtelTransactionTracing` in
 refusal received (4xx and up) are errors. The spans are roots, not children of
 the call's span, because the transaction layer runs apart from the calls: find
 the transactions of a call by its `sip.call_id`, which is also the `call-id` of
-its log lines. A span that could not be recorded is logged and dropped.
+its log lines. A span that could not be recorded, or that takes longer than 50 ms
+to begin or to end, is logged and dropped; the methods must not block.
 
 ```scala
 OtelTransactionTracing[IO](tracer)   // pass as tracing = Some(...)

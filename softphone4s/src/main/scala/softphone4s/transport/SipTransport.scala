@@ -59,7 +59,7 @@ object SipTransport {
                           .warn(
                             Map(
                               LogFields.Error -> err.message,
-                              "from"          -> datagram.remote.toString
+                              LogFields.From  -> datagram.remote.toString
                             )
                           )(
                             "Failed to decode SIP message"

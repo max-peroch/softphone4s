@@ -263,7 +263,7 @@ private[softphone4s] final class InboundCall[F[_]: Async] private (
           destinationFor(dialog),
           media.restrict(endpoint.capabilities)
         ).flatMapN { (branch, to, caps) =>
-          logger.debug(Map("change" -> change.toString))(
+          logger.debug(Map(LogFields.Change -> change.toString))(
             "Sending a session change"
           ) >>
             startInDialog(
@@ -334,7 +334,7 @@ private[softphone4s] final class InboundCall[F[_]: Async] private (
 
       case SendInfo(dialog, digit, duration) =>
         (entropy.branch, destinationFor(dialog)).flatMapN { (branch, to) =>
-          logger.debug(Map("digit" -> digit.symbol.toString))(
+          logger.debug(Map(LogFields.Digit -> digit.symbol.toString))(
             "Sending a digit in INFO"
           ) >> startInDialog(
             endpoint.buildInfo(dialog, branch, digit, duration),
@@ -432,7 +432,7 @@ private[softphone4s] object InboundCall {
       logger = phoneLogger.addContext(
         Map(
           LogFields.CallId    -> invite.request.headers.callId.value,
-          LogFields.Direction -> LogFields.direction(CallDirection.Incoming),
+          LogFields.Direction -> CallDirection.Incoming.token,
           LogFields.Account   -> account.render
         )
       )

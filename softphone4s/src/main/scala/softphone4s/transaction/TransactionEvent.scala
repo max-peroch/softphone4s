@@ -10,6 +10,12 @@ enum TransactionSide {
 
   /** The one that received it. */
   case Server
+
+  /** As logs and metrics spell it: `client` or `server`. */
+  def token: String = this match {
+    case Client => "client"
+    case Server => "server"
+  }
 }
 
 /** What the transaction layer tells of the trouble it has with the network. */

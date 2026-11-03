@@ -223,7 +223,9 @@ private[softphone4s] class OutboundCall[F[_]: Async] private (
         )
       )("Received SIP response")
     case SipEvent.TransactionFailed(failure) =>
-      logger.debug(Map("failure" -> failure.toString))("Transaction failed")
+      logger.debug(Map(LogFields.Failure -> failure.toString))(
+        "Transaction failed"
+      )
     case SipEvent.HangupRequested | SipEvent.TimerFired(_) |
         SipEvent.SessionChangeRequested(_) | SipEvent.DtmfRequested(_, _) =>
       Async[F].unit
@@ -355,7 +357,7 @@ private[softphone4s] class OutboundCall[F[_]: Async] private (
         newBranch().flatMap { branch =>
           inviteBranch.set(branch) >>
             logger.debug(
-              Map("callee" -> callee.render)
+              Map(LogFields.Callee -> callee.render)
             )("Sending INVITE") >>
             startClient(
               endpoint.buildInvite(
@@ -443,7 +445,7 @@ private[softphone4s] class OutboundCall[F[_]: Async] private (
 
       case SendInfo(dialog, digit, duration) =>
         (newBranch(), destinationFor(dialog)).flatMapN { (branch, to) =>
-          logger.debug(Map("digit" -> digit.symbol.toString))(
+          logger.debug(Map(LogFields.Digit -> digit.symbol.toString))(
             "Sending a digit in INFO"
           ) >> startInDialog(
             endpoint.buildInfo(dialog, branch, digit, duration),
@@ -473,7 +475,7 @@ private[softphone4s] class OutboundCall[F[_]: Async] private (
           media.restrict(endpoint.capabilities)
         )
           .flatMapN { (branch, to, caps) =>
-            logger.debug(Map("change" -> change.toString))(
+            logger.debug(Map(LogFields.Change -> change.toString))(
               "Sending a session change"
             ) >>
               startInDialog(
@@ -532,7 +534,7 @@ private[softphone4s] class OutboundCall[F[_]: Async] private (
           case Right(plan) =>
             media.start(plan, supervisor, dtmfChannel.send(_).void).flatMap {
               case MediaStart.CodecChanged =>
-                logger.warn(Map("codec" -> plan.codec.encoding))(
+                logger.warn(Map(LogFields.Codec -> plan.codec.encoding))(
                   "The answer chose another codec than the early media's; keeping the early one"
                 )
               case MediaStart.Started | MediaStart.Followed => Async[F].unit
@@ -613,7 +615,7 @@ private[softphone4s] object OutboundCall {
       logger = phoneLogger.addContext(
         Map(
           LogFields.CallId    -> callId.value,
-          LogFields.Direction -> LogFields.direction(CallDirection.Outgoing),
+          LogFields.Direction -> CallDirection.Outgoing.token,
           LogFields.Account   -> first.endpoint.accountUri.render
         )
       )
@@ -679,7 +681,7 @@ private[softphone4s] object OutboundCall {
       )
       _ <- timers.start(CallTimer.InviteTimeout, inviteTimeout)
       _ <- logger.debug(
-        Map("callee" -> callee.render)
+        Map(LogFields.Callee -> callee.render)
       )("Sending INVITE")
       _ <- call.sendInitialInvite(callee, callId, localTag, extraHeaders)
     } yield call

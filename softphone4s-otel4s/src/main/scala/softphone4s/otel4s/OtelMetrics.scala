@@ -87,17 +87,11 @@ object OtelMetrics {
           "What the jitter buffers did with the audio of ended calls"
         )
         .create
-      states <- Ref.of[F, Map[AccountId, Boolean]](Map.empty)
+      held <- Ref.of[F, Set[AccountId]](Set.empty)
     } yield new Metrics[F] {
 
       private def direction(d: CallDirection): Attribute[String] =
-        Attribute(
-          "direction",
-          d match {
-            case CallDirection.Outgoing => "outgoing"
-            case CallDirection.Incoming => "incoming"
-          }
-        )
+        Attribute("direction", d.token)
 
       def callBegan(d: CallDirection): F[Unit] =
         active.add(1L, direction(d))
@@ -151,8 +145,13 @@ object OtelMetrics {
           case RegistrationState.Failed(_, _)  => "failed"
           case RegistrationState.Unregistering => "unregistering"
         }
-        states
-          .modify(m => (m.updated(account, now), m.getOrElse(account, false)))
+        held
+          .modify(set =>
+            (
+              if now then set + account else set - account,
+              set.contains(account)
+            )
+          )
           .flatMap(was =>
             changes.add(1L, Attribute("state", name)) >>
               (if now && !was then registered.add(1L)
@@ -177,13 +176,7 @@ object OtelMetrics {
       method: SipMethod
   ): List[Attribute[String]] =
     List(
-      Attribute(
-        "side",
-        side match {
-          case TransactionSide.Client => "client"
-          case TransactionSide.Server => "server"
-        }
-      ),
+      Attribute("side", side.token),
       Attribute("method", method.token)
     )
 }

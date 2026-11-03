@@ -402,13 +402,13 @@ private[transaction] final class TransactionEngine[F[_]: Concurrent](
         Map(
           LogFields.Branch -> key.branch.value,
           LogFields.Method -> key.method.token,
-          LogFields.Side   -> "client"
+          LogFields.Side   -> TransactionSide.Client.token
         )
       case TransactionId.Server(key) =>
         Map(
           LogFields.Branch -> key.branch.value,
           LogFields.Method -> key.method.token,
-          LogFields.Side   -> "server"
+          LogFields.Side   -> TransactionSide.Server.token
         )
     }
 

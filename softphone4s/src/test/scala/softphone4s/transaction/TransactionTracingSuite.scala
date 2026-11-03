@@ -1,9 +1,13 @@
 package softphone4s.transaction
 
 import cats.effect.IO
+import cats.effect.testkit.TestControl
 import munit.CatsEffectSuite
 import org.typelevel.log4cats.testing.StructuredTestingLogger
+import softphone4s.metrics.Metrics
 import softphone4s.model.{Branch, CallId, SipMethod}
+
+import scala.concurrent.duration.*
 
 class TransactionTracingSuite extends CatsEffectSuite {
 
@@ -70,5 +74,48 @@ class TransactionTracingSuite extends CatsEffectSuite {
       )
       assertEquals(logged, Vector.empty)
     }
+  }
+
+  test(
+    "a span that takes too long to begin is dropped at the budget, and the transaction has none"
+  ) {
+    TestControl.executeEmbed(
+      for {
+        log <- logger
+        slowToBegin = new TransactionTracing[IO] {
+          def began(info: TransactionInfo): IO[TransactionSpan[IO]] =
+            IO.sleep(1.minute).as(_ => IO.unit)
+        }
+        start  <- IO.monotonic
+        span   <- TransactionTracing.guarded(slowToBegin, log).began(info)
+        took   <- IO.monotonic.map(_ - start)
+        ended  <- span.end(TransactionOutcome.Answered(200)).attempt
+        logged <- log.logged
+      } yield {
+        assertEquals(took, Metrics.HookBudget)
+        assertEquals(ended, Right(()))
+        assertEquals(logged.map(_.ctx.get("span")), Vector(Some("begin")))
+      }
+    )
+  }
+
+  test("a span that takes too long to end is dropped at the budget") {
+    TestControl.executeEmbed(
+      for {
+        log <- logger
+        slowToEnd = new TransactionTracing[IO] {
+          def began(info: TransactionInfo): IO[TransactionSpan[IO]] =
+            IO.pure(_ => IO.sleep(1.minute))
+        }
+        span   <- TransactionTracing.guarded(slowToEnd, log).began(info)
+        start  <- IO.monotonic
+        _      <- span.end(TransactionOutcome.TimedOut)
+        took   <- IO.monotonic.map(_ - start)
+        logged <- log.logged
+      } yield {
+        assertEquals(took, Metrics.HookBudget)
+        assertEquals(logged.map(_.ctx.get("span")), Vector(Some("end")))
+      }
+    )
   }
 }

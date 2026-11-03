@@ -301,7 +301,7 @@ object StreamTransport {
                   _      <-
                     if heard >= sentAt then loop
                     else
-                      logger.debug(Map("after" -> ka.timeout.toString))(
+                      logger.debug(Map(LogFields.After -> ka.timeout.toString))(
                         "No answer to a keep-alive; closing the connection"
                       )
                 } yield ()
@@ -333,7 +333,10 @@ object StreamTransport {
         case Left(error) =>
           logger
             .warn(
-              Map("from" -> from.toString, LogFields.Error -> error.message)
+              Map(
+                LogFields.From  -> from.toString,
+                LogFields.Error -> error.message
+              )
             )(
               "Closing a connection that cannot be framed"
             )
@@ -354,7 +357,10 @@ object StreamTransport {
             case Left(error) =>
               logger
                 .warn(
-                  Map("from" -> from.toString, LogFields.Error -> error.message)
+                  Map(
+                    LogFields.From  -> from.toString,
+                    LogFields.Error -> error.message
+                  )
                 )("Failed to decode SIP message")
                 .as(true)
           }

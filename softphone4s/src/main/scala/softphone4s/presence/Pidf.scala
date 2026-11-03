@@ -69,7 +69,9 @@ private[presence] object Pidf {
     if presence.activities.isEmpty then Nil
     else {
       val taken = presence.tuples.map(_.id).toSet
-      val id    =
+      // One of p1 to p(n+1) is free, as there are n tuples: the fallback is for
+      // the types.
+      val id =
         (1 to taken.size + 1).map("p" + _).find(!taken(_)).getOrElse("p")
       element("dm:person", List("id" -> id))(
         element("rpid:activities", Nil)(presence.activities.flatMap {

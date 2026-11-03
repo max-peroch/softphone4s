@@ -1,7 +1,5 @@
 package softphone4s.logging
 
-import softphone4s.metrics.CallDirection
-
 /** The names of the fields that the stack's log lines carry, so that logs can
   * be searched and joined on them: every line of a call has its `call-id`, of a
   * registration its `account`, and so on. They are the keys of the context
@@ -13,8 +11,9 @@ import softphone4s.metrics.CallDirection
   *   - a publication: `account`, `event`, `presentity`;
   *   - a transaction, where a line is about one: `branch`, `method`;
   *   - and as the line needs: `error`, `reason`, `status`, `cseq`, `address`,
-  *     `transport`, `host`, and `side` (`client` or `server`) for a
-  *     transaction.
+  *     `transport`, `host`, `callee`, `codec`, `change`, `digit`, `failure`,
+  *     `from`, `after`, `side` (`client` or `server`) for a transaction, and
+  *     `metric` and `span` for what a metrics or tracing hook could not do.
   */
 object LogFields {
 
@@ -34,10 +33,13 @@ object LogFields {
   val Event: String      = "event"
   val Target: String     = "target"
   val Presentity: String = "presentity"
-
-  def direction(d: CallDirection): String =
-    d match {
-      case CallDirection.Outgoing => "outgoing"
-      case CallDirection.Incoming => "incoming"
-    }
+  val Callee: String     = "callee"
+  val Codec: String      = "codec"
+  val Change: String     = "change"
+  val Digit: String      = "digit"
+  val Failure: String    = "failure"
+  val From: String       = "from"
+  val After: String      = "after"
+  val Metric: String     = "metric"
+  val Span: String       = "span"
 }
