@@ -5,11 +5,11 @@ import munit.FunSuite
 import java.nio.file.{Files, Path, Paths}
 import scala.jdk.CollectionConverters.*
 
-/** The pure packages stay free of effects (PLAN.md, "Module layout"): they may
-  * use `fs2.Chunk`, which is data, but not `cats.effect` or the streams, pipes
-  * and I/O of `fs2`. A source scan, since the dependencies of `ip4s` put
-  * `cats-effect` on the classpath of every module and the compiler cannot say
-  * it.
+/** The pure packages stay free of effects (ARCHITECTURE.md, "Why there is no
+  * `softphone4s-core`"): they may use `fs2.Chunk`, which is data, but not
+  * `cats.effect` or the streams, pipes and I/O of `fs2`. A source scan, since
+  * the dependencies of `ip4s` put `cats-effect` on the classpath of every
+  * module and the compiler cannot say it.
   */
 class PuritySuite extends FunSuite {
 
