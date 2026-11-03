@@ -92,6 +92,10 @@ object Demo extends IOApp {
       _ <- logger.info(Map("callee" -> config.callTo.value))("Call ended")
     } yield ()
 
+  /** Places the call to `demo.call-to`, ends it when enter is pressed, on the
+    * hang-up DTMF code, or when the far end hangs up, and releases the phone
+    * and the audio lines.
+    */
   override def run(args: List[String]): IO[ExitCode] =
     (for {
       otel         <- OtelJava.autoConfigured[IO]()
