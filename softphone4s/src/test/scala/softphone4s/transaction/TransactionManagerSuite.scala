@@ -715,4 +715,62 @@ class TransactionManagerSuite extends CatsEffectSuite {
       } yield assertEquals(r.map(_._2), Vector(TransactionOutcome.TimedOut))
     )
   }
+
+  test(
+    "a span still open when the layer is released is ended, as abandoned, on both sides"
+  ) {
+    TestControl.executeEmbed(
+      for {
+        ta <- RecordingTracing()
+        tb <- RecordingTracing()
+        _  <- peers(tracingA = ta, tracingB = tb).use { (la, lb, _, _) =>
+          for {
+            _ <- client(la, options, b)
+            _ <- lb.get.incoming.head.compile.lastOrError
+            // nobody answers, and the layers are released with both open
+            _ <- IO.sleep(1.second)
+          } yield ()
+        }
+        clientEnded <- ta.ended(TransactionSide.Client)
+        serverEnded <- tb.ended(TransactionSide.Server)
+      } yield {
+        assertEquals(
+          clientEnded.map(_._2),
+          Vector(TransactionOutcome.Abandoned)
+        )
+        assertEquals(
+          serverEnded.map(_._2),
+          Vector(TransactionOutcome.Abandoned)
+        )
+      }
+    )
+  }
+
+  test("a span that has ended is not ended again when the layer is released") {
+    TestControl.executeEmbed(
+      for {
+        ta <- RecordingTracing()
+        tb <- RecordingTracing()
+        _  <- peers(tracingA = ta, tracingB = tb).use { (la, lb, _, _) =>
+          for {
+            c  <- client(la, options, b)
+            st <- lb.get.incoming.head.compile.lastOrError
+            _  <- reply(st, 200)
+            _  <- c.notices.compile.toList
+          } yield ()
+        }
+        clientEnded <- ta.ended(TransactionSide.Client)
+        serverEnded <- tb.ended(TransactionSide.Server)
+      } yield {
+        assertEquals(
+          clientEnded.map(_._2),
+          Vector(TransactionOutcome.Answered(200))
+        )
+        assertEquals(
+          serverEnded.map(_._2),
+          Vector(TransactionOutcome.Responded(200))
+        )
+      }
+    )
+  }
 }

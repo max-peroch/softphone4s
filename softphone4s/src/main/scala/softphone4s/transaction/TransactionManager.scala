@@ -1,7 +1,7 @@
 package softphone4s.transaction
 
 import cats.effect.std.{Queue, Supervisor}
-import cats.effect.{Async, Deferred, Resource}
+import cats.effect.{Async, Deferred, Ref, Resource}
 import cats.syntax.all.*
 import com.comcast.ip4s.{IpAddress, SocketAddress}
 import fs2.Stream
@@ -31,6 +31,26 @@ object TransactionManager {
       TransactionTracing.noop[F]
     )
 
+  /** Ends, as abandoned, the span of every transaction that is open as the
+    * layer is released, so that a trace shows it, and does not lose it. A
+    * transaction whose span has ended already has none.
+    */
+  private def endOpenSpans[F[_]: Async](
+      table: Ref[F, Table[F]],
+      logger: StructuredLogger[F]
+  ): F[Unit] =
+    table.get
+      .flatMap { open =>
+        (open.clients.values
+          .flatMap(_.span) ++ open.servers.values.flatMap(_.span)).toList
+          .traverse_(_.end(TransactionOutcome.Abandoned))
+      }
+      .handleErrorWith(error =>
+        logger.warn(Map(LogFields.Error -> String.valueOf(error.getMessage)))(
+          "A span open at shutdown could not be ended"
+        )
+      )
+
   /** As [[resource]], and `observed` is told what the servers we send requests
     * to say we look like from where they are (their `received` and `rport`),
     * and `events` of the retransmissions and timeouts the layer has, and
@@ -45,6 +65,14 @@ object TransactionManager {
       tracing: TransactionTracing[F]
   ): Resource[F, TransactionLayer[F]] =
     for {
+      // The table is held here, and not only by the loop that owns it, so that
+      // what is open when the layer is released can be reached. The finalizer
+      // is acquired before the supervisor, so it runs after the supervisor has
+      // stopped the loop: nothing changes the table under it.
+      table <- Resource.eval(
+        Ref.of[F, Table[F]](Table[F](Map.empty, Map.empty))
+      )
+      _          <- Resource.onFinalize(endOpenSpans(table, logger))
       supervisor <- Supervisor[F](await = false)
       timers     <- Timers.resource[F, TimerKey]
       commands   <- Resource.eval(Queue.unbounded[F, Command[F]])
@@ -82,15 +110,21 @@ object TransactionManager {
         supervisor.supervise(
           Stream
             .fromQueueUnterminated(commands)
-            .evalScan(Table[F](Map.empty, Map.empty)) { (table, command) =>
-              engine.step(table, command).handleErrorWith { error =>
-                logger
-                  .error(
-                    Map(LogFields.Error -> String.valueOf(error.getMessage))
-                  )(
-                    "Transaction layer failed on a command"
-                  )
-                  .as(table)
+            // This is the only fiber that changes the table.
+            .evalMap { command =>
+              table.get.flatMap { current =>
+                engine
+                  .step(current, command)
+                  .handleErrorWith { error =>
+                    logger
+                      .error(
+                        Map(LogFields.Error -> String.valueOf(error.getMessage))
+                      )(
+                        "Transaction layer failed on a command"
+                      )
+                      .as(current)
+                  }
+                  .flatMap(table.set)
               }
             }
             .compile

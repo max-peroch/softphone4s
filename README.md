@@ -814,7 +814,9 @@ refusal received (4xx and up) are errors. The spans are roots, not children of
 the call's span, because the transaction layer runs apart from the calls: find
 the transactions of a call by its `sip.call_id`, which is also the `call-id` of
 its log lines. A span that could not be recorded, or that takes longer than 50 ms
-to begin or to end, is logged and dropped; the methods must not block.
+to begin or to end, is logged and dropped; the methods must not block. A
+transaction still open when the phone is released has its span ended with the
+outcome `abandoned`, so a trace shows it.
 
 ```scala
 OtelTransactionTracing[IO](tracer)   // pass as tracing = Some(...)
