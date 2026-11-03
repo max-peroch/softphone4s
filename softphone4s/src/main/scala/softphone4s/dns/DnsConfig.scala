@@ -1,5 +1,6 @@
 package softphone4s.dns
 
+import softphone4s.model.PositiveDuration
 import com.comcast.ip4s.{IpAddress, SocketAddress}
 import pureconfig.ConfigReader
 import softphone4s.config.NetworkReaders.given
@@ -16,5 +17,5 @@ import scala.concurrent.duration.*
   */
 final case class DnsConfig(
     servers: List[SocketAddress[IpAddress]] = Nil,
-    timeout: FiniteDuration = 5.seconds
+    timeout: PositiveDuration = PositiveDuration.constant(5.seconds)
 ) derives ConfigReader

@@ -43,7 +43,7 @@ class NatSuite extends CatsEffectSuite {
       serverPort = theirs,
       baseRtpPort = port"19950",
       bindAddress = ip"127.0.0.1",
-      hangupTimeout = 1.second,
+      hangupTimeout = 1.second.positive,
       nat = NatConfig(mode, stun)
     )
 
@@ -187,7 +187,7 @@ class NatSuite extends CatsEffectSuite {
   }
 
   private def stunAt(server: StunServer.Running) =
-    StunConfig(host"127.0.0.1", server.address.port, refresh = 1.hour)
+    StunConfig(host"127.0.0.1", server.address.port, refresh = 1.hour.positive)
 
   test(
     "a STUN server's answer is registered as the Contact, though the registrar says nothing"
@@ -252,7 +252,7 @@ class NatSuite extends CatsEffectSuite {
                   StunConfig(
                     host"stun.example.org",
                     stun.address.port,
-                    refresh = 1.hour
+                    refresh = 1.hour.positive
                   )
                 )
               ),

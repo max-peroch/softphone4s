@@ -1,5 +1,6 @@
 package softphone4s.loopback
 
+import softphone4s.SipLiterals.*
 import cats.effect.IO
 import cats.syntax.all.*
 import com.comcast.ip4s.port
@@ -115,13 +116,14 @@ class LoopbackCallSuite extends CatsEffectSuite {
   }
 
   test("a call nobody answers is turned away after the answer timeout") {
-    Loopback.pair(Loopback.Settings(answerTimeout = 1.second)).use { p =>
-      p.alice.call(p.callee()).use { call =>
-        call.awaitPickup.attempt.timeout(15.seconds).map {
-          case Left(SoftphoneError.CallRejected(480, _)) => ()
-          case other => fail(s"expected 480, got $other")
+    Loopback.pair(Loopback.Settings(answerTimeout = 1.second.positive)).use {
+      p =>
+        p.alice.call(p.callee()).use { call =>
+          call.awaitPickup.attempt.timeout(15.seconds).map {
+            case Left(SoftphoneError.CallRejected(480, _)) => ()
+            case other => fail(s"expected 480, got $other")
+          }
         }
-      }
     }
   }
 
@@ -173,13 +175,14 @@ class LoopbackCallSuite extends CatsEffectSuite {
   test(
     "a call to an address where nobody listens fails with a typed error, and does not hang"
   ) {
-    Loopback.pair(Loopback.Settings(inviteTimeout = 3.seconds)).use { p =>
-      p.alice.call(p.callee(port = port"19429")).use { call =>
-        call.awaitPickup.attempt.timeout(20.seconds).map {
-          case Left(_: SoftphoneError) => ()
-          case other => fail(s"expected a SoftphoneError, got $other")
+    Loopback.pair(Loopback.Settings(inviteTimeout = 3.seconds.positive)).use {
+      p =>
+        p.alice.call(p.callee(port = port"19429")).use { call =>
+          call.awaitPickup.attempt.timeout(20.seconds).map {
+            case Left(_: SoftphoneError) => ()
+            case other => fail(s"expected a SoftphoneError, got $other")
+          }
         }
-      }
     }
   }
 
@@ -216,38 +219,42 @@ class LoopbackCallSuite extends CatsEffectSuite {
   }
 
   test("calls of every ending leave no socket open, and no port taken") {
-    Loopback.pair(Loopback.Settings(answerTimeout = 1.second)).use { p =>
-      val answered  = oneCall(p)
-      val cancelled =
-        p.alice.call(p.callee()).allocated.flatMap { (_, hangUp) =>
+    Loopback.pair(Loopback.Settings(answerTimeout = 1.second.positive)).use {
+      p =>
+        val answered  = oneCall(p)
+        val cancelled =
+          p.alice.call(p.callee()).allocated.flatMap { (_, hangUp) =>
+            p.bob.incoming.head.compile.lastOrError
+              .timeout(10.seconds)
+              .flatMap(_ => hangUp)
+          }
+        val rejected = p.alice.call(p.callee()).use { call =>
           p.bob.incoming.head.compile.lastOrError
             .timeout(10.seconds)
-            .flatMap(_ => hangUp)
+            .flatMap(_.reject()) >>
+            call.awaitPickup.attempt.void
         }
-      val rejected = p.alice.call(p.callee()).use { call =>
-        p.bob.incoming.head.compile.lastOrError
-          .timeout(10.seconds)
-          .flatMap(_.reject()) >>
-          call.awaitPickup.attempt.void
-      }
-      val unanswered = p.alice
-        .call(p.callee())
-        .use(_.awaitPickup.attempt.timeout(15.seconds).void) >>
-        p.bob.incoming.head.compile.lastOrError.timeout(5.seconds).attempt.void
-      val cycle = answered >> cancelled >> rejected >> unanswered
-      for {
-        _ <- (1 to 3).toList
-          .traverse_(_ => cycle) // warm up: first uses open what they keep
-        before <- openFileDescriptors
-        _      <- (1 to 8).toList.traverse_(_ => cycle)
-        after  <- openFileDescriptors
-      } yield {
-        assume(before >= 0, "no file descriptor count on this platform")
-        assert(
-          after - before <= 4,
-          s"file descriptors went from $before to $after over 32 calls"
-        )
-      }
+        val unanswered = p.alice
+          .call(p.callee())
+          .use(_.awaitPickup.attempt.timeout(15.seconds).void) >>
+          p.bob.incoming.head.compile.lastOrError
+            .timeout(5.seconds)
+            .attempt
+            .void
+        val cycle = answered >> cancelled >> rejected >> unanswered
+        for {
+          _ <- (1 to 3).toList
+            .traverse_(_ => cycle) // warm up: first uses open what they keep
+          before <- openFileDescriptors
+          _      <- (1 to 8).toList.traverse_(_ => cycle)
+          after  <- openFileDescriptors
+        } yield {
+          assume(before >= 0, "no file descriptor count on this platform")
+          assert(
+            after - before <= 4,
+            s"file descriptors went from $before to $after over 32 calls"
+          )
+        }
     }
   }
 }

@@ -82,7 +82,7 @@ class SoftphoneStreaming[F[_]: Async: Network] private (
       layer,
       routes,
       entropy,
-      config.hangupTimeout,
+      config.hangupTimeout.value,
       logger
     )
 
@@ -93,7 +93,7 @@ class SoftphoneStreaming[F[_]: Async: Network] private (
       uplinks,
       layer,
       entropy,
-      config.hangupTimeout,
+      config.hangupTimeout.value,
       logger
     )
 
@@ -195,8 +195,8 @@ class SoftphoneStreaming[F[_]: Async: Network] private (
         publicSip,
         registrarUri,
         entropy,
-        Expires.of(account.config.registerExpires),
-        config.hangupTimeout,
+        Expires.forRegistration(account.config.registerExpires),
+        config.hangupTimeout.value,
         logger
       )
       _ <- observer.registered(account.id, registration)
@@ -238,7 +238,7 @@ class SoftphoneStreaming[F[_]: Async: Network] private (
           media,
           timers,
           // Each target gets the time one would have had.
-          config.inviteTimeout * (1 + alternatives.size).toLong,
+          config.inviteTimeout.value * (1 + alternatives.size).toLong,
           logger,
           extraHeaders
         )
@@ -253,7 +253,7 @@ class SoftphoneStreaming[F[_]: Async: Network] private (
       )
       _ <- Resource.make(call.runEventLoop(dialogInput).start)(fiber =>
         call.hangup >> fiber.join.void
-          .timeoutTo(config.hangupTimeout, fiber.cancel)
+          .timeoutTo(config.hangupTimeout.value, fiber.cancel)
       )
     } yield call
 
@@ -503,7 +503,7 @@ object SoftphoneStreaming {
             .mapping[F](
               SocketAddress(bindAddress, port),
               SocketAddress(server, stun.port),
-              stun.retransmit,
+              stun.retransmit.value,
               attempts
             )
             .flatMap {
@@ -547,8 +547,8 @@ object SoftphoneStreaming {
           client
             .bindingRequest(
               SocketAddress(address, stun.port),
-              stun.retransmit,
-              stun.attempts.value
+              stun.retransmit.value,
+              stun.attempts
             )
             .flatMap {
               case Right(seen) =>
@@ -566,6 +566,6 @@ object SoftphoneStreaming {
       }
     (round.handleErrorWith(e =>
       logger.warn(Map(LogFields.Error -> e.toString))("STUN round failed")
-    ) >> Async[F].sleep(stun.refresh)).foreverM
+    ) >> Async[F].sleep(stun.refresh.value)).foreverM
   }
 }

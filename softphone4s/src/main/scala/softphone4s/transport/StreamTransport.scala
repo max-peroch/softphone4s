@@ -186,7 +186,7 @@ object StreamTransport {
         _ <- supervisor.supervise(run(Key(to, name), slot)).whenA(isNew)
         connection <- slot.ready.get
           .timeoutTo(
-            config.connectTimeout,
+            config.connectTimeout.value,
             evict(to, name).as(
               Left(SoftphoneError.ConnectTimedOut(to.toString))
             )
@@ -289,19 +289,21 @@ object StreamTransport {
     ): F[Unit] =
       config.keepAlive.fold(Async[F].never[Unit]) { ka =>
         def loop: F[Unit] =
-          Async[F].sleep(ka.interval) >>
+          Async[F].sleep(ka.interval.value) >>
             (Async[F].monotonic, touched.get).mapN(_ - _).flatMap { quiet =>
-              if quiet < ka.interval then loop
+              if quiet < ka.interval.value then loop
               else
                 for {
                   sentAt <- Async[F].monotonic
                   _      <- write(Ping)
-                  _      <- Async[F].sleep(ka.timeout)
+                  _      <- Async[F].sleep(ka.timeout.value)
                   heard  <- received.get
                   _      <-
                     if heard >= sentAt then loop
                     else
-                      logger.debug(Map(LogFields.After -> ka.timeout.toString))(
+                      logger.debug(
+                        Map(LogFields.After -> ka.timeout.value.toString)
+                      )(
                         "No answer to a keep-alive; closing the connection"
                       )
                 } yield ()
@@ -312,12 +314,12 @@ object StreamTransport {
     /** Completes when nothing has crossed the connection for `idleTimeout`.
       */
     private def idle(touched: Ref[F, FiniteDuration]): F[Unit] = {
-      val check         = (config.idleTimeout / 2).max(1.millis)
+      val check         = (config.idleTimeout.value / 2).max(1.millis)
       def loop: F[Unit] =
         (Async[F].sleep(check) >>
           (Async[F].monotonic, touched.get).mapN(_ - _))
           .flatMap(quiet =>
-            if quiet >= config.idleTimeout then Async[F].unit else loop
+            if quiet >= config.idleTimeout.value then Async[F].unit else loop
           )
       loop
     }

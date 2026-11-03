@@ -1,5 +1,6 @@
 package softphone4s.transport
 
+import softphone4s.model.PositiveDuration
 import pureconfig.ConfigReader
 
 import scala.concurrent.duration.*
@@ -15,6 +16,6 @@ import scala.concurrent.duration.*
   *   connection is given up on.
   */
 final case class KeepAlive(
-    interval: FiniteDuration = 2.minutes,
-    timeout: FiniteDuration = 10.seconds
+    interval: PositiveDuration = PositiveDuration.constant(2.minutes),
+    timeout: PositiveDuration = PositiveDuration.constant(10.seconds)
 ) derives ConfigReader

@@ -35,6 +35,23 @@ A configuration file keeps its keys (`user`, `password`, `realm`, ...) and its
 text; a value that is not valid now fails when the file is loaded, with a message,
 instead of failing later. Many keys are new and all have defaults.
 
+`hangupTimeout` and `inviteTimeout` were `FiniteDuration`. They, and every timeout
+and wait added since, are now `PositiveDuration`: a length of time above zero.
+Zero would make a timeout fire at once, and a refresh that waits for it spin.
+
+```scala
+// 0.1.0
+SoftphoneConfig(..., inviteTimeout = 30.seconds)
+
+// now: an Either, since the value may be zero or negative
+PositiveDuration(30.seconds).map(t => SoftphoneConfig(..., inviteTimeout = t))
+// read it back with `.value`, a FiniteDuration
+```
+
+A configuration file is unchanged (`invite-timeout = 30 seconds`); a zero or a
+negative value is a load error. `StunClient.bindingRequest` and
+`SipTransport.bindingRequest` take `attempts: Attempts` where they took an `Int`.
+
 The class is now `final`, and fields were added between the old ones
 (`maxRtpPort` after `baseRtpPort`, and others), so build it with named arguments:
 `copy`, `apply` and `unapply` have different shapes.

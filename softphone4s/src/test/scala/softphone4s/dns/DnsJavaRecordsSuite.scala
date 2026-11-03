@@ -6,6 +6,7 @@ import com.comcast.ip4s.*
 import fs2.Chunk
 import fs2.io.net.{Datagram, Network}
 import munit.CatsEffectSuite
+import softphone4s.SipLiterals.*
 import org.xbill.DNS.{
   DClass,
   Flags,
@@ -210,7 +211,7 @@ class DnsJavaRecordsSuite extends CatsEffectSuite {
 
   test("the servers in the configuration are the ones asked") {
     server.use { (address, queries) =>
-      val config = DnsConfig(List(address), 1.second)
+      val config = DnsConfig(List(address), 1.second.positive)
       for {
         dns   <- DnsJavaRecords.configured[IO](config)
         found <- dns.srv("_sip._tcp.example.com.")

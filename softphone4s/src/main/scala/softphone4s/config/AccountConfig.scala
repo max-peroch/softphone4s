@@ -3,7 +3,7 @@ package softphone4s.config
 import com.comcast.ip4s.*
 import pureconfig.*
 import pureconfig.generic.semiauto.*
-import softphone4s.model.{Secret, TransportProtocol, User}
+import softphone4s.model.{PositiveDuration, Secret, TransportProtocol, User}
 
 import scala.concurrent.duration.*
 
@@ -13,7 +13,7 @@ final case class AccountConfig(
     password: Secret,
     realm: Host,
     serverPort: Port = port"5060",
-    registerExpires: FiniteDuration = 1.hour,
+    registerExpires: PositiveDuration = PositiveDuration.constant(1.hour),
     transport: TransportProtocol = TransportProtocol.Udp
 )
 

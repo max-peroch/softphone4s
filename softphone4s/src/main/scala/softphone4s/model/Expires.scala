@@ -28,6 +28,12 @@ object Expires {
   def of(duration: FiniteDuration): Expires =
     duration.toSeconds.max(0L).min(Int.MaxValue.toLong).toInt
 
+  /** The lifetime to ask a registrar for: whole seconds, rounded down, and
+    * never less than one, since zero removes a registration.
+    */
+  def forRegistration(lifetime: PositiveDuration): Expires =
+    of(lifetime.value.max(1.second))
+
   extension (e: Expires) {
     def value: Int               = e
     def duration: FiniteDuration = e.toLong.seconds

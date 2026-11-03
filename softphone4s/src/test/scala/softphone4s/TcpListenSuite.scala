@@ -30,7 +30,7 @@ class TcpListenSuite extends CatsEffectSuite {
         localSipPort = ours,
         baseRtpPort = port"19800",
         bindAddress = ip"127.0.0.1",
-        hangupTimeout = 2.seconds,
+        hangupTimeout = 2.seconds.positive,
         listen = Set(TransportProtocol.Tcp)
       ),
       audio,

@@ -32,7 +32,7 @@ class TlsListenSuite extends CatsEffectSuite {
         localSipPort = port"19151",
         baseRtpPort = port"19900",
         bindAddress = ip"127.0.0.1",
-        hangupTimeout = 2.seconds,
+        hangupTimeout = 2.seconds.positive,
         listen = Set(TransportProtocol.Tls),
         tlsPort = tls,
         tls = TlsConfig(serverCertificate =

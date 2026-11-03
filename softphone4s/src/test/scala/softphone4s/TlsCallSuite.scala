@@ -102,7 +102,7 @@ class TlsCallSuite extends CatsEffectSuite {
         serverPort = serverPort,
         baseRtpPort = port"19600",
         bindAddress = ip"127.0.0.1",
-        hangupTimeout = 2.seconds,
+        hangupTimeout = 2.seconds.positive,
         transport = transport,
         tls = TlsConfig(trustStore = Some(TlsFixtures.trusting(trust)))
       ),

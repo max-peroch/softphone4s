@@ -7,6 +7,7 @@ import com.comcast.ip4s.*
 import munit.CatsEffectSuite
 import org.typelevel.log4cats.noop.NoOpLogger
 import softphone4s.SipLiterals.*
+import softphone4s.model.PositiveDuration
 import softphone4s.config.{
   CodecChoice,
   NatConfig,
@@ -33,7 +34,7 @@ class InboundCallSuite extends CatsEffectSuite {
   private val theirs = port"19081"
   private val target = SocketAddress(ip"127.0.0.1", ours)
 
-  private def config(answerTimeout: FiniteDuration, nat: NatConfig) =
+  private def config(answerTimeout: PositiveDuration, nat: NatConfig) =
     SoftphoneConfig(
       user = sipUser("test"),
       password = Secret("test"),
@@ -42,7 +43,7 @@ class InboundCallSuite extends CatsEffectSuite {
       serverPort = theirs,
       baseRtpPort = port"19200",
       bindAddress = ip"127.0.0.1",
-      hangupTimeout = 2.seconds,
+      hangupTimeout = 2.seconds.positive,
       answerTimeout = answerTimeout,
       nat = nat
     )
@@ -51,7 +52,7 @@ class InboundCallSuite extends CatsEffectSuite {
 
   /** The softphone under test, and the caller's end of the wire. */
   private def scenario(
-      answerTimeout: FiniteDuration = 60.seconds,
+      answerTimeout: PositiveDuration = 60.seconds.positive,
       codecs: List[CodecChoice] = List(CodecChoice.Pcmu, CodecChoice.Pcma),
       extraCodecs: List[AudioCodec] = Nil,
       nat: NatConfig = NatConfig()
@@ -179,7 +180,13 @@ class InboundCallSuite extends CatsEffectSuite {
     StunServer(says = Some(outside)).use { stun =>
       val nat = NatConfig(
         ObservedAddresses.Use,
-        Some(StunConfig(host"127.0.0.1", stun.address.port, refresh = 1.hour))
+        Some(
+          StunConfig(
+            host"127.0.0.1",
+            stun.address.port,
+            refresh = 1.hour.positive
+          )
+        )
       )
       scenario(nat = nat).use { (phone, peer) =>
         for {
@@ -296,7 +303,7 @@ class InboundCallSuite extends CatsEffectSuite {
   }
 
   test("a call nobody answers is turned away with 480") {
-    scenario(answerTimeout = 400.millis).use { (phone, peer) =>
+    scenario(answerTimeout = 400.millis.positive).use { (phone, peer) =>
       for {
         _ <- ring(phone, peer)
         r <- response(peer, status(480))

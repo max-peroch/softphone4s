@@ -1,5 +1,6 @@
 package softphone4s.loopback
 
+import softphone4s.SipLiterals.*
 import cats.effect.IO
 import cats.syntax.all.*
 import munit.CatsEffectSuite
@@ -142,7 +143,7 @@ class LossySignallingSuite extends CatsEffectSuite {
       case LossyRelay.Seen(Way.ToCallee, _, _) => Fault.Drop
       case _                                   => Fault.Pass
     }
-    throughRelay(plan, Loopback.Settings(inviteTimeout = 3.seconds)) {
+    throughRelay(plan, Loopback.Settings(inviteTimeout = 3.seconds.positive)) {
       (relay, p, call, _) =>
         for {
           result  <- call.awaitPickup.attempt.timeout(20.seconds)

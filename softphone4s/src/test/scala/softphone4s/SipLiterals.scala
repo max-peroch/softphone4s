@@ -2,6 +2,8 @@ package softphone4s
 
 import softphone4s.model.*
 
+import scala.concurrent.duration.FiniteDuration
+
 /** Parses protocol literals in tests, failing the test on bad input. */
 object SipLiterals extends munit.Assertions {
 
@@ -21,4 +23,10 @@ object SipLiterals extends munit.Assertions {
   def challenge(s: String): AuthChallenge = AuthChallenge.parse(s)
   def pt(n: Int): PayloadType             = get(PayloadType(n))
   def sipUser(s: String): User            = get(User(s))
+
+  extension (duration: FiniteDuration) {
+
+    /** `duration` as a [[PositiveDuration]], failing the test if it is not. */
+    def positive: PositiveDuration = get(PositiveDuration(duration))
+  }
 }

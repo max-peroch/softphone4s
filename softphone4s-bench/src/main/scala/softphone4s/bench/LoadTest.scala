@@ -6,7 +6,7 @@ import com.comcast.ip4s.*
 import fs2.{Chunk, Stream}
 import org.typelevel.log4cats.noop.NoOpLogger
 import softphone4s.config.SoftphoneConfig
-import softphone4s.model.{Callee, Secret, User}
+import softphone4s.model.{Callee, PositiveDuration, Secret, User}
 import softphone4s.{Call, Softphone, SoftphoneStreaming}
 
 import java.lang.management.ManagementFactory
@@ -51,9 +51,9 @@ object LoadTest extends IOApp {
       localSipPort = sip,
       baseRtpPort = rtp,
       bindAddress = ip"127.0.0.1",
-      hangupTimeout = 5.seconds,
-      answerTimeout = 120.seconds,
-      inviteTimeout = 64.seconds
+      hangupTimeout = positive(5.seconds),
+      answerTimeout = positive(120.seconds),
+      inviteTimeout = positive(64.seconds)
     )
 
   private val pair: Resource[IO, Pair] =
@@ -69,6 +69,9 @@ object LoadTest extends IOApp {
         NoOpLogger.impl[IO]
       )
     ).mapN(Pair(_, _))
+
+  private def positive(duration: FiniteDuration): PositiveDuration =
+    PositiveDuration(duration).fold(e => sys.error(e), identity)
 
   private val bobAddress: Callee =
     Callee("bob@127.0.0.1:19421").fold(e => sys.error(e), identity)

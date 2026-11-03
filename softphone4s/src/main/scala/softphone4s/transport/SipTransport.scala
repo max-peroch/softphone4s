@@ -11,6 +11,7 @@ import org.typelevel.log4cats.StructuredLogger
 import softphone4s.logging.LogFields
 import softphone4s.codec.{ParseError, SipCodec}
 import softphone4s.model.SipMessage
+import softphone4s.config.Attempts
 import softphone4s.stun.{Stun, StunClient}
 
 object SipTransport {
@@ -75,7 +76,7 @@ object SipTransport {
               def bindingRequest(
                   server: SocketAddress[IpAddress],
                   retransmit: FiniteDuration,
-                  attempts: Int
+                  attempts: Attempts
               ): F[Outcome] =
                 Stun.newTransactionId[F].flatMap { id =>
                   // Waiting for the answer is registered for as long as it takes,
@@ -98,7 +99,7 @@ object SipTransport {
                         answer,
                         Iterator
                           .iterate(retransmit)(_ * 2)
-                          .take(math.max(attempts, 1))
+                          .take(attempts.value)
                           .toList
                       )
                     )

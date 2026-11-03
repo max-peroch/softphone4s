@@ -97,7 +97,7 @@ class TcpCallSuite extends CatsEffectSuite {
         serverPort = serverPort,
         baseRtpPort = port"19500",
         bindAddress = ip"127.0.0.1",
-        hangupTimeout = 2.seconds,
+        hangupTimeout = 2.seconds.positive,
         transport = transport
       ),
       audio,

@@ -1,6 +1,7 @@
 package softphone4s.stun
 
 import com.comcast.ip4s.{IpAddress, SocketAddress}
+import softphone4s.config.Attempts
 
 /** Asking a STUN server what address it sees us at, from the socket we send SIP
   * from, so that the answer is the mapping SIP traffic gets.
@@ -14,6 +15,6 @@ trait StunClient[F[_]] {
   def bindingRequest(
       server: SocketAddress[IpAddress],
       retransmit: scala.concurrent.duration.FiniteDuration,
-      attempts: Int
+      attempts: Attempts
   ): F[Either[Stun.Error, SocketAddress[IpAddress]]]
 }

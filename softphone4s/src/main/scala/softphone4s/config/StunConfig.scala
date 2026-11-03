@@ -1,5 +1,6 @@
 package softphone4s.config
 
+import softphone4s.model.PositiveDuration
 import com.comcast.ip4s.{Host, Port, port}
 import pureconfig.ConfigReader
 
@@ -20,9 +21,9 @@ import scala.concurrent.duration.*
 final case class StunConfig(
     host: Host,
     port: Port = port"3478",
-    retransmit: FiniteDuration = 500.millis,
+    retransmit: PositiveDuration = PositiveDuration.constant(500.millis),
     attempts: Attempts = Attempts.Default,
-    refresh: FiniteDuration = 5.minutes
+    refresh: PositiveDuration = PositiveDuration.constant(5.minutes)
 ) derives ConfigReader
 
 object StunConfig {

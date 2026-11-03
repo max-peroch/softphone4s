@@ -36,12 +36,19 @@ what to change when it does.
   `OtelTransactionTracing`, one span per SIP transaction from the request to the
   final answer; log lines carry named fields
   (`call-id`, `direction`, `account`, `branch`, `method`...), documented in
-  `LogFields`.
+  `LogFields`. A hook that takes longer than 50 ms (`Metrics.HookBudget`) is
+  cancelled and logged, since hooks run where something else is waiting, and a
+  transaction still open when the phone is released has its span ended as
+  `abandoned`.
 - **Tests and tools.** Fuzzing of every decoder and hostile-input suites; two
   softphones calling each other over real UDP, including through a relay that
   loses, repeats and reorders SIP messages; interop tests against Asterisk 20 in
   a container (`softphone4s-interop`); a load and soak program
-  (`softphone4s-bench`).
+  (`softphone4s-bench`: it can hold calls open without audio, `silent`, and
+  splits the CPU into Java threads and the JVM's own) and a JMH benchmark of each
+  stage of the packet path. The README says how to size the compute pool for many
+  calls (`Running many calls`): the physical cores took 100 calls from 4.9 to 2.9
+  Java cores on the machine measured.
 - A binary-compatibility report against the last release (`mimaReportBinaryIssues`).
 
 ### Changed
@@ -58,7 +65,11 @@ what to change when it does.
   One process now holds about 100 calls with all the audio arriving, where it held
   about 40.
 - Timers, durations and sizes in the configuration are typed (`Attempts`,
-  `ByteLimit`, `MaxConnections`); a value below one is a load error.
+  `ByteLimit`, `MaxConnections`, and `PositiveDuration` for every timeout, wait
+  and period); a value below one, or a duration of zero or less, is a load error.
+  Before, `refresh = 0` made the STUN refresh a hot loop and `register-expires = 0`
+  removed the registration. **Breaking:** see [MIGRATION.md](MIGRATION.md).
+  `StunClient.bindingRequest` takes `attempts: Attempts` rather than an `Int`.
 - `softphone4s-otel4s` is built against OpenTelemetry Java 1.64.0, which otel4s
   1.1.0 needs.
 

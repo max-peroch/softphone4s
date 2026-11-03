@@ -649,17 +649,17 @@ account every call is taken. Two accounts cannot have the same user.
 | `max-rtp-port`      | `Port`      | base + 9999  | Last port of the range (5 000 calls at once by default, as far as ports go) |
 | `bind-address`      | `IpAddress` | `0.0.0.0`    | Local bind address                                 |
 | `local-ip-fallback` | `IpAddress` | `127.0.0.1`  | Advertised when no IPv4 route to the SIP server is found |
-| `hangup-timeout`    | `Duration`  | `5 seconds`  | Grace period for event loop drain on release       |
-| `invite-timeout`    | `Duration`  | `32 seconds` | Max wait for remote to answer (RFC 3261 Timer B)   |
-| `register-expires`  | `Duration`  | `1 hour`     | Binding lifetime asked for when registering        |
-| `answer-timeout`    | `Duration`  | `60 seconds` | How long an incoming call may ring before `480`     |
+| `hangup-timeout`    | `Duration` above 0  | `5 seconds`  | Grace period for event loop drain on release       |
+| `invite-timeout`    | `Duration` above 0  | `32 seconds` | Max wait for remote to answer (RFC 3261 Timer B)   |
+| `register-expires`  | `Duration` above 0  | `1 hour`     | Binding lifetime asked for when registering        |
+| `answer-timeout`    | `Duration` above 0  | `60 seconds` | How long an incoming call may ring before `480`     |
 | `transport`         | `udp`/`tcp`/`tls` | `udp`  | Transport of the default account                  |
-| `tcp.connect-timeout` | `Duration` | `5 seconds` | How long to wait for a TCP connection           |
-| `tcp.idle-timeout`  | `Duration`  | `5 minutes`  | A TCP connection with nothing sent or received for this long is closed |
-| `tcp.keep-alive.interval` / `timeout` | `Duration` | 2 minutes / 10 seconds (off unless set) | Ping a quiet TCP connection with a double CRLF (RFC 5626) and close it if nothing at all comes back within the timeout; pings from the other side are always answered with a pong |
+| `tcp.connect-timeout` | `Duration` above 0 | `5 seconds` | How long to wait for a TCP connection           |
+| `tcp.idle-timeout`  | `Duration` above 0  | `5 minutes`  | A TCP connection with nothing sent or received for this long is closed |
+| `tcp.keep-alive.interval` / `timeout` | `Duration` above 0 | 2 minutes / 10 seconds (off unless set) | Ping a quiet TCP connection with a double CRLF (RFC 5626) and close it if nothing at all comes back within the timeout; pings from the other side are always answered with a pong |
 | `tcp.framing.max-header-bytes` / `max-body-bytes` | `ByteLimit` (at least 1) | 16 KiB / 1 MiB | Largest message a TCP connection may carry before it is dropped |
 | `tls.trust-store` / `tls.client-certificate` | `{ path, password, store-type }` | JVM trust / none | Key stores for the certificates we trust and the one we present (`store-type` is `PKCS12` or `JKS`) |
-| `nat.stun.host` / `port` / `retransmit` / `attempts` / `refresh` | `Host`, `Port`, `Duration`, `Attempts` (at least 1), `Duration` | none / 3478 / 500 ms / 5 / 5 minutes | A STUN server to ask what address we have outside a NAT |
+| `nat.stun.host` / `port` / `retransmit` / `attempts` / `refresh` | `Host`, `Port`, `Duration` above 0, `Attempts` (at least 1), `Duration` above 0 | none / 3478 / 500 ms / 5 / 5 minutes | A STUN server to ask what address we have outside a NAT |
 | `nat.rtp-latching` | `follow`/`ignore` | `follow` | Send media to where the remote party's media comes from, when that is not where its SDP said |
 | `srtp` | `off` / `optional` / `required` | `off` | Whether media is encrypted with SRTP (keys exchanged in the SDP, so the signalling should be on TLS) |
 | `jitter-buffer.depth` / `max-depth` / `capacity` | `Int` | 3 / 6 / 12 | Frames of 20 ms held before playing, how far that grows when the network is bad (`max-depth = depth` for a fixed cushion), and the most ever held |
@@ -671,7 +671,7 @@ account every call is taken. Two accounts cannot have the same user.
 | `tls.server-certificate` | `{ path, password, store-type }` | none | The key and certificate we show to clients that connect to us |
 | `tls.client-authentication` | `off`/`request`/`require` | `off` | Whether, as a server, we ask clients for a certificate (checked against `tls.trust-store`) |
 | `dns.servers`       | list of `address[:port]` | system | DNS servers to ask for SRV and NAPTR records |
-| `dns.timeout`       | `Duration`  | `5 seconds`  | How long to wait for one DNS server                 |
+| `dns.timeout`       | `Duration` above 0  | `5 seconds`  | How long to wait for one DNS server                 |
 | `tls.min-version`   | `1.2`/`1.3` | `1.2`        | Oldest TLS version accepted                         |
 | `tls.cipher-suites` | list        | JVM default  | Cipher suites to allow, by Java name                |
 | `tls.hostname-verification` | `verify`/`skip` | `verify` | Whether the certificate must name the host we meant |
@@ -704,6 +704,9 @@ times out before being answered.
 
 ## Architecture
 
+What runs, call by call. The packages, the design principles and what was left out
+on purpose are in [ARCHITECTURE.md](ARCHITECTURE.md).
+
 ```
 SoftphoneStreaming          — the public API; a thin facade over the parts below
 ├─ IncomingRouter           — what arrives: to its call, to a new call (INVITE),
@@ -711,11 +714,15 @@ SoftphoneStreaming          — the public API; a thin facade over the parts bel
 ├─ Uplinks                  — where a name leads (RFC 3263), the next way to try,
 │                             the way over TCP for a big request
 ├─ EndpointFactory          — the endpoint of a request: local address as the
-│                             network sees it, RTP ports, SRTP keys
+│                             network sees it, RTP ports (and how the NAT maps
+│                             them, by STUN), SRTP keys
 ├─ RoutedTransport          — UDP / TCP / TLS, chosen by the top Via
 ├─ TransactionManager       — RFC 3261 §17 client and server transactions
 ├─ Registration             — RegistrationFsm, refresh, backoff, NAT follow
 ├─ MessageSender            — MESSAGE, over StandaloneRequest (one challenge)
+├─ Subscriber, Publisher    — SUBSCRIBE and PUBLISH, over SubscriptionFsm and
+│                             PublicationFsm; the event packages read what comes
+├─ CallObserver             — tells Metrics what calls and registrations do
 └─ per call
    ├─ OutboundCall / InboundCall — CallFsm / InboundCallFsm
    └─ MediaSession
@@ -726,7 +733,7 @@ SoftphoneStreaming          — the public API; a thin facade over the parts bel
 ```
 
 The packages `model`, `codec`, `fsm`, `sdp`, `srtp`, `messaging`,
-`subscription` and `publication` are pure:
+`subscription`, `publication` and `dialog` are pure:
 they import no `cats.effect` and no `fs2` stream, pipe or I/O (`fs2.Chunk` is
 data and is allowed). A test (`PuritySuite`) scans them and fails if that
 changes.

@@ -1,5 +1,6 @@
 package softphone4s.loopback
 
+import softphone4s.SipLiterals.*
 import cats.effect.{IO, Resource}
 import cats.syntax.all.*
 import com.comcast.ip4s.*
@@ -8,7 +9,7 @@ import org.typelevel.log4cats.noop.NoOpLogger
 import softphone4s.{Softphone, SoftphoneStreaming}
 import softphone4s.config.{AccountConfig, SoftphoneConfig}
 import softphone4s.metrics.Metrics
-import softphone4s.model.{Callee, Secret, User}
+import softphone4s.model.{Callee, PositiveDuration, Secret, User}
 import softphone4s.transaction.TransactionTracing
 
 import javax.sound.sampled.AudioFormat
@@ -27,8 +28,8 @@ object Loopback {
   /** What the two are configured with, apart from who they are. */
   final case class Settings(
       rtpPairs: Int = 4,
-      answerTimeout: FiniteDuration = 60.seconds,
-      inviteTimeout: FiniteDuration = 32.seconds,
+      answerTimeout: PositiveDuration = 60.seconds.positive,
+      inviteTimeout: PositiveDuration = 32.seconds.positive,
       bobAlsoHolds: Option[String] = None
   )
 
@@ -54,7 +55,7 @@ object Loopback {
       maxRtpPort =
         Port.fromInt(rtp + settings.rtpPairs * 2 - 1).orElse(Port.fromInt(rtp)),
       bindAddress = ip"127.0.0.1",
-      hangupTimeout = 2.seconds,
+      hangupTimeout = 2.seconds.positive,
       answerTimeout = settings.answerTimeout,
       inviteTimeout = settings.inviteTimeout,
       additionalAccounts = Option

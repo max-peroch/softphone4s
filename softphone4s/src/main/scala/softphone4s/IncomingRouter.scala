@@ -254,8 +254,8 @@ private[softphone4s] final class IncomingRouter[F[_]: Async: Network](
           media,
           timers,
           TransactionConfig(),
-          config.answerTimeout,
-          config.hangupTimeout,
+          config.answerTimeout.value,
+          config.hangupTimeout.value,
           logger
         )
       )

@@ -44,7 +44,7 @@ class MultiAccountSuite extends CatsEffectSuite {
       serverPort = theirs,
       baseRtpPort = port"19400",
       bindAddress = ip"127.0.0.1",
-      hangupTimeout = 2.seconds,
+      hangupTimeout = 2.seconds.positive,
       additionalAccounts = more
     )
 
@@ -477,12 +477,14 @@ class MultiAccountSuite extends CatsEffectSuite {
       parsed.accounts.map(_.transport).toList,
       List(TransportProtocol.Tcp, TransportProtocol.Udp)
     )
-    assertEquals(parsed.tcp.connectTimeout, 2.seconds)
-    assertEquals(parsed.tcp.idleTimeout, 10.minutes)
+    assertEquals(parsed.tcp.connectTimeout.value, 2.seconds)
+    assertEquals(parsed.tcp.idleTimeout.value, 10.minutes)
     assertEquals(parsed.nat.stun, None)
     assertEquals(
       parsed.tcp.keepAlive,
-      Some(softphone4s.transport.KeepAlive(90.seconds, 5.seconds))
+      Some(
+        softphone4s.transport.KeepAlive(90.seconds.positive, 5.seconds.positive)
+      )
     )
   }
 
@@ -652,7 +654,7 @@ class MultiAccountSuite extends CatsEffectSuite {
       .fold(failures => fail(failures.prettyPrint()), identity)
     assertEquals(
       parsed.nat.stun.map(s =>
-        (s.host.toString, s.port.value, s.attempts.value, s.retransmit)
+        (s.host.toString, s.port.value, s.attempts.value, s.retransmit.value)
       ),
       Some(("stun.example.com", 19302, 3, 500.millis))
     )
@@ -752,7 +754,7 @@ class MultiAccountSuite extends CatsEffectSuite {
     assertEquals(parsed.tls.minVersion, TlsVersion.Tls13)
     assertEquals(parsed.tls.hostnameVerification, HostnameVerification.Skip)
     assertEquals(parsed.tls.cipherSuites, Some(List("TLS_AES_128_GCM_SHA256")))
-    assertEquals(parsed.tls.connection.idleTimeout, 1.minute)
+    assertEquals(parsed.tls.connection.idleTimeout.value, 1.minute)
   }
 
   test("TLS is verified by default, from 1.2 up") {
@@ -786,7 +788,7 @@ class MultiAccountSuite extends CatsEffectSuite {
       parsed.dns.servers.map(_.toString),
       List("10.0.0.53:53", "192.0.2.1:5353", "[2001:db8::53]:53")
     )
-    assertEquals(parsed.dns.timeout, 2.seconds)
+    assertEquals(parsed.dns.timeout.value, 2.seconds)
     assertEquals(
       SoftphoneConfig(sipUser("a"), Secret("b"), host"c").dns.servers,
       Nil

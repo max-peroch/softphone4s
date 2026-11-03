@@ -7,7 +7,13 @@ import pureconfig.generic.semiauto.*
 import softphone4s.dns.DnsConfig
 import softphone4s.media.{AudioCodecs, JitterConfig}
 import softphone4s.srtp.SrtpPolicy
-import softphone4s.model.{ByteLimit, Secret, TransportProtocol, User}
+import softphone4s.model.{
+  ByteLimit,
+  PositiveDuration,
+  Secret,
+  TransportProtocol,
+  User
+}
 import softphone4s.sdp.Capabilities
 import softphone4s.transport.{StreamConfig, TlsConfig}
 
@@ -29,10 +35,10 @@ final case class SoftphoneConfig(
     maxRtpPort: Option[Port] = None,
     bindAddress: IpAddress = ip"0.0.0.0",
     localIpFallback: IpAddress = ip"127.0.0.1",
-    hangupTimeout: FiniteDuration = 5.seconds,
-    inviteTimeout: FiniteDuration = 32.seconds,
-    registerExpires: FiniteDuration = 1.hour,
-    answerTimeout: FiniteDuration = 60.seconds,
+    hangupTimeout: PositiveDuration = PositiveDuration.constant(5.seconds),
+    inviteTimeout: PositiveDuration = PositiveDuration.constant(32.seconds),
+    registerExpires: PositiveDuration = PositiveDuration.constant(1.hour),
+    answerTimeout: PositiveDuration = PositiveDuration.constant(60.seconds),
     additionalAccounts: List[AccountConfig] = Nil,
     transport: TransportProtocol = TransportProtocol.Udp,
     tcp: StreamConfig = StreamConfig(),

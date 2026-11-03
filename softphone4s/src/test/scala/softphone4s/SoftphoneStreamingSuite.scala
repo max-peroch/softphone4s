@@ -38,7 +38,7 @@ class SoftphoneStreamingSuite extends CatsEffectSuite {
     serverPort = theirs,
     baseRtpPort = port"19100",
     bindAddress = ip"127.0.0.1",
-    hangupTimeout = 2.seconds
+    hangupTimeout = 2.seconds.positive
   )
 
   private val audio = new AudioFormat(8000f, 16, 1, true, false)

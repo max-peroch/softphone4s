@@ -1,5 +1,6 @@
 package softphone4s.transport
 
+import softphone4s.model.PositiveDuration
 import pureconfig.ConfigReader
 
 import scala.concurrent.duration.*
@@ -20,8 +21,8 @@ import scala.concurrent.duration.*
   *   how many connections made to us are served at once; the others wait.
   */
 final case class StreamConfig(
-    connectTimeout: FiniteDuration = 5.seconds,
-    idleTimeout: FiniteDuration = 5.minutes,
+    connectTimeout: PositiveDuration = PositiveDuration.constant(5.seconds),
+    idleTimeout: PositiveDuration = PositiveDuration.constant(5.minutes),
     framing: FramingLimits = FramingLimits(),
     keepAlive: Option[KeepAlive] = None,
     maxIncoming: MaxConnections = MaxConnections.Default

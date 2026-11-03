@@ -41,7 +41,7 @@ object DnsJavaRecords {
   def configured[F[_]: Async](config: DnsConfig): F[DnsRecords[F]] =
     NonEmptyList
       .fromList(config.servers)
-      .fold(apply[F])(against(_, config.timeout))
+      .fold(apply[F])(against(_, config.timeout.value))
 
   /** Asks `servers` in turn, waiting at most `timeout` for each answer. */
   def against[F[_]: Async](

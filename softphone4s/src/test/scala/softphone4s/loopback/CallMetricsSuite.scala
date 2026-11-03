@@ -1,5 +1,6 @@
 package softphone4s.loopback
 
+import softphone4s.SipLiterals.*
 import cats.effect.IO
 import cats.syntax.all.*
 import com.comcast.ip4s.port
@@ -112,7 +113,7 @@ class CallMetricsSuite extends CatsEffectSuite {
       (alice, bob) <- both
       _            <- Loopback
         .pair(
-          Loopback.Settings(answerTimeout = 1.second),
+          Loopback.Settings(answerTimeout = 1.second.positive),
           Some(alice),
           Some(bob)
         )
@@ -150,7 +151,11 @@ class CallMetricsSuite extends CatsEffectSuite {
     for {
       (alice, _) <- both
       _          <- Loopback
-        .pair(Loopback.Settings(inviteTimeout = 2.seconds), Some(alice), None)
+        .pair(
+          Loopback.Settings(inviteTimeout = 2.seconds.positive),
+          Some(alice),
+          None
+        )
         .use { p =>
           p.alice
             .call(p.callee(port = port"19429"))

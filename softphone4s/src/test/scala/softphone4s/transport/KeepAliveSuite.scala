@@ -79,7 +79,9 @@ class KeepAliveSuite extends CatsEffectSuite {
   private def pinging(
       interval: FiniteDuration,
       timeout: FiniteDuration = 5.seconds
-  ) = StreamConfig(keepAlive = Some(KeepAlive(interval, timeout)))
+  ) = StreamConfig(keepAlive =
+    Some(KeepAlive(interval.positive, timeout.positive))
+  )
 
   test("a ping from the server is answered with a pong") {
     server((socket, got) =>

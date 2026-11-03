@@ -135,7 +135,7 @@ class TcpTransportSuite extends CatsEffectSuite {
   test(
     "a connection idle for the timeout is closed, and the next send opens another"
   ) {
-    val config = StreamConfig(idleTimeout = 200.millis)
+    val config = StreamConfig(idleTimeout = 200.millis.positive)
     (server(), tcp(config)).tupled.use { (srv, transport) =>
       transport.send(srv.address, options(1)) >>
         IO.sleep(800.millis) >>
@@ -250,7 +250,7 @@ class TcpTransportSuite extends CatsEffectSuite {
   }
 
   test("an alias for another IP address than the connection's is ignored") {
-    val config = StreamConfig(connectTimeout = 500.millis)
+    val config = StreamConfig(connectTimeout = 500.millis.positive)
     listening(config).use { transport =>
       connected(transport.localAddress).use { peer =>
         for {
@@ -269,7 +269,7 @@ class TcpTransportSuite extends CatsEffectSuite {
   }
 
   test("an accepted connection idle for the timeout is closed") {
-    val config = StreamConfig(idleTimeout = 200.millis)
+    val config = StreamConfig(idleTimeout = 200.millis.positive)
     listening(config).use { transport =>
       connected(transport.localAddress).use { peer =>
         for {

@@ -430,7 +430,9 @@ class TlsTransportSuite extends CatsEffectSuite {
     "a server that never completes the handshake is a typed connect timeout"
   ) {
     val quick =
-      trustsServer.copy(connection = StreamConfig(connectTimeout = 400.millis))
+      trustsServer.copy(connection =
+        StreamConfig(connectTimeout = 400.millis.positive)
+      )
     // Bound, but nothing is ever read or written: the handshake cannot finish.
     Network[IO].bind(SocketAddress(ip"127.0.0.1", port"0")).use { silent =>
       val address = silent.address match {
