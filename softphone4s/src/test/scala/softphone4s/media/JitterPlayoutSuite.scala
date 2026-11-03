@@ -291,4 +291,28 @@ class JitterPlayoutSuite extends CatsEffectSuite {
       }
     )
   }
+
+  test(
+    "a period of zero is the shortest there is, and not an arithmetic error"
+  ) {
+    TestControl.executeEmbed(
+      for {
+        count  <- IO.ref(0)
+        result <- IO
+          .race(
+            JitterPlayout.run(
+              config,
+              Duration.Zero,
+              Stream.sleep[IO](1.minute).drain
+            )((_, _) => count.update(_ + 1)),
+            IO.sleep(5.micros)
+          )
+          .attempt
+        n <- count.get
+      } yield {
+        assert(result.isRight, result.toString)
+        assert(n > 0, "no frame was made")
+      }
+    )
+  }
 }

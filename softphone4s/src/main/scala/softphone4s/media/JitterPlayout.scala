@@ -4,7 +4,7 @@ import cats.effect.{Async, Ref}
 import cats.syntax.all.*
 import fs2.Stream
 
-import scala.concurrent.duration.FiniteDuration
+import scala.concurrent.duration.{FiniteDuration, NANOSECONDS}
 
 /** A jitter buffer at work: packets go in as they arrive and a frame comes out
   * every `period`, along with how the buffer stands.
@@ -19,7 +19,8 @@ object JitterPlayout {
 
   /** Runs the playout and gives each frame to `onFrame`, until the packets end,
     * when it returns. An error in the packets, or in `onFrame`, is its error;
-    * and if it is stopped, so are both.
+    * and if it is stopped, so are both. A `period` of zero or less is taken as
+    * the shortest there is, a nanosecond, which the schedule can divide by.
     */
   def run[F[_]: Async](
       config: JitterConfig,
@@ -38,8 +39,12 @@ object JitterPlayout {
         }
         .flatMap(onFrame.tupled)
       Async[F].monotonic
-        .flatMap(start => Async[F].race(ticks(period, start)(tick), feed).void)
+        .flatMap(start =>
+          Async[F].race(ticks(period.max(Shortest), start)(tick), feed).void
+        )
     }
+
+  private val Shortest: FiniteDuration = FiniteDuration(1, NANOSECONDS)
 
   /** `tick` every `period` from `last`, on a fixed schedule: how long `tick`
     * takes does not move the next one. If it takes more than a period, one tick

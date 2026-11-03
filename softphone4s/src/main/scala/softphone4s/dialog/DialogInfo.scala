@@ -92,11 +92,12 @@ object DialogInfo {
         case current                     => Some(current)
       }
     )
-    val added = update.dialogs
-      .filterNot(d => heldIds.contains(d.id))
-      .map(d => updates(d.id))
+    // The last of each id, in the order of the update: what a repeat of an id in
+    // one document says last is what stands.
+    val added = update.dialogs.reverse
       .distinctBy(_.id)
-      .filterNot(_.isTerminated)
+      .reverse
+      .filterNot(d => heldIds.contains(d.id) || d.isTerminated)
     DialogInfo(update.entity, update.version, Coverage.Full, kept ++ added)
   }
 }

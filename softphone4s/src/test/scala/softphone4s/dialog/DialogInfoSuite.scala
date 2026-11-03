@@ -440,6 +440,22 @@ class DialogInfoSuite extends FunSuite {
     }
   }
 
+  test("an id given twice in one update is the last of them, once") {
+    val held   = info(1, Coverage.Full, entry("a", DialogState.Early))
+    val update = info(
+      2,
+      Coverage.Partial,
+      entry("b", DialogState.Trying),
+      entry("b", DialogState.Confirmed),
+      entry("a", DialogState.Confirmed),
+      entry("a", DialogState.Terminated)
+    )
+    assertEquals(
+      DialogInfo.track(Some(held), update),
+      Right(info(2, Coverage.Full, entry("b", DialogState.Confirmed)))
+    )
+  }
+
   test(
     "a run of updates read from documents ends in the state the notifier meant"
   ) {

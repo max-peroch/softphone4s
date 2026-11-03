@@ -6,6 +6,10 @@ import scala.concurrent.duration.FiniteDuration
   * there, how long it has lasted, and who is at each end. `id` is the
   * notifier's name for it, which stays the same however the identifiers of the
   * dialog change.
+  *
+  * The identifiers are text, as the notifier gave them, and not `CallId` or
+  * `SipUri`: a document that names a party with a URI this cannot read (a
+  * `tel:` one) must not become unreadable for it.
   */
 final case class DialogEntry(
     id: String,
