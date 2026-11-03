@@ -11,7 +11,8 @@ import softphone4s.transaction.{TransactionEvent, TransactionSide}
 
 import scala.concurrent.duration.FiniteDuration
 
-/** [[Metrics]] as OpenTelemetry metrics. What is measured, with its attributes:
+/** [[softphone4s.metrics.Metrics]] as OpenTelemetry metrics. What is measured,
+  * with its attributes:
   *
   *   - `softphone4s.calls` (counter): calls ended, by `direction` and `outcome`
   *     (`completed`, `rejected`, `declined`, `unanswered`, `failed`), and the

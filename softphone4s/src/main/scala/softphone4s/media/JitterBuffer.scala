@@ -17,8 +17,8 @@ import scala.collection.immutable.TreeMap
   * packets that was no end of speech (the next packet does not carry the marker
   * bit that begins a talkspurt), shows that the cushion was too small, and it
   * grows by a frame, up to `maxDepth`; it takes effect when the buffer next
-  * fills. After [[ShrinkAfter]] frames in a row with nothing of the kind it
-  * shrinks by one, down to the configured depth.
+  * fills. After [[JitterBuffer.ShrinkAfter]] frames in a row with nothing of
+  * the kind it shrinks by one, down to the configured depth.
   *
   * It is a pure value: [[push]] and [[pull]] give the buffer that follows. The
   * sequence numbers are widened past their 16 bits so that the wrap is no

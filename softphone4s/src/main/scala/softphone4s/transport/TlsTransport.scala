@@ -31,8 +31,8 @@ import scala.util.control.NonFatal
   */
 object TlsTransport {
 
-  /** Fails with [[SoftphoneError.TlsConfigurationInvalid]] if a key store
-    * cannot be read.
+  /** Fails with [[softphone4s.model.SoftphoneError.TlsConfigurationInvalid]] if
+    * a key store cannot be read.
     */
   def resource[F[_]: Async: Network](
       bindAddress: IpAddress,

@@ -6,8 +6,9 @@ import org.typelevel.otel4s.Attribute
 import org.typelevel.otel4s.trace.{SpanKind, StatusCode, Tracer}
 import softphone4s.transaction.*
 
-/** [[TransactionTracing]] as OpenTelemetry spans: one span per SIP transaction,
-  * named `SIP <METHOD>`, from the request to the final answer.
+/** [[softphone4s.transaction.TransactionTracing]] as OpenTelemetry spans: one
+  * span per SIP transaction, named `SIP <METHOD>`, from the request to the
+  * final answer.
   *
   * Attributes: `sip.method`, `sip.transaction.side` (`client` or `server`),
   * `sip.call_id` and `sip.branch`; and when it ends `sip.transaction.outcome`

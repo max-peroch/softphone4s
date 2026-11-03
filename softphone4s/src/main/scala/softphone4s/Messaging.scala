@@ -14,11 +14,11 @@ trait Messaging[F[_]] {
   def accounts: NonEmptyList[AccountId]
 
   /** Sends a message to `to` as `account`, and says whether it was delivered: a
-    * 2xx is delivery, and anything else is a [[MessageFailure]]. A challenge
-    * for credentials is answered once. Each way of reaching the recipient is
-    * tried in turn when one gets no answer. Fails with `UnknownAccount` if
-    * `account` is not one of [[accounts]], and with `InvalidSipUri` if `to`
-    * names no address.
+    * 2xx is delivery, and anything else is a
+    * [[softphone4s.messaging.MessageFailure]]. A challenge for credentials is
+    * answered once. Each way of reaching the recipient is tried in turn when
+    * one gets no answer. Fails with `UnknownAccount` if `account` is not one of
+    * [[accounts]], and with `InvalidSipUri` if `to` names no address.
     */
   def sendAs(
       account: AccountId,

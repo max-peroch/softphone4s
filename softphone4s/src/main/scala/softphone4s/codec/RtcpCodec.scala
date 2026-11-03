@@ -20,8 +20,9 @@ object RtcpCodec {
   private val CanonicalName      = 1
 
   /** The compound packet of `packets`, one after the other. More than
-    * [[RtcpPacket.MaxCount]] blocks or sources in one are cut to that many, and
-    * a name or reason to 255 bytes, which are what the wire can say.
+    * [[softphone4s.media.RtcpPacket.MaxCount]] blocks or sources in one are cut
+    * to that many, and a name or reason to 255 bytes, which are what the wire
+    * can say.
     */
   def encode(packets: List[RtcpPacket]): Chunk[Byte] =
     Chunk.array(packets.flatMap(single).toArray)

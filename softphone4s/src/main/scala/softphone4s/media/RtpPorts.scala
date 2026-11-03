@@ -23,8 +23,8 @@ final class RtpPorts[F[_]: Async] private (
 ) {
 
   /** A pair for as long as the resource is held: its RTP port, whose successor
-    * is for RTCP. Fails with [[SoftphoneError.RtpPortsExhausted]] if none is
-    * free.
+    * is for RTCP. Fails with
+    * [[softphone4s.model.SoftphoneError.RtpPortsExhausted]] if none is free.
     */
   def allocate: Resource[F, Port] =
     Resource.make(acquire)(port => state.update(_.release(port)))

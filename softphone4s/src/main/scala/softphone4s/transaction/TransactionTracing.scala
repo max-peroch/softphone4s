@@ -15,9 +15,10 @@ import softphone4s.metrics.Metrics
   * that makes OpenTelemetry spans of them.
   *
   * A method that fails does not fail the stack, and one that takes longer than
-  * [[Metrics.HookBudget]] is cancelled: see [[TransactionTracing.guarded]].
-  * They must not block: they are called on the one fiber that runs the
-  * transaction layer, so a slow one would hold up every call.
+  * [[softphone4s.metrics.Metrics.HookBudget]] is cancelled: see
+  * [[TransactionTracing.guarded]]. They must not block: they are called on the
+  * one fiber that runs the transaction layer, so a slow one would hold up every
+  * call.
   */
 trait TransactionTracing[F[_]] {
 

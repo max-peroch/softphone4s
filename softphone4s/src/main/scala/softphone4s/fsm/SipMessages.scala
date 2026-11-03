@@ -10,9 +10,9 @@ import softphone4s.transaction.TransactionMessages
 
 import scala.concurrent.duration.FiniteDuration
 
-/** Pure construction of the SIP messages of a call from a [[LocalEndpoint]]:
-  * every function is deterministic in its arguments, with branches and tags
-  * supplied by the caller.
+/** Pure construction of the SIP messages of a call from a
+  * [[softphone4s.model.LocalEndpoint]]: every function is deterministic in its
+  * arguments, with branches and tags supplied by the caller.
   */
 object SipMessages {
 

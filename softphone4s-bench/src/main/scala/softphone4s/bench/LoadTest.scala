@@ -514,6 +514,8 @@ object LoadTest extends IOApp {
       }
     }
 
+  /** Runs the load test with the options given as arguments (see the object).
+    */
   def run(args: List[String]): IO[ExitCode] =
     args match {
       case "load" :: calls :: hold :: more =>
