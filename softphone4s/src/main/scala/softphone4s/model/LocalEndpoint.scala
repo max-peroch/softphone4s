@@ -20,6 +20,7 @@ final case class LocalEndpoint private (
     transport: TransportProtocol,
     scheme: SipScheme,
     mapping: Option[SocketAddress[IpAddress]],
+    rtpMapping: Option[SocketAddress[IpAddress]],
     capabilities: Capabilities
 ) {
 
@@ -30,9 +31,20 @@ final case class LocalEndpoint private (
     copy(capabilities = other)
 
   /** The address media should be sent to: ours as the outside sees it when a
-    * server has told us what that is, else our own.
+    * server has told us what that is (for the RTP port itself if it has, else
+    * for the SIP one), else our own.
     */
-  def mediaIp: IpAddress = mapping.fold(ip)(_.host)
+  def mediaIp: IpAddress = rtpMapping.orElse(mapping).fold(ip)(_.host)
+
+  /** The port media should be sent to: the RTP port as the outside sees it if a
+    * server has told us, which a NAT that rewrites ports makes different from
+    * ours; else ours.
+    */
+  def mediaPort: Port = rtpMapping.fold(rtpPort)(_.port)
+
+  /** This endpoint with the RTP port seen from outside at `address`. */
+  def withRtpMapping(address: SocketAddress[IpAddress]): LocalEndpoint =
+    copy(rtpMapping = Some(address))
 
   /** This endpoint as the outside sees it at `address`, for a UDP endpoint that
     * a NAT sits in front of: the Contact says where we can be reached from
@@ -140,6 +152,7 @@ object LocalEndpoint {
       Credentials(config.user.value, config.password),
       transport,
       SipScheme.Sip,
+      None,
       None,
       capabilities
     )

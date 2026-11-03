@@ -13,6 +13,8 @@ import softphone4s.config.{
   SoftphoneConfig,
   StunConfig
 }
+import softphone4s.dns.FakeDns
+import softphone4s.sdp.SessionDescription
 import softphone4s.stun.StunServer
 import softphone4s.model.*
 import softphone4s.transaction.TransactionMessages
@@ -210,6 +212,112 @@ class NatSuite extends CatsEffectSuite {
             List("sip:test@203.0.113.7:41000")
           )
         }
+      }
+    )
+  }
+
+  private def sdpOf(request: SipRequest): SessionDescription =
+    SessionDescription
+      .parse(request.body)
+      .fold(e => fail(e.toString), identity)
+
+  test(
+    "the RTP port is asked about too: the SDP advertises the port the NAT gives it, not ours"
+  ) {
+    StunServer(says = Some(outside)).use(stun =>
+      scenario(ObservedAddresses.Use, Some(stunAt(stun))).use { (phone, peer) =>
+        phone.call(bob).use { _ =>
+          requestOf(peer, SipMethod.Invite).map { invite =>
+            val media = sdpOf(invite).media.head
+            // 19950 is the RTP port we bind; the NAT says 41000
+            assertEquals(media.port.value, 41000)
+            assert(invite.body.contains("c=IN IP4 203.0.113.7"), invite.body)
+          }
+        }
+      }
+    )
+  }
+
+  test(
+    "of the addresses of the STUN server, the one of the family we send from is asked, not the first"
+  ) {
+    StunServer(says = Some(outside)).use(stun =>
+      FakeDns(hosts = Map("stun.example.org" -> List(ip"::1", ip"127.0.0.1")))
+        .flatMap(dns =>
+          (
+            SoftphoneStreaming.resourceWith[IO](
+              config(
+                ObservedAddresses.Use,
+                Some(
+                  StunConfig(
+                    host"stun.example.org",
+                    stun.address.port,
+                    refresh = 1.hour
+                  )
+                )
+              ),
+              audio,
+              NoOpLogger.impl[IO],
+              IO.pure(dns)
+            ),
+            SipTransport.udp[IO](
+              SocketAddress(ip"127.0.0.1", theirs),
+              NoOpLogger.impl[IO]
+            )
+          ).tupled.use { (phone, peer) =>
+            phone.call(bob).use { _ =>
+              requestOf(peer, SipMethod.Invite).map(invite =>
+                assertEquals(sdpOf(invite).media.head.port.value, 41000)
+              )
+            }
+          }
+        )
+    )
+  }
+
+  test(
+    "a STUN server that says nothing does not hold the call up for long, and the port we have is advertised"
+  ) {
+    StunServer(ignore = 1000).use(stun =>
+      scenario(ObservedAddresses.Use, Some(stunAt(stun))).use { (phone, peer) =>
+        phone.call(bob).use { _ =>
+          requestOf(peer, SipMethod.Invite).timed.map { (took, invite) =>
+            assertEquals(sdpOf(invite).media.head.port.value, 19950)
+            // a request and one repeat, 500 ms and then 1 s, and a little more
+            assert(took < 4.seconds, took.toString)
+          }
+        }
+      }
+    )
+  }
+
+  test(
+    "with no STUN server the RTP port advertised is the one we bind"
+  ) {
+    scenario(ObservedAddresses.Use).use { (phone, peer) =>
+      phone.call(bob).use { _ =>
+        requestOf(peer, SipMethod.Invite).map(invite =>
+          assertEquals(sdpOf(invite).media.head.port.value, 19950)
+        )
+      }
+    }
+  }
+
+  test(
+    "told to ignore what servers say, the RTP port is not asked about either"
+  ) {
+    StunServer(says = Some(outside)).use(stun =>
+      scenario(ObservedAddresses.Ignore, Some(stunAt(stun))).use {
+        (phone, peer) =>
+          phone.call(bob).use { _ =>
+            for {
+              invite   <- requestOf(peer, SipMethod.Invite)
+              requests <- stun.requests.get
+            } yield {
+              assertEquals(sdpOf(invite).media.head.port.value, 19950)
+              assertEquals(requests, 0)
+            }
+          }
       }
     )
   }

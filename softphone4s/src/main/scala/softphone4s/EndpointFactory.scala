@@ -20,7 +20,8 @@ private[softphone4s] final class EndpointFactory[F[_]: Async](
     publicSip: SignallingRef[F, Option[SocketAddress[IpAddress]]],
     rtpPorts: RtpPorts[F],
     entropy: Entropy[F],
-    codecs: AudioCodecs
+    codecs: AudioCodecs,
+    rtpMapping: Port => F[Option[SocketAddress[IpAddress]]]
 ) {
 
   /** The address the OS would send from to reach `remote`: what the SDP and
@@ -122,7 +123,9 @@ private[softphone4s] final class EndpointFactory[F[_]: Async](
     )
 
   /** The endpoint of a call, with a pair of RTP ports that goes back to the
-    * pool when the call's resources are released, and keys of its own.
+    * pool when the call's resources are released, and keys of its own. If a
+    * STUN server says how the NAT maps the RTP port, that is what the SDP
+    * advertises.
     */
   private[softphone4s] def allocateEndpoint(
       account: Account,
@@ -131,6 +134,7 @@ private[softphone4s] final class EndpointFactory[F[_]: Async](
   ): Resource[F, LocalEndpoint] =
     for {
       rtpPort <- rtpPorts.allocate
+      mapped  <- Resource.eval(rtpMapping(rtpPort))
       // The keys of a call are made once, and are the same over its session
       // changes and its uplinks.
       crypto   <- Resource.eval(newCrypto)
@@ -147,6 +151,6 @@ private[softphone4s] final class EndpointFactory[F[_]: Async](
           )
         )
       )
-    } yield endpoint
+    } yield mapped.fold(endpoint)(endpoint.withRtpMapping)
 
 }

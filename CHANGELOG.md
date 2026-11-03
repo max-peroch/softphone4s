@@ -16,7 +16,9 @@ what to change when it does.
   early media on outgoing calls; forking; several accounts on one phone (`callAs`, `registerAs`).
   SIP over UDP, TCP and TLS, with RFC 3263 resolution (NAPTR, SRV, A/AAAA) and
   failover to the next target; a request too big for UDP goes over TCP.
-- **NAT.** `rport`, keep-alives, STUN on the SIP socket, RTP latching.
+- **NAT.** `rport`, keep-alives, STUN on the SIP socket and, for each call, on
+  the RTP port (so the SDP advertises the mapping the NAT gives it, port
+  included), RTP latching.
 - **Media.** SDP offer/answer; G.711 (`PCMU`, `PCMA`) and G.722, and Opus in the
   new `softphone4s-opus` module (libopus through the Foreign Function & Memory
   API, Java 22 and later); RTCP; an adaptive jitter buffer with concealment;

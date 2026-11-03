@@ -77,7 +77,7 @@ object SipTransport {
                   retransmit: FiniteDuration,
                   attempts: Int
               ): F[Outcome] =
-                freshId[F].flatMap { id =>
+                Stun.newTransactionId[F].flatMap { id =>
                   // Waiting for the answer is registered for as long as it takes,
                   // and not a moment longer, however it ends.
                   Resource
@@ -107,17 +107,8 @@ object SipTransport {
           }
       }
 
-  private val secure = new java.security.SecureRandom
-
   /** What a STUN server said: the address it saw us at, or why not. */
   private type Outcome = Either[Stun.Error, SocketAddress[IpAddress]]
-
-  private def freshId[F[_]: Sync]: F[Stun.TransactionId] =
-    Sync[F].delay {
-      val bytes = new Array[Byte](12)
-      secure.nextBytes(bytes)
-      Stun.TransactionId(Chunk.array(bytes))
-    }
 
   /** Sends the request, and again after each wait, until it is answered or the
     * waits are used up.

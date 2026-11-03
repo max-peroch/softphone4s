@@ -11,7 +11,12 @@ import fs2.concurrent.{Channel, SignallingRef}
 import fs2.io.net.Network
 import org.typelevel.log4cats.StructuredLogger
 import softphone4s.logging.LogFields
-import softphone4s.config.{ObservedAddresses, SoftphoneConfig, StunConfig}
+import softphone4s.config.{
+  Attempts,
+  ObservedAddresses,
+  SoftphoneConfig,
+  StunConfig
+}
 import softphone4s.dns.{DnsJavaRecords, DnsRecords, TargetResolver}
 import softphone4s.fsm.CallTimer
 import softphone4s.metrics.{CallDirection, Metrics}
@@ -19,7 +24,7 @@ import softphone4s.model.*
 import softphone4s.registration.Registration
 import softphone4s.media.{AudioCodec, AudioCodecs, RtpPortRange, RtpPorts}
 import softphone4s.runtime.{Entropy, Timers}
-import softphone4s.stun.StunClient
+import softphone4s.stun.{StunClient, StunProbe}
 import softphone4s.transaction.{
   TransactionConfig,
   TransactionLayer,
@@ -372,7 +377,8 @@ object SoftphoneStreaming {
         publicSip,
         rtpPorts,
         entropy,
-        codecs
+        codecs,
+        rtpMappingFor(config, records, logger)
       )
       uplinks = new Uplinks[F](
         new TargetResolver[F](
@@ -451,6 +457,75 @@ object SoftphoneStreaming {
         SoftphoneError.AudioFormatMismatch(codecRate, deviceRate)
       )
     } yield codecs
+
+  /** The mapping of the RTP port of each call, asked of the STUN server if
+    * there is one and we are to believe what servers say; else none.
+    */
+  private def rtpMappingFor[F[_]: Async: Network](
+      config: SoftphoneConfig,
+      records: DnsRecords[F],
+      logger: StructuredLogger[F]
+  ): Port => F[Option[SocketAddress[IpAddress]]] =
+    config.nat.stun
+      .filter(_ => config.nat.observedAddress == ObservedAddresses.Use)
+      .fold((_: Port) => Async[F].pure(Option.empty[SocketAddress[IpAddress]]))(
+        stun => mappedRtp(stun, records, config.bindAddress, logger)(_)
+      )
+
+  /** How the NAT maps `port`, which is the RTP port of a call, as the STUN
+    * server sees it from a socket bound there. A call waits for it no longer
+    * than a request and one repeat (about a second and a half with the default
+    * wait), and goes on with what it has if the server says nothing.
+    */
+  private def mappedRtp[F[_]: Async: Network](
+      stun: StunConfig,
+      records: DnsRecords[F],
+      bindAddress: IpAddress,
+      logger: StructuredLogger[F]
+  )(port: Port): F[Option[SocketAddress[IpAddress]]] = {
+    val attempts =
+      if stun.attempts.value < RtpProbeAttempts.value then stun.attempts
+      else RtpProbeAttempts
+    def without(reason: String): F[Option[SocketAddress[IpAddress]]] =
+      logger
+        .info(
+          Map(LogFields.Host -> stun.host.toString, LogFields.Error -> reason)
+        )("The STUN server did not tell us how the RTP port is mapped")
+        .as(None)
+    records
+      .addresses(stun.host)
+      .flatMap(
+        // A socket of one family cannot reach a server of the other.
+        _.find(sameFamily(_, bindAddress)).fold(
+          without("no address of the family we send from")
+        )(server =>
+          StunProbe
+            .mapping[F](
+              SocketAddress(bindAddress, port),
+              SocketAddress(server, stun.port),
+              stun.retransmit,
+              attempts
+            )
+            .flatMap {
+              case Right(seen) => Async[F].pure(Some(seen))
+              case Left(error) => without(error.toString)
+            }
+        )
+      )
+      .handleErrorWith(e => without(String.valueOf(e.getMessage)))
+  }
+
+  /** A request and one repeat: all that a call waits for when it asks how the
+    * NAT maps its RTP port.
+    */
+  private val RtpProbeAttempts: Attempts =
+    Attempts(2).getOrElse(Attempts.Default)
+
+  private def sameFamily(a: IpAddress, b: IpAddress): Boolean =
+    a.fold(
+      _ => b.fold(_ => true, _ => false),
+      _ => b.fold(_ => false, _ => true)
+    )
 
   /** Asks the STUN server how we look from outside, and again every `refresh`;
     * a round that fails is logged and tried again at the next.

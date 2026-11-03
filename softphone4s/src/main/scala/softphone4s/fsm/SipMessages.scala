@@ -65,7 +65,7 @@ object SipMessages {
 
     /** The SDP offer an INVITE from this endpoint carries. */
     def offerBody: String =
-      SdpCodec.buildOffer(e.mediaIp, e.rtpPort, e.capabilities)
+      SdpCodec.buildOffer(e.mediaIp, e.mediaPort, e.capabilities)
 
     def buildInvite(
         callee: SipUri,
@@ -89,7 +89,7 @@ object SipMessages {
           contentType = Some(MediaType.Sdp),
           others = authHeader.toList ++ extraHeaders
         ),
-        body = SdpCodec.buildOffer(e.mediaIp, e.rtpPort, e.capabilities)
+        body = SdpCodec.buildOffer(e.mediaIp, e.mediaPort, e.capabilities)
       )
 
     /** The Authorization or Proxy-Authorization header answering `challenge` on
@@ -308,7 +308,7 @@ object SipMessages {
         ),
         body = SdpCodec.buildOffer(
           e.mediaIp,
-          e.rtpPort,
+          e.mediaPort,
           e.capabilities,
           change.direction
         )
@@ -494,7 +494,7 @@ object SipMessages {
       SdpCodec.buildAnswerToBody(
         remoteSdp,
         e.mediaIp,
-        e.rtpPort,
+        e.mediaPort,
         e.capabilities
       )
   }

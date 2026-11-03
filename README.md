@@ -156,6 +156,22 @@ softphone4s handles outbound SIP calls end-to-end:
   again every `nat.stun.refresh`. An answer counts only if it comes from the
   server that was asked. Nothing is asked when `nat.observed-address` is
   `ignore`.
+
+  The RTP port is asked about too, for each call, from a socket of its own bound
+  to that port (it is closed when the answer is in, and the media binds the port
+  after): a NAT that rewrites ports gives the RTP port a different one from the
+  SIP socket's, so the SDP advertises the address and port the server saw (`c=` and
+  `m=`) instead of our public address with the port we bind, which only works for
+  a NAT that keeps ports. A call waits for it no longer than a request and one
+  repeat (about a second and a half with the default wait) and goes on with the
+  SIP mapping's address and the port it binds if the server says nothing; it is
+  logged. RTCP is not asked about, and `a=rtcp` is not sent, so behind such a NAT
+  the other side's RTCP is sent to the port after the RTP port's and may not
+  arrive; media is not affected. It works over TCP and TLS SIP too. The server
+  address asked is one of the family the socket sends from, an answer to another
+  request is passed over, and an answer that names no place to be reached (port 0,
+  the unspecified address, a multicast one) is not believed, for the SIP socket's
+  STUN as well.
 - **Accepting connections**: with `listen = [tcp, tls]` we also listen for TCP
   (on `local-sip-port`) and TLS (on `tls-port`, which needs
   `tls.server-certificate`; `tls.client-authentication` is `off`, `request` or

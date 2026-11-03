@@ -7,7 +7,14 @@ import com.comcast.ip4s.*
 import munit.CatsEffectSuite
 import org.typelevel.log4cats.noop.NoOpLogger
 import softphone4s.SipLiterals.*
-import softphone4s.config.{CodecChoice, SoftphoneConfig}
+import softphone4s.config.{
+  CodecChoice,
+  NatConfig,
+  ObservedAddresses,
+  SoftphoneConfig,
+  StunConfig
+}
+import softphone4s.stun.StunServer
 import softphone4s.media.{AudioCodec, HalfByteCodec}
 import softphone4s.model.*
 import fs2.io.net.Network
@@ -26,7 +33,7 @@ class InboundCallSuite extends CatsEffectSuite {
   private val theirs = port"19081"
   private val target = SocketAddress(ip"127.0.0.1", ours)
 
-  private def config(answerTimeout: FiniteDuration) =
+  private def config(answerTimeout: FiniteDuration, nat: NatConfig) =
     SoftphoneConfig(
       user = sipUser("test"),
       password = Secret("test"),
@@ -36,7 +43,8 @@ class InboundCallSuite extends CatsEffectSuite {
       baseRtpPort = port"19200",
       bindAddress = ip"127.0.0.1",
       hangupTimeout = 2.seconds,
-      answerTimeout = answerTimeout
+      answerTimeout = answerTimeout,
+      nat = nat
     )
 
   private val audio = new AudioFormat(8000f, 16, 1, true, false)
@@ -45,11 +53,12 @@ class InboundCallSuite extends CatsEffectSuite {
   private def scenario(
       answerTimeout: FiniteDuration = 60.seconds,
       codecs: List[CodecChoice] = List(CodecChoice.Pcmu, CodecChoice.Pcma),
-      extraCodecs: List[AudioCodec] = Nil
+      extraCodecs: List[AudioCodec] = Nil,
+      nat: NatConfig = NatConfig()
   ): Resource[IO, (SoftphoneStreaming[IO], Transport[IO])] =
     (
       SoftphoneStreaming.resource[IO](
-        config(answerTimeout).copy(codecs = codecs),
+        config(answerTimeout, nat).copy(codecs = codecs),
         audio,
         NoOpLogger.impl[IO],
         extraCodecs
@@ -159,6 +168,30 @@ class InboundCallSuite extends CatsEffectSuite {
         assert(ok.body.contains("RTP/AVP 0 101"), ok.body)
         assertEquals(ok.headers.contentType, Some(MediaType.Sdp))
         assertEquals(ok.headers.contacts.size, 1)
+      }
+    }
+  }
+
+  test(
+    "the answer advertises the RTP port as the NAT maps it, when a STUN server says"
+  ) {
+    val outside = SocketAddress(ip"203.0.113.7", port"41000")
+    StunServer(says = Some(outside)).use { stun =>
+      val nat = NatConfig(
+        ObservedAddresses.Use,
+        Some(StunConfig(host"127.0.0.1", stun.address.port, refresh = 1.hour))
+      )
+      scenario(nat = nat).use { (phone, peer) =>
+        for {
+          call <- ring(phone, peer)
+          ok   <- call.accept.allocated.flatMap { case (_, release) =>
+            response(peer, status(200)).flatTap(_ => release.start.void)
+          }
+        } yield {
+          // 19200 is the RTP port we bind; the NAT says 41000
+          assert(ok.body.contains("m=audio 41000 "), ok.body)
+          assert(ok.body.contains("c=IN IP4 203.0.113.7"), ok.body)
+        }
       }
     }
   }

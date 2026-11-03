@@ -502,7 +502,7 @@ private[softphone4s] class OutboundCall[F[_]: Async] private (
             request,
             offer.fold("")(
               SdpCodec
-                .buildAnswerTo(_, endpoint.mediaIp, endpoint.rtpPort, caps)
+                .buildAnswerTo(_, endpoint.mediaIp, endpoint.mediaPort, caps)
             )
           )
           logger.debug("Answering a session change") >>
@@ -517,7 +517,7 @@ private[softphone4s] class OutboundCall[F[_]: Async] private (
               request,
               endpoint.buildSessionOk(
                 request,
-                SdpCodec.buildOffer(endpoint.mediaIp, endpoint.rtpPort, caps)
+                SdpCodec.buildOffer(endpoint.mediaIp, endpoint.mediaPort, caps)
               ),
               AckContent.Answer
             )

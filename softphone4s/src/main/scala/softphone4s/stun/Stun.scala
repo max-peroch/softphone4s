@@ -7,6 +7,7 @@ import com.comcast.ip4s.{
   Port,
   SocketAddress
 }
+import cats.effect.Sync
 import fs2.Chunk
 
 import scala.annotation.tailrec
@@ -50,6 +51,16 @@ object Stun {
   def isStun(bytes: Chunk[Byte]): Boolean =
     bytes.size >= HeaderLength && (bytes(0) & 0xc0) == 0 &&
       int(bytes, 4) == MagicCookie
+
+  private val secure = new java.security.SecureRandom
+
+  /** A transaction id nobody can predict (RFC 8489 §5). */
+  def newTransactionId[F[_]: Sync]: F[TransactionId] =
+    Sync[F].delay {
+      val bytes = new Array[Byte](12)
+      secure.nextBytes(bytes)
+      TransactionId(Chunk.array(bytes))
+    }
 
   /** A Binding request with no attributes. */
   def bindingRequest(id: TransactionId): Chunk[Byte] =
@@ -179,8 +190,14 @@ object Stun {
           else if family == 2 && value.size >= 20 then
             Ipv6Address.fromBytes(unmask(4, 16))
           else None
+        // Not an address anything is reached at: port 0, which an SDP reads as
+        // media that is declined, the unspecified address, or a group.
+        _ <- Option.when(usable(address, port))(())
       } yield SocketAddress(address, port)
     }
+
+  private def usable(address: IpAddress, port: Port): Boolean =
+    port.value != 0 && !address.toBytes.forall(_ == 0) && !address.isMulticast
 
   private def errorCodeIn(body: Chunk[Byte]): Int = {
     @tailrec

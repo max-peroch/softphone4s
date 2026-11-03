@@ -73,6 +73,34 @@ class StunSuite extends FunSuite {
     )
   }
 
+  test(
+    "an address nothing is reached at is a bad message: port 0, unspecified, a group"
+  ) {
+    List(
+      SocketAddress(ip"203.0.113.7", port"0"),
+      SocketAddress(ip"0.0.0.0", port"41000"),
+      SocketAddress(ip"224.0.0.1", port"41000"),
+      SocketAddress(ip"::", port"41000"),
+      SocketAddress(ip"ff02::1", port"41000")
+    ).foreach(address =>
+      assertEquals(
+        Stun.decode(StunServer.response(id.bytes, address)),
+        Left(Stun.Error.Malformed("bad XOR-MAPPED-ADDRESS")),
+        address.toString
+      )
+    )
+    // and an ordinary one, loopback and IPv6 included, is read
+    List(
+      SocketAddress(ip"127.0.0.1", port"41000"),
+      SocketAddress(ip"2001:db8::1", port"41000")
+    ).foreach(address =>
+      assertEquals(
+        Stun.decode(StunServer.response(id.bytes, address)),
+        Right(Stun.Response(id, Right(address)))
+      )
+    )
+  }
+
   test("a length that runs past the datagram is malformed") {
     val cut = rfc5769.take(40)
     assert(Stun.decode(cut).isLeft)
