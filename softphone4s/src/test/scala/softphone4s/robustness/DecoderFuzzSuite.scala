@@ -186,7 +186,9 @@ class DecoderFuzzSuite extends ScalaCheckSuite {
       "active;expires=300",
       "pending",
       "terminated;reason=timeout;retry-after=30",
-      "terminated;reason=probation"
+      "terminated;reason=probation",
+      "terminated;retry-after=31536000",
+      "terminated;reason=invariant;retry-after=33333333330"
     )
   )(NotifyState.parse(_))
   textDecoder("EntityTag.parse", List("dx200xyz", "a.b-c", "x y"))(

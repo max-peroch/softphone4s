@@ -90,6 +90,38 @@ class NotifyHeadersSuite extends FunSuite {
     )
   }
 
+  private def retryAfter(text: String) =
+    NotifyState.parse(s"terminated;retry-after=$text").map {
+      case NotifyState.Terminated(_, wait) => wait
+      case other                           => fail(s"not terminated: $other")
+    }
+
+  test(
+    "a retry-after is delta-seconds (RFC 6665 §4.1.3), one year as RFC's own example"
+  ) {
+    assertEquals(retryAfter("31536000"), Right(Some(31536000.seconds)))
+    assertEquals(retryAfter("0"), Right(Some(Duration.Zero)))
+  }
+
+  test(
+    "a retry-after too big for a duration is the longest wait, not an error"
+  ) {
+    val longest = Some(NotifyState.MaxRetryAfter)
+    assertEquals(retryAfter("2147483648"), Right(longest))
+    assertEquals(retryAfter("33333333330"), Right(longest))
+    assertEquals(retryAfter("99999999999999999999999999"), Right(longest))
+    assertEquals(
+      retryAfter(Int.MaxValue.toString),
+      Right(Some(Int.MaxValue.toLong.seconds))
+    )
+  }
+
+  test("a retry-after that is not delta-seconds is left out") {
+    List("-5", "+5", "3.5", "", " ", "5s", "0x10", "\u0663").foreach { text =>
+      assertEquals(retryAfter(text), Right(None), s"retry-after=$text")
+    }
+  }
+
   test("every reason is known, and one we do not know is kept as it was said") {
     List(
       "deactivated" -> EndReason.Deactivated,
