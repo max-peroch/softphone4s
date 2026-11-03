@@ -170,3 +170,52 @@ every number after it was wrong, so check `ps` and restart sbt before measuring.
 Second, `uptime` first: another program at 97% CPU, which was there for hours, was
 enough to move a result by several times.
 
+## The playout as a loop of effects (2 November 2026)
+
+The silent calls still cost 0.48 to 0.52 cores and 408 to 417 MB for 10 calls, and
+the fix above had left the tick as a stream. To see how much of that was the tick,
+a throwaway change made it ten times slower (200 ms): the allocation fell to 76 to
+87 MB and the CPU to 0.31 to 0.38 cores. So the stream of ticks (`fixedRate`, two
+`evalMap`s, `concurrently`, `interruptWhen`, and the `evalMap` that takes the frames)
+cost about 16 KB and 0.18 ms a tick, and the rest of an idle call about 0.3 cores.
+Taking `interruptWhen` out by itself changed nothing (437 to 449 MB), so it was not
+that stage but the stream machinery as a whole.
+
+`JitterPlayout.run(config, period, packets)(onFrame)` replaces the stream: a loop of
+effects that sleeps to the next tick, takes a frame from the buffer and gives it to
+`onFrame`, raced against the fiber that puts the packets in. It returns when the
+packets end; an error in either the packets or `onFrame` is its error; stopping it
+stops both. Its schedule is `Stream.fixedRate`'s, including what it does when a
+frame takes longer than a period (one tick at once for the periods missed, then back
+on the grid): a test runs the same slow frames through both and requires the same
+times, and it fails if the loop merely advances by one period.
+
+Ten calls for 20 s, at a load average of 6 to 10:
+
+| 10 calls | Before (merge removed) | Now |
+|----------|------------------------|-----|
+| silent   | 0.48 to 0.52 cores, 408 to 417 MB | 0.34 to 0.46 cores, 69 to 78 MB |
+| audible  | 1.39 cores, 1 498 MB              | 1.42 to 1.46 cores, 1 151 to 1 159 MB |
+
+An idle call's allocation is down by 83% and its CPU is at the floor the slow-tick
+experiment showed. Larger loads, each started on a quiet machine (load average
+below 6), calls at 50 a second, held 10 s:
+
+| Calls | Cores | Setup p50 / p99 (ms) | Audio heard (median) | Allocated |
+|------:|------:|---------------------:|---------------------:|----------:|
+| 40    | 3.7   | 15 / 76              | 0.99                 | 219 MB/s  |
+| 100   | 5.9   | 20 / 313             | 0.99                 | 481 MB/s  |
+| 150   | 4.7   | 2 750 / 11 133       | 0.54 to 0.62         | 238 MB/s  |
+| 200   | 4.8   | 6 694 / 13 429       | 0.23 to 0.36         | 214 MB/s  |
+
+Every call was established. With both ends in the process the knee is now between
+100 and 150 calls, where it was about 40 at the end of Phase 5 (82 / 462 ms at 40,
+and 9 s of setup with a quarter of the audio lost at 100). The same runs started at
+a load average of 10 or more were over thirty times worse in setup time (a 40-call
+run: p50 708 ms, 0.89 heard), so only compare runs that began quiet.
+
+What is left is the packet: from the 10-call rows, a packet-op costs about 0.5 ms and
+25 KB over an idle call's. Its path is `reads`, `evalMapFilter` (open),
+`flatMap` into `Stream.exec ++ Stream.emit`, `evalTap` (observe) and `evalMap` (push
+into the buffer): five stream stages, and the same on the send side.
+

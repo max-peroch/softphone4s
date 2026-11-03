@@ -2,6 +2,7 @@ package softphone4s.media
 
 import softphone4s.model.Ssrc
 import cats.effect.IO
+import cats.syntax.all.*
 import cats.effect.testkit.TestControl
 import fs2.{Chunk, Stream}
 import munit.CatsEffectSuite
@@ -33,6 +34,14 @@ class JitterPlayoutSuite extends CatsEffectSuite {
     case Playout.Waiting => "."
   }
 
+  /** What the playout gives while `packets` run, and until they end. */
+  private def frames(packets: Stream[IO, JitterPacket]): IO[List[Playout]] =
+    IO.ref(Vector.empty[Playout]).flatMap { played =>
+      JitterPlayout.run(config, period, packets)((out, _) =>
+        played.update(_ :+ out)
+      ) >> played.get.map(_.toList)
+    }
+
   /** What is played when packets arrive at the times given, ending a while
     * after the last.
     */
@@ -48,12 +57,7 @@ class JitterPlayoutSuite extends CatsEffectSuite {
           .as(packet(sequence))
       } ++ Stream.sleep[IO](500.millis).drain
     TestControl
-      .executeEmbed(
-        JitterPlayout(config, period, source)
-          .map(p => show(p._1))
-          .compile
-          .toList
-      )
+      .executeEmbed(frames(source).map(_.map(show)))
       .map(_.dropWhile(_ == "."))
   }
 
@@ -161,11 +165,24 @@ class JitterPlayoutSuite extends CatsEffectSuite {
     val source = Stream.emit(packet(0)).covary[IO] ++
       Stream.sleep[IO](100.millis).drain ++ Stream.raiseError[IO](boom)
     TestControl
-      .executeEmbed(
-        JitterPlayout(config, period, source).compile.toList.attempt
-      )
+      .executeEmbed(frames(source).attempt)
       .map(result =>
         assertEquals(result.left.map(_.getMessage), Left("socket closed"))
+      )
+  }
+
+  test("an error in what takes the frames is the playout's error") {
+    val boom = new RuntimeException("cannot play")
+    TestControl
+      .executeEmbed(
+        JitterPlayout
+          .run(config, period, Stream.sleep[IO](1.minute).drain)((_, _) =>
+            IO.raiseError(boom)
+          )
+          .attempt
+      )
+      .map(result =>
+        assertEquals(result.left.map(_.getMessage), Left("cannot play"))
       )
   }
 
@@ -173,22 +190,104 @@ class JitterPlayoutSuite extends CatsEffectSuite {
     TestControl.executeEmbed(
       for {
         stopped <- IO.ref(false)
+        enough  <- IO.deferred[Unit]
+        count   <- IO.ref(0)
         packets = Stream
           .iterate(0)(_ + 1)
           .covary[IO]
           .evalMap(n => IO.sleep(period).as(packet(n)))
           .onFinalize(stopped.set(true))
-        played <- JitterPlayout(config, period, packets)
-          .take(5)
-          .compile
-          .toList
+        _ <- IO.race(
+          JitterPlayout.run(config, period, packets)((_, _) =>
+            count
+              .updateAndGet(_ + 1)
+              .flatMap(n => enough.complete(()).whenA(n == 5))
+          ),
+          enough.get
+        )
         ended <- stopped.get
+        n     <- count.get
       } yield {
-        assertEquals(played.size, 5)
+        assertEquals(n, 5)
         assert(
           ended,
           "the packets were still being read after the playout stopped"
         )
+      }
+    )
+  }
+
+  test(
+    "a frame that takes longer than a period is made once for the periods missed, and the schedule is kept"
+  ) {
+    // The first frame takes 70 ms, so the ticks of 40 and 60 ms are missed: one
+    // frame is made for them as soon as the first is done, and the 20 ms grid
+    // goes on from there.
+    TestControl.executeEmbed(
+      for {
+        times <- IO.ref(Vector.empty[FiniteDuration])
+        first <- IO.ref(true)
+        start <- IO.monotonic
+        _     <- IO.race(
+          JitterPlayout.run(config, period, Stream.sleep[IO](1.minute).drain)(
+            (_, _) =>
+              IO.monotonic.flatMap(now =>
+                times.update(_ :+ (now - start)) >>
+                  first
+                    .getAndSet(false)
+                    .flatMap(slow => IO.sleep(70.millis).whenA(slow))
+              )
+          ),
+          IO.sleep(190.millis)
+        )
+        seen <- times.get
+      } yield assertEquals(
+        seen.map(_.toMillis),
+        Vector(20L, 90L, 100L, 120L, 140L, 160L, 180L)
+      )
+    )
+  }
+
+  test(
+    "its ticks fall where Stream.fixedRate's do, slow frames included"
+  ) {
+    // Frames that take 10, 50, 0, 130... ms, in turn, against a period of 20.
+    val costs = List(10, 50, 0, 130, 0, 0, 25, 0, 0, 0).map(_.millis)
+
+    /** When each frame is made, `drive` being what makes them. */
+    def times(drive: IO[Unit] => IO[Unit]): IO[Vector[Long]] =
+      for {
+        seen  <- IO.ref(Vector.empty[Long])
+        queue <- IO.ref(costs)
+        start <- IO.monotonic
+        frame =
+          for {
+            now  <- IO.monotonic
+            _    <- seen.update(_ :+ (now - start).toMillis)
+            cost <- queue.modify {
+              case head :: tail => (tail, head)
+              case Nil          => (Nil, 0.millis)
+            }
+            _ <- IO.sleep(cost)
+          } yield ()
+        // ends between two ticks, so that neither wins a tie with the clock
+        _   <- IO.race(drive(frame), IO.sleep(1.second + 7.millis))
+        out <- seen.get
+      } yield out
+
+    TestControl.executeEmbed(
+      for {
+        ours <- times(frame =>
+          JitterPlayout.run(config, period, Stream.sleep[IO](1.minute).drain)(
+            (_, _) => frame
+          )
+        )
+        theirs <- times(frame =>
+          Stream.fixedRate[IO](period).evalMap(_ => frame).compile.drain
+        )
+      } yield {
+        assert(ours.size > 10, ours.toString)
+        assertEquals(ours, theirs)
       }
     )
   }

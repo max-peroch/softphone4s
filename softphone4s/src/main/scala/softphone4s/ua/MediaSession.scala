@@ -466,31 +466,27 @@ private[softphone4s] class MediaSession[F[_]: Async: Network] private (
               // what it gives is played: the packet's audio, a concealment for
               // one that is lost, or noise or nothing while there is nothing.
               val receiveF =
-                Stream
-                  .resource(codec.decoderSession[F])
-                  .flatMap { decode =>
-                    JitterPlayout(
-                      jitterConfig,
-                      MediaSession.FramePeriod,
-                      RtpTransport
-                        .receiveBytes(
-                          socket,
-                          lastDtmfKey,
-                          onDtmf,
-                          heardFrom,
-                          plan.payloadType,
-                          plan.telephoneEventType,
-                          plan.comfortNoiseType,
-                          inbound.fold(plain)(opener(_, _))
-                        )
-                        .evalTap(observe(plan.codec.clockRate))
-                    ).evalMap((out, standing) =>
-                      stats.set(standing) >>
-                        play(plan, decode, codec.pcmPacketBytes, out)
-                    )
-                  }
-                  .compile
-                  .drain
+                codec.decoderSession[F].use { decode =>
+                  JitterPlayout.run(
+                    jitterConfig,
+                    MediaSession.FramePeriod,
+                    RtpTransport
+                      .receiveBytes(
+                        socket,
+                        lastDtmfKey,
+                        onDtmf,
+                        heardFrom,
+                        plan.payloadType,
+                        plan.telephoneEventType,
+                        plan.comfortNoiseType,
+                        inbound.fold(plain)(opener(_, _))
+                      )
+                      .evalTap(observe(plan.codec.clockRate))
+                  )((out, standing) =>
+                    stats.set(standing) >>
+                      play(plan, decode, codec.pcmPacketBytes, out)
+                  )
+                }
 
               RtpSender
                 .make(

@@ -48,9 +48,11 @@ what to change when it does.
 - **Breaking:** `SoftphoneError.RtpPortExhausted(port)` is now
   `RtpPortsExhausted(first, last)`, and `SoftphoneError` has many more cases.
 - A call that is up costs less when nobody is speaking, and about half the
-  allocation when somebody is: the jitter-buffer playout no longer merges its
-  tick and packet streams. A load of 100 calls in one process now sets up in under
-  3 s, where it took 9 s.
+  allocation when somebody is: the jitter-buffer playout is a loop of effects that
+  makes a frame every 20 ms, not a merge of a tick stream and a packet stream
+  (`JitterPlayout.run` replaces the stream-returning `JitterPlayout.apply`).
+  One process now holds about 100 calls with all the audio arriving, where it held
+  about 40.
 - Timers, durations and sizes in the configuration are typed (`Attempts`,
   `ByteLimit`, `MaxConnections`); a value below one is a load error.
 - `softphone4s-otel4s` is built against OpenTelemetry Java 1.64.0, which otel4s
