@@ -11,6 +11,7 @@ import org.scalacheck.{Gen, Test}
 import softphone4s.codec.{RtcpCodec, RtpCodec, SdpCodec, SipCodec, SipGen}
 import softphone4s.media.{LossFraction, RtcpPacket}
 import softphone4s.model.*
+import softphone4s.dialog.DialogInfo
 import softphone4s.presence.Presence
 import softphone4s.publication.EntityTag
 import softphone4s.robustness.Fuzz.*
@@ -242,6 +243,13 @@ class DecoderFuzzSuite extends ScalaCheckSuite {
     """<!DOCTYPE presence [<!ENTITY a "aaaa">]><presence xmlns="urn:ietf:params:xml:ns:pidf" entity="e">&a;&#x41;&amp;</presence>"""
   )
   textDecoder("Pidf.parse", pidfSeeds)(Presence.parse(_))
+
+  private val dialogSeeds = List(
+    """<?xml version="1.0"?><dialog-info xmlns="urn:ietf:params:xml:ns:dialog-info" version="3" state="partial" entity="sip:a@b"><dialog id="x" call-id="c" local-tag="l" remote-tag="r" direction="recipient"><state event="remote-bye" code="487">terminated</state><duration>95</duration><replaces call-id="o" local-tag="a" remote-tag="b"/><referred-by display="C">sip:c@d</referred-by><local><identity display="A">sip:a@b</identity><target uri="sip:a@pc"/></local><remote><identity>sip:e@f</identity></remote></dialog></dialog-info>""",
+    """<d:dialog-info xmlns:d="urn:ietf:params:xml:ns:dialog-info" xmlns:x="urn:x" version="0" state="full" entity="e"><x:a><x:b/></x:a><d:dialog id="1"><d:state>early</d:state></d:dialog><![CDATA[ <y> ]]></d:dialog-info>""",
+    """<!DOCTYPE d [<!ENTITY a "aaaa">]><dialog-info xmlns="urn:ietf:params:xml:ns:dialog-info" version="1" state="full" entity="&a;&#x41;&amp;"/>"""
+  )
+  textDecoder("DialogInfo.parse", dialogSeeds)(DialogInfo.parse(_))
   textDecoder(
     "MessageSummary.parse",
     List(

@@ -49,6 +49,10 @@ object MediaType {
   val PidfXml: MediaType =
     MediaType("application", "pidf+xml", ListMap.empty)
 
+  /** The body of a dialog NOTIFY (RFC 4235). */
+  val DialogInfoXml: MediaType =
+    MediaType("application", "dialog-info+xml", ListMap.empty)
+
   /** A digit sent in SIP INFO, the way most phones do. */
   val DtmfRelay: MediaType =
     MediaType("application", "dtmf-relay", ListMap.empty)

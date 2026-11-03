@@ -12,6 +12,7 @@ import softphone4s.media.HalfByteCodec
 import softphone4s.metrics.RecordingMetrics
 import softphone4s.registration.RegistrationState
 import softphone4s.messaging.{MessageContent, MessageFailure}
+import softphone4s.dialog.{DialogInfo, DialogState}
 import softphone4s.presence.{Availability, Presence, PresenceTuple}
 import softphone4s.subscription.{Ending, EventHeader, MessageSummary}
 import softphone4s.model.*
@@ -694,6 +695,66 @@ class SoftphoneStreamingSuite extends CatsEffectSuite {
             // A body that does not follow the format is a Left, and the stream
             // goes on.
             assert(states.lift(1).exists(_.isLeft), states.toString)
+          }
+        }
+    }
+  }
+
+  test(
+    "the dialog package is subscribed to as dialog, and a full state then a partial one are kept track of"
+  ) {
+    val ns = """xmlns="urn:ietf:params:xml:ns:dialog-info""""
+    def dialogs(version: Int, state: String, inner: String) =
+      s"""<dialog-info $ns version="$version" state="$state" entity="sip:bob@127.0.0.1">$inner</dialog-info>"""
+    def dialogNotify(first: SipRequest, n: Int, state: String, body: String) =
+      notifyFor(first, n, state, body, "dialog", MediaType.DialogInfoXml)
+    (phone, remote).tupled.use { (softphone, peer) =>
+      softphone.subscriptions
+        .watch(callee, DialogInfo.Package)
+        .use { watched =>
+          for {
+            first <- subscribeRequest(peer)
+            _     <- peer.send(us, acceptedSubscribe(first, 3600))
+            full = dialogNotify(
+              first,
+              1,
+              "active;expires=3600",
+              dialogs(
+                1,
+                "full",
+                """<dialog id="c1"><state>early</state></dialog>"""
+              )
+            )
+            _ <- peer.send(us, full)
+            _ <- answerTo(peer, full)
+            partial = dialogNotify(
+              first,
+              2,
+              "active;expires=3000",
+              dialogs(
+                2,
+                "partial",
+                """<dialog id="c1"><state>confirmed</state></dialog><dialog id="c2"><state>trying</state></dialog>"""
+              )
+            )
+            _      <- peer.send(us, partial)
+            states <- watched.states.take(2).compile.toList.timeout(5.seconds)
+          } yield {
+            def header(name: String) =
+              first.headers.others.find(_.name.matches(name)).map(_.value)
+            assertEquals(header("Event"), Some("dialog"))
+            assertEquals(header("Accept"), Some("application/dialog-info+xml"))
+            val kept = states.foldLeft(Option.empty[DialogInfo]) {
+              (known, state) =>
+                state.toOption
+                  .flatMap(update => DialogInfo.track(known, update).toOption)
+            }
+            assertEquals(
+              kept.map(_.dialogs.map(d => d.id -> d.state)),
+              Some(
+                List("c1" -> DialogState.Confirmed, "c2" -> DialogState.Trying)
+              )
+            )
           }
         }
     }

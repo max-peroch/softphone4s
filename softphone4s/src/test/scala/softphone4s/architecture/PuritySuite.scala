@@ -24,7 +24,8 @@ class PuritySuite extends FunSuite {
     "srtp"         -> 10,
     "messaging"    -> 3,
     "subscription" -> 14,
-    "publication"  -> 2
+    "publication"  -> 2,
+    "dialog"       -> 10
   )
 
   private val effectful =

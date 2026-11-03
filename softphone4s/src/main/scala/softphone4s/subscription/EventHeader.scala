@@ -27,6 +27,9 @@ object EventHeader {
   /** The `presence` package (RFC 3856). */
   val Presence: EventHeader = new EventHeader("presence", None)
 
+  /** The `dialog` package (RFC 4235). */
+  val Dialog: EventHeader = new EventHeader("dialog", None)
+
   /** The `message-summary` package (RFC 3842). */
   val MessageSummary: EventHeader = new EventHeader("message-summary", None)
 

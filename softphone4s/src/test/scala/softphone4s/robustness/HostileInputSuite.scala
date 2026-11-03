@@ -1,10 +1,12 @@
 package softphone4s.robustness
 
 import cats.Id
+import cats.syntax.all.*
 import fs2.{Chunk, Stream}
 import munit.FunSuite
 import softphone4s.codec.{RtcpCodec, RtpCodec, SdpCodec, SipCodec}
 import softphone4s.model.*
+import softphone4s.dialog.{Coverage, DialogInfo}
 import softphone4s.presence.Presence
 import softphone4s.sdp.SessionDescription
 import softphone4s.stun.Stun
@@ -303,6 +305,79 @@ class HostileInputSuite extends FunSuite {
     val tiny =
       header ++ Array.tabulate[Byte](65532)(i => if i % 4 == 3 then 1 else 0)
     bounded("stun one-byte attributes")(Stun.decode(Chunk.array(tiny)))
+  }
+
+  hostile(
+    "dialog-info: nesting, floods, entity bombs, thousands of dialogs and keeping track of them"
+  ) {
+    val ns  = """xmlns="urn:ietf:params:xml:ns:dialog-info""""
+    val top = s"""<dialog-info $ns version="1" state="full" entity="e">"""
+    bounded("dialog-info depth")(
+      DialogInfo.parse(
+        top + rep("<x>", 40000) + rep("</x>", 40000) + "</dialog-info>"
+      )
+    )
+    bounded("dialog-info unclosed")(DialogInfo.parse(top + rep("<x>", 40000)))
+    bounded("dialog-info attributes")(
+      DialogInfo.parse(
+        s"""<dialog-info $ns version="1" state="full" entity="e" """ + (1 to 8000)
+          .map(i => s"a$i=\"v\"")
+          .mkString(" ") + "/>"
+      )
+    )
+    bounded("dialog-info entity bomb")(
+      DialogInfo.parse(
+        """<!DOCTYPE p [<!ENTITY a "aaaaaaaaaa"><!ENTITY b "&a;&a;&a;&a;&a;&a;&a;&a;&a;&a;"><!ENTITY c "&b;&b;&b;&b;&b;&b;&b;&b;&b;&b;">]><dialog-info xmlns="urn:ietf:params:xml:ns:dialog-info" version="1" state="full" entity="&c;"/>"""
+      )
+    )
+    // as many dialogs as a document at the limit can hold
+    def many(from: Int, count: Int, state: String) =
+      (from until from + count)
+        .map(i => s"""<dialog id="d$i"><state>$state</state></dialog>""")
+        .mkString
+    val full =
+      s"""<dialog-info $ns version="1" state="full" entity="e">${many(
+          0,
+          2500,
+          "early"
+        )}</dialog-info>"""
+    bounded("dialog-info thousands of dialogs")(DialogInfo.parse(full))
+    val held    = DialogInfo.parse(full).toOption
+    val partial = DialogInfo
+      .parse(
+        s"""<dialog-info $ns version="2" state="partial" entity="e">${many(
+            1250,
+            2500,
+            "confirmed"
+          )}</dialog-info>"""
+      )
+      .toOption
+    bounded("dialog-info track, thousands against thousands")(
+      (held, partial).tupled.map((h, p) =>
+        (1 to 20).foldLeft(Option(h))((known, _) =>
+          known.map(k =>
+            DialogInfo
+              .track(Some(k), p.copy(version = k.version + 1))
+              .getOrElse(k)
+          )
+        )
+      )
+    )
+    bounded("dialog-info track, one dialog many times")(
+      (1 to 20000).foldLeft(Option.empty[DialogInfo])((known, n) =>
+        DialogInfo
+          .track(
+            known,
+            DialogInfo(
+              "e",
+              n.toLong,
+              if known.isEmpty then Coverage.Full else Coverage.Partial,
+              Nil
+            )
+          )
+          .toOption
+      )
+    )
   }
 
   hostile(

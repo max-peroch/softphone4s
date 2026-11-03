@@ -506,7 +506,7 @@ phone.subscriptions.watch(mailbox, MessageSummary.Package).use { watched =>
 ```
 
 A NOTIFY that cannot be read is a `Left(PackageError)` and does not end the
-stream. Two packages come with the library, and a program can define its own:
+stream. Three packages come with the library, and a program can define its own:
 
 - `MessageSummary.Package` (RFC 3842, message waiting): whether messages are
   waiting, for which account, and the counts by class.
@@ -516,6 +516,29 @@ stream. Two packages come with the library, and a program can define its own:
   in Scala and fetching nothing: a document with a DOCTYPE, or an entity the XML
   spec does not define, is refused. Extension elements in other namespaces (RPID
   and the like) are skipped.
+- `DialogInfo.Package` (RFC 4235, the `dialog` event): the dialogs of an entity,
+  which is what busy-lamp fields and call pickup are made of. Each `DialogEntry`
+  has its `id`, its `state` (`Trying`, `Proceeding`, `Early`, `Confirmed`,
+  `Terminated`), how it ended (`event`, `code`), its `duration`, the identifiers
+  of the dialog, whom it replaces and who referred it, and its `local` and
+  `remote` `Party` (identity, display name, target). Notifiers send a full state
+  first and then often only what changed, so a `partial` NOTIFY has to be applied
+  to what is known: `DialogInfo.track(known, update)` does it, dropping the
+  dialogs that ended, ignoring a repeat or a late one, and saying
+  `Left(MissedUpdate)` when one was missed or there is nothing full to amend, in
+  which case a new subscription gets the full state. The XML is read as PIDF is.
+
+```scala
+phone.subscriptions.watch(extension, DialogInfo.Package).use { watched =>
+  watched.states
+    .scan(Option.empty[DialogInfo]) {
+      case (known, Right(update)) => DialogInfo.track(known, update).toOption
+      case (known, Left(_))       => known
+    }
+    .evalMap(state => IO.println(s"busy: ${state.exists(_.isBusy)}"))
+    .compile.drain
+}
+```
 
 ### Publishing presence
 
@@ -754,7 +777,7 @@ OtelTransactionTracing[IO](tracer)   // pass as tracing = Some(...)
 What comes off the network is not trusted. Every decoder answers any input with
 a value, never an exception, and in time that grows with the input: SIP (bytes
 and text), stream framing, header values and URIs, SDP and `a=crypto`, RTP,
-RTCP, SRTP and SRTCP, STUN, PIDF and message-summary bodies. Two suites in
+RTCP, SRTP and SRTCP, STUN, PIDF, dialog-info and message-summary bodies. Two suites in
 `softphone4s/src/test/scala/softphone4s/robustness` check it:
 
 - `DecoderFuzzSuite` feeds each decoder random bytes and real messages damaged in

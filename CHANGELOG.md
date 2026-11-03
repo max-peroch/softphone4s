@@ -22,8 +22,9 @@ what to change when it does.
   API, Java 22 and later); RTCP; an adaptive jitter buffer with concealment;
   SRTP and SRTCP with SDES; a pool of RTP ports.
 - **Messaging, subscriptions and publication.** `MESSAGE` (RFC 3428),
-  `SUBSCRIBE`/`NOTIFY` (RFC 6665) with the `message-summary` and `presence`
-  event packages (PIDF), and `PUBLISH` (RFC 3903), as `phone.messages`,
+  `SUBSCRIBE`/`NOTIFY` (RFC 6665) with the `message-summary`, `presence` (PIDF)
+  and `dialog` (RFC 4235, with `DialogInfo.track` for partial notifications)
+  event packages, and `PUBLISH` (RFC 3903), as `phone.messages`,
   `phone.subscriptions` and `phone.publications`, each with a traced decorator in
   `softphone4s-otel4s`.
 - **Observability.** A `Metrics[F]` hook (calls, registrations, SIP
