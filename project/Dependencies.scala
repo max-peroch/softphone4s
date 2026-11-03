@@ -10,10 +10,10 @@ object Dependencies {
   private val opentelemetryVersion =
     "1.64.0" // what otel4s 1.1.0 is built against
   private val scribeVersion  = "3.19.0"
-  private val dnsjavaVersion = "3.6.3"
+  private val dnsjavaVersion = "3.7.1"
 
   // Audio
-  val sound4s = "io.github.max-peroch" %% "sound4s" % "0.2.1"
+  val sound4s = "io.github.max-peroch" %% "sound4s" % "0.3.0"
 
   // Effects & streaming
   val catsEffect = "org.typelevel" %% "cats-effect" % catsEffectVersion

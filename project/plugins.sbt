@@ -1,4 +1,4 @@
-addSbtPlugin("org.scalameta"     %% "sbt-scalafmt"    % "2.5.6")
-addSbtPlugin("com.github.sbt"    %% "sbt-ci-release"  % "1.12.0")
+addSbtPlugin("org.scalameta"     %% "sbt-scalafmt"    % "2.6.2")
+addSbtPlugin("com.github.sbt"    %% "sbt-ci-release"  % "1.12.1")
 addSbtPlugin("pl.project13.scala" % "sbt-jmh"         % "0.4.8")
 addSbtPlugin("com.typesafe"      %% "sbt-mima-plugin" % "1.2.1")
