@@ -9,6 +9,10 @@ import scala.concurrent.duration.*
 
 /** How long audio takes from one softphone to the other, over real UDP, when
   * the reader of the audio starts at once and when it starts late.
+  *
+  * It runs in real time, with bounds of 500 and 700 ms against 57 to 100 ms
+  * measured on an idle machine. A machine under heavy load could still trip
+  * them: check the load before reading a failure as a delay in the code.
   */
 class AudioDelaySuite extends CatsEffectSuite {
 

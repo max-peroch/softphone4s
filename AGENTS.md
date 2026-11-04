@@ -67,3 +67,12 @@ Read [ARCHITECTURE.md](ARCHITECTURE.md) before you change the design, and
 12. **Commits.** Commit only when asked. List the paths (`git commit -- path ...`):
     NEVER `git add -A` or `git commit -a`. A commit says what changed and why.
     NEVER touch files in `.claude/` that are staged but not part of your change.
+13. **Pinned versions.** Two are held on purpose. Scala stays on 3.9.0 (LTS): 3.10.0
+    compiles, with one test line changed (`Short.MinValue to Short.MaxValue` needs
+    `.toInt`). OpenTelemetry Java stays at 1.64.0, which is what otel4s 1.1.0 is
+    built against: bumping only the API and the exporter mixes SDK versions on the
+    classpath. Bump it together with otel4s, when a release is built on a newer one.
+14. **The demo.** `softphone4s-demo` rings a real phone: run it only when the
+    maintainer says so, and tell them first. Its login and number come from the
+    environment (`TWILIO_USER`, `TWILIO_PASSWORD`, `DEMO_CALL_TO`; the key is
+    `password`, not `passwd`). NEVER commit a real login or number.

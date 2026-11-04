@@ -93,6 +93,9 @@ class DecoderFuzzSuite extends ScalaCheckSuite {
   bytesDecoder("SipCodec.decode (bytes)", sipSeeds)(b =>
     SipCodec.decode(chunk(b))
   )
+  // Failed once on the time budget (1,690 ms against 500) on a machine at a load
+  // near 49, so a busy machine and not a slow input; three full runs after were
+  // clean. If it fails again at a normal load, read the input it prints first.
   bytesDecoder("SipCodec.decode (text)", sipSeeds)(b =>
     SipCodec.decode(new String(b, ISO_8859_1))
   )

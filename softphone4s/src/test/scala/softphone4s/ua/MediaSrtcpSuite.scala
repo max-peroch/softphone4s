@@ -275,6 +275,8 @@ class MediaSrtcpSuite extends CatsEffectSuite {
     }
   }
 
+  // Failed once in about 5,550 runs; the cause was not found. If it fails again,
+  // read the packets the peer recorded before changing anything.
   test("the goodbye when the call ends is encrypted too") {
     call.use { (media, ours, peerRtp, peerRtcp) =>
       for {
