@@ -9,6 +9,8 @@ what to change when it does.
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-11-04
+
 ### Added
 
 - **Signalling.** Registration with automatic refresh; incoming calls
@@ -86,6 +88,14 @@ what to change when it does.
 - The removal of an old binding (after the Contact changed) is sent by the same
   code as MESSAGE, and counts `nc` per nonce as the registration does. Before, a
   challenge with a nonce the registration had used was answered with `nc=1`.
+- The demo reads the number to call from `DEMO_CALL_TO` if it is set, and when
+  there is no keyboard (standard input closed) it no longer hangs up at once.
+
+### Fixed
+
+- `NotifyState.parse` threw on a large `retry-after` (`IllegalArgumentException`
+  from `FiniteDuration`). It reads digits only, and a value above 2^31-1 seconds
+  is that value (RFC 6665 §4.1.3).
 
 ### Removed
 
@@ -113,5 +123,6 @@ what to change when it does.
   destination.
 - Logging via `org.typelevel.log4cats.Logger[F]`.
 
-[Unreleased]: https://github.com/max-peroch/softphone4s/compare/v0.1.0...HEAD
+[Unreleased]: https://github.com/max-peroch/softphone4s/compare/v0.2.0...HEAD
+[0.2.0]: https://github.com/max-peroch/softphone4s/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/max-peroch/softphone4s/releases/tag/v0.1.0

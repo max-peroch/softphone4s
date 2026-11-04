@@ -918,6 +918,13 @@ message-waiting NOTIFY to an endpoint that has `mailboxes`, with no subscription
 the library answers it `481`, as RFC 6665 asks. A solicited MWI subscription
 resolves its request-URI to an AOR, and the mailbox must be listed on the AOR.
 
+## Limitations
+
+- **No ICE.** A peer that needs ICE (including ICE-lite) to be called cannot be.
+  Asterisk with `ice_support=yes` would be the first to try.
+- **PUBLISH has only been tried against Asterisk**, which keeps no published
+  state; FreeSWITCH is not tried.
+
 ## Inspirations
 
 This project initially started as a wrapper around the following projects before evolving into a full rewrite:

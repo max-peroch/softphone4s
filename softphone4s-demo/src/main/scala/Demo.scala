@@ -11,6 +11,7 @@ import softphone4s.otel4s.{OtelMetrics, OtelTransactionTracing, TracedSoftphone}
 import sound4s.{AudioFile, SoundStreaming, ResourceName}
 import fs2.Stream
 
+import java.io.EOFException
 import javax.sound.sampled.AudioFormat
 
 object Demo extends IOApp {
@@ -41,8 +42,13 @@ object Demo extends IOApp {
       .flatMap(AudioFile[IO](_, audioFormat).source)
       .repeat
 
+  /** Completes when enter is pressed. With no keyboard (a tool runs it under
+    * `sbt -batch`, so standard input is closed) there is nothing to wait for:
+    * the call then ends on the hang-up DTMF code or when the far end hangs up.
+    */
   private val awaitPressToHangUp: IO[Unit] =
-    IO.println("Press enter to hang up...") >> IO.readLine.void
+    IO.println("Press enter to hang up...") >>
+      IO.readLine.void.recoverWith { case _: EOFException => IO.never }
 
   private def onDtmf(
       logger: StructuredLogger[IO],
