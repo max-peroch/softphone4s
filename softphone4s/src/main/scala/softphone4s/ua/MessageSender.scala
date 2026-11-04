@@ -4,7 +4,7 @@ import cats.effect.Async
 import cats.syntax.all.*
 import softphone4s.fsm.SipMessages.buildMessage
 import softphone4s.messaging.{MessageContent, MessageFailure}
-import softphone4s.model.{SipMethod, SipUri, Uplink}
+import softphone4s.model.{NonceCount, SipMethod, SipUri, Uplink}
 import softphone4s.runtime.Entropy
 import softphone4s.transaction.TransactionLayer
 
@@ -61,7 +61,8 @@ private[softphone4s] final class MessageSender[F[_]: Async](
                 branch,
                 content,
                 authorization
-              )
+              ),
+            _ => Async[F].pure(NonceCount.One)
           )
           .map {
             case StandaloneRequest.Outcome.Final(response) =>

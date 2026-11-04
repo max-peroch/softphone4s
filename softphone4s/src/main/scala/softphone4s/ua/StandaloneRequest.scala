@@ -30,7 +30,9 @@ private[softphone4s] object StandaloneRequest {
   /** Sends what `build` makes, to the uplink's peer. `build` is given the
     * branch and CSeq of each try, and the Authorization of the second, so that
     * both carry the Call-ID and tags it holds; `body` is what `auth-int`
-    * hashes.
+    * hashes. `nonceCount` gives the `nc` for a challenge: a request that shares
+    * nonces with others must count them; one that does not gives
+    * `NonceCount.One`.
     */
   def send[F[_]: Async](
       layer: TransactionLayer[F],
@@ -39,7 +41,8 @@ private[softphone4s] object StandaloneRequest {
       method: SipMethod,
       target: SipUri,
       body: String,
-      build: (Branch, CSeqNumber, Option[ExtensionHeader]) => SipRequest
+      build: (Branch, CSeqNumber, Option[ExtensionHeader]) => SipRequest,
+      nonceCount: DigestChallenge => F[NonceCount]
   ): F[Outcome] = {
 
     def attempt(
@@ -68,21 +71,22 @@ private[softphone4s] object StandaloneRequest {
         Challenges
           .once(challenges, 0)
           .fold(Async[F].pure(Outcome.Final(r): Outcome))(challenge =>
-            entropy.cnonce.flatMap { cnonce =>
-              attempt(
-                CSeqNumber.One.next,
-                Some(
-                  uplink.endpoint.authorizationFor(
-                    kind,
-                    method,
-                    target,
-                    body,
-                    challenge,
-                    cnonce,
-                    NonceCount.One
+            (entropy.cnonce, nonceCount(challenge)).flatMapN {
+              (cnonce, count) =>
+                attempt(
+                  CSeqNumber.One.next,
+                  Some(
+                    uplink.endpoint.authorizationFor(
+                      kind,
+                      method,
+                      target,
+                      body,
+                      challenge,
+                      cnonce,
+                      count
+                    )
                   )
                 )
-              )
             }
           )
       case other => Async[F].pure(other)

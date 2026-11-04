@@ -83,6 +83,9 @@ what to change when it does.
   checked when the `FieldName` is made, so a bad one is not a call-time failure,
   and the same name may be given twice. `SoftphoneError.InvalidHeader` is gone;
   see [MIGRATION.md](MIGRATION.md).
+- The removal of an old binding (after the Contact changed) is sent by the same
+  code as MESSAGE, and counts `nc` per nonce as the registration does. Before, a
+  challenge with a nonce the registration had used was answered with `nc=1`.
 
 ### Removed
 

@@ -682,6 +682,50 @@ class RegistrationSuite extends CatsEffectSuite {
     )
   }
 
+  test(
+    "a removal challenged with a nonce the registration already used counts it on"
+  ) {
+    TestControl.executeEmbed(
+      withOutside(None) { (reg, peer, seen) =>
+        for {
+          first <- nextRegister(peer)
+          _     <- answer(
+            peer,
+            first,
+            401,
+            "Unauthorized",
+            challenge = Some(sha256)
+          )
+          retry <- nextRegister(peer)
+          _     <- answer(peer, retry, 200, granted = Some(3600))
+          _     <- reg.awaitRegistered
+          _     <- seen.set(Some(outside))
+          moved <- nextRegister(peer)
+          _     <- answer(peer, moved, 200)
+          gone  <- nextRegister(peer)
+          _     <- answer(
+            peer,
+            gone,
+            401,
+            "Unauthorized",
+            challenge = Some(sha256)
+          )
+          again <- nextRegister(peer)
+          _     <- answer(peer, again, 200)
+        } yield {
+          val verdict = DigestVerifier.verify(again, "secret")
+          assert(verdict.exists(_.valid), verdict.toString)
+          assertEquals(verdict.map(_.nonce), Some("n-sha"))
+          assertEquals(
+            DigestVerifier.verify(retry, "secret").flatMap(_.nc),
+            Some("00000001")
+          )
+          assertEquals(verdict.flatMap(_.nc), Some("00000003"))
+        }
+      }
+    )
+  }
+
   test("a removal that is challenged is answered once") {
     TestControl.executeEmbed(
       withOutside(None) { (reg, peer, seen) =>

@@ -13,6 +13,7 @@ import softphone4s.fsm.{TimerAction, TransactionFailure}
 import softphone4s.fsm.SipMessages.*
 import softphone4s.model.*
 import softphone4s.runtime.{Entropy, Timers}
+import softphone4s.ua.StandaloneRequest
 import softphone4s.transaction.{
   ClientNotice,
   ClientTransaction,
@@ -298,63 +299,36 @@ object Registration {
         uplink   <- current
         callId   <- entropy.callId(uplink.endpoint.ip)
         localTag <- entropy.tag
-        _        <- removal(uplink, old, callId, localTag, CSeqNumber.One, None)
-      } yield ()
-
-    private def removal(
-        uplink: Uplink,
-        old: SipUri,
-        callId: CallId,
-        localTag: Tag,
-        cseq: CSeqNumber,
-        authorization: Option[(AuthKind, DigestChallenge)]
-    ): F[Unit] = {
-      val endpoint = uplink.endpoint.advertising(old)
-      for {
-        branch <- entropy.branch
-        auth   <- authorization.traverse(authorize(endpoint, _, _))
-        request = endpoint.buildRegister(
+        endpoint = uplink.endpoint.advertising(old)
+        outcome <- StandaloneRequest.send(
+          layer,
+          entropy,
+          uplink,
+          SipMethod.Register,
           registrarUri,
-          callId,
-          localTag,
-          cseq,
-          branch,
-          Expires.Zero,
-          auth
+          "",
+          (branch, cseq, auth) =>
+            endpoint.buildRegister(
+              registrarUri,
+              callId,
+              localTag,
+              cseq,
+              branch,
+              Expires.Zero,
+              auth
+            ),
+          challenge => nextNonceCount(challenge.nonce)
         )
-        started <- layer.client(request, uplink.peer)
-        answer  <- started.toOption.flatTraverse(
-          _.notices
-            .collectFirst {
-              case ClientNotice.Response(r) if r.statusCode >= 200 => r
-            }
-            .compile
-            .last
-        )
-        _ <- answer match {
-          case Some(Challenges.Challenged(kind, challenges)) =>
-            Challenges
-              .once(challenges, authorization.fold(0)(_ => 1))
-              .traverse_(challenge =>
-                removal(
-                  uplink,
-                  old,
-                  callId,
-                  localTag,
-                  cseq.next,
-                  Some((kind, challenge))
-                )
-              )
-          case other =>
-            logger.debug(
-              Map(
-                "contact"        -> old.render,
-                LogFields.Status -> other.fold("none")(_.statusCode.toString)
-              )
-            )("Removed the old binding")
-        }
+        _ <- logger.debug(
+          Map(
+            "contact"        -> old.render,
+            LogFields.Status -> (outcome match {
+              case StandaloneRequest.Outcome.Final(r) => r.statusCode.toString
+              case _                                  => "none"
+            })
+          )
+        )("Removed the old binding")
       } yield ()
-    }
 
     private def isRegistered(state: RegistrationState): Boolean = state match {
       case RegistrationState.Registered(_) => true
