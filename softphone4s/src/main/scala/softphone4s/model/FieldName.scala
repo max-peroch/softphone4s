@@ -23,6 +23,7 @@ object FieldName {
   val Event: FieldName              = "Event"
   val SipETag: FieldName            = "SIP-ETag"
   val SipIfMatch: FieldName         = "SIP-If-Match"
+  val Traceparent: FieldName        = "traceparent"
 
   extension (n: FieldName) {
     def value: String                   = n

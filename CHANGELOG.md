@@ -78,11 +78,17 @@ what to change when it does.
   more than 160 ms now loses audio instead of hearing it late.
 - `softphone4s-otel4s` is built against OpenTelemetry Java 1.64.0, which otel4s
   1.1.0 needs.
+- **Breaking:** `Softphone.call` and `callAs` take `extraHeaders:
+  List[ExtensionHeader]`, not a `Map[String, List[String]]`: a header name is
+  checked when the `FieldName` is made, so a bad one is not a call-time failure,
+  and the same name may be given twice. `SoftphoneError.InvalidHeader` is gone;
+  see [MIGRATION.md](MIGRATION.md).
 
 ### Removed
 
 - `SoftphoneError.InvalidHostname`: a host is validated when the configuration
   is built.
+- `SoftphoneError.InvalidHeader`: see Changed.
 
 ### Security
 

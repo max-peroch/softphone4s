@@ -103,26 +103,14 @@ class SoftphoneStreaming[F[_]: Async: Network] private (
       SoftphoneError.UnknownAccount(id.render)
     )
 
-  private def toExtensionHeaders(
-      headers: Map[String, List[String]]
-  ): Either[SoftphoneError, List[ExtensionHeader]] =
-    headers.toList.flatTraverse { (name, values) =>
-      FieldName(name)
-        .leftMap(SoftphoneError.InvalidHeader(name, _))
-        .map(n => values.map(ExtensionHeader(n, _)))
-    }
-
   override def callAs(
       id: AccountId,
       callee: Callee,
-      extraHeaders: Map[String, List[String]] = Map.empty
+      extraHeaders: List[ExtensionHeader] = Nil
   ): Resource[F, Call[F]] =
     for {
       account <- Resource.eval(accountNamed(id))
-      extra   <- Resource.eval(
-        Async[F].fromEither(toExtensionHeaders(extraHeaders))
-      )
-      target <- Resource.eval(
+      target  <- Resource.eval(
         Async[F].fromEither(callee.toSipUri(account.config.realm))
       )
       found <- Resource.eval(uplinks.allTargets(account, target))
@@ -161,7 +149,7 @@ class SoftphoneStreaming[F[_]: Async: Network] private (
         Uplink(endpoint, calleeAddr),
         alternatives,
         streamWay,
-        extra
+        extraHeaders
       )
     } yield call
 

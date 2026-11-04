@@ -65,8 +65,11 @@ The class is now `final`, and fields were added between the old ones
   `accounts`, `messages`, `subscriptions`, `publications`; `sendDtmf` and
   `changeSession` on `Call`). Using them changes nothing; a class that
   *implements* either (a fake in a test) has to implement them.
-- `call(callee, extraHeaders)` and the members of `Call` that existed are
-  unchanged.
+- `call(callee, extraHeaders)` takes a `List[ExtensionHeader]` where it took a
+  `Map[String, List[String]]`. Make each name with `FieldName("X-Context")`, an
+  `Either[String, FieldName]`, and give one `ExtensionHeader(name, value)` per
+  value. `SoftphoneError.InvalidHeader` is gone, since a bad name cannot be built.
+  The members of `Call` that existed are unchanged.
 
 ## Errors
 

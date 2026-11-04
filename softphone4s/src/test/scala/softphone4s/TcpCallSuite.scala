@@ -192,7 +192,12 @@ class TcpCallSuite extends CatsEffectSuite {
         phone(srv.port, port"19114", TransportProtocol.Udp).map(srv -> _)
       )
       .use { (srv, phone) =>
-        val big = Map("X-Context" -> List("x" * 1500))
+        val big = List(
+          ExtensionHeader(
+            FieldName("X-Context").fold(fail(_), identity),
+            "x" * 1500
+          )
+        )
         for {
           invite <- phone.call(bob, big).use { call =>
             call.awaitPickup >> next(srv, SipMethod.Invite)

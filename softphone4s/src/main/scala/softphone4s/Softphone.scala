@@ -4,7 +4,14 @@ import cats.data.NonEmptyList
 import cats.effect.Resource
 import fs2.{Pipe, Stream}
 import softphone4s.fsm.SessionChange
-import softphone4s.model.{AccountId, Callee, Dtmf, DtmfDigit, DtmfMethod}
+import softphone4s.model.{
+  AccountId,
+  Callee,
+  Dtmf,
+  DtmfDigit,
+  DtmfMethod,
+  ExtensionHeader
+}
 import softphone4s.registration.Registration
 
 import scala.concurrent.duration.FiniteDuration
@@ -68,13 +75,13 @@ trait Softphone[F[_]] {
   def callAs(
       account: AccountId,
       callee: Callee,
-      extraHeaders: Map[String, List[String]] = Map.empty
+      extraHeaders: List[ExtensionHeader] = Nil
   ): Resource[F, Call[F]]
 
   /** Dials `callee` as the default account. */
   def call(
       callee: Callee,
-      extraHeaders: Map[String, List[String]] = Map.empty
+      extraHeaders: List[ExtensionHeader] = Nil
   ): Resource[F, Call[F]] =
     callAs(accounts.head, callee, extraHeaders)
 

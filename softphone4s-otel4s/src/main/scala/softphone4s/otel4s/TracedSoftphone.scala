@@ -25,6 +25,8 @@ import softphone4s.model.{
   DtmfDigit,
   DtmfMethod,
   Expires,
+  ExtensionHeader,
+  FieldName,
   MediaType
 }
 import softphone4s.presence.Presence
@@ -201,7 +203,7 @@ final class TracedSoftphone[F[_]: Async](
   def callAs(
       account: AccountId,
       callee: Callee,
-      extraHeaders: Map[String, List[String]] = Map.empty
+      extraHeaders: List[ExtensionHeader] = Nil
   ): Resource[F, Call[F]] =
     tracer
       .spanBuilder("softphone4s.call")
@@ -211,17 +213,18 @@ final class TracedSoftphone[F[_]: Async](
       .build
       .resource
       .flatMap { res =>
-        val ctx                                     = res.span.context
-        val traceHeaders: Map[String, List[String]] =
+        val ctx                                 = res.span.context
+        val traceHeaders: List[ExtensionHeader] =
           if ctx.isValid then
-            Map(
-              "traceparent" -> List(
+            List(
+              ExtensionHeader(
+                FieldName.Traceparent,
                 s"00-${ctx.traceIdHex}-${ctx.spanIdHex}-${
                     if ctx.isSampled then "01" else "00"
                   }"
               )
             )
-          else Map.empty
+          else Nil
         for {
           _    <- activateSpanContext(res)
           call <- underlying.callAs(

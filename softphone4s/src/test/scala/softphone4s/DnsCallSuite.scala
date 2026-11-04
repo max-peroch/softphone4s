@@ -377,8 +377,15 @@ class DnsCallSuite extends CatsEffectSuite {
           hosts = Map("sip1.example.org" -> List(ip"127.0.0.1"))
         )
         invite <- phone(dns, port"19137").use { p =>
-          p.call(bob, Map("X-Context" -> List("x" * 1500)))
-            .use(call => call.awaitPickup >> next(requests, SipMethod.Invite))
+          p.call(
+            bob,
+            List(
+              ExtensionHeader(
+                FieldName("X-Context").fold(fail(_), identity),
+                "x" * 1500
+              )
+            )
+          ).use(call => call.awaitPickup >> next(requests, SipMethod.Invite))
         }
       } yield assertEquals(
         invite.headers.topVia.transport,
