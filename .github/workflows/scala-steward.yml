@@ -21,3 +21,7 @@ jobs:
           # GITHUB_TOKEN: a pull request opened with the default token does not
           # start the CI workflow.
           github-token: ${{ secrets.SCALA_STEWARD_TOKEN }}
+          # The token's account hides its email, so give the commits one. This is
+          # the GitHub no-reply address, which is public.
+          author-name: max-peroch
+          author-email: 7041978+max-peroch@users.noreply.github.com
