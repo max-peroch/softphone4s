@@ -1,0 +1,23 @@
+name: Scala Steward
+
+on:
+  schedule:
+    - cron: '0 5 * * 1'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  scala-steward:
+    name: Scala Steward
+    runs-on: ubuntu-latest
+    steps:
+      - name: Scala Steward
+        uses: scala-steward-org/scala-steward-action@v2
+        with:
+          # A personal access token or a GitHub App token, not the default
+          # GITHUB_TOKEN: a pull request opened with the default token does not
+          # start the CI workflow.
+          github-token: ${{ secrets.SCALA_STEWARD_TOKEN }}
