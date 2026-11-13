@@ -9,7 +9,7 @@ object Dependencies {
   private val otel4sVersion        = "1.2.0"
   private val opentelemetryVersion =
     "1.64.0" // what otel4s 1.1.0 is built against
-  private val scribeVersion  = "3.19.0"
+  private val scribeVersion  = "3.19.1"
   private val dnsjavaVersion = "3.7.1"
 
   // Audio
