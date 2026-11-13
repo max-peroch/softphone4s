@@ -1,0 +1,32 @@
+name: Automerge Scala Steward
+
+# Turns on auto-merge for a Scala Steward pull request that is a patch or minor
+# update under the early-semver scheme (a minor bump of a 0.x library does not
+# count). GitHub merges it only when the checks required by the branch
+# protection on the default branch pass: without that rule it merges at once.
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, edited]
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  automerge:
+    name: Enable auto-merge
+    runs-on: ubuntu-latest
+    # Same repository (not a fork), a Scala Steward branch, and the labels
+    # Scala Steward writes in the body of the pull request.
+    if: >-
+      github.event.pull_request.head.repo.full_name == github.repository &&
+      startsWith(github.head_ref, 'update/') &&
+      (contains(github.event.pull_request.body, 'early-semver-patch') ||
+       contains(github.event.pull_request.body, 'early-semver-minor'))
+    steps:
+      - name: Enable auto-merge
+        run: gh pr merge --auto --squash "$PR_URL"
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_URL: ${{ github.event.pull_request.html_url }}

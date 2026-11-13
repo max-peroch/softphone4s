@@ -6,7 +6,7 @@ object Dependencies {
   private val fs2Version           = "3.14.0"
   private val pureconfigVersion    = "0.17.11"
   private val log4catsVersion      = "2.8.0"
-  private val otel4sVersion        = "1.1.0"
+  private val otel4sVersion        = "1.2.0"
   private val opentelemetryVersion =
     "1.64.0" // what otel4s 1.1.0 is built against
   private val scribeVersion  = "3.19.1"
