@@ -28,5 +28,8 @@ jobs:
       - name: Enable auto-merge
         run: gh pr merge --auto --squash "$PR_URL"
         env:
-          GH_TOKEN: ${{ github.token }}
+          # The Scala Steward token, not github.token: a merge made with the
+          # default token is a bot merge, and GitHub then keeps the head branch
+          # even with "Automatically delete head branches" on.
+          GH_TOKEN: ${{ secrets.SCALA_STEWARD_TOKEN }}
           PR_URL: ${{ github.event.pull_request.html_url }}
