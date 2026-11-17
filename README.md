@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="docs/logo.png" alt="softphone4s logo" width="160">
+</p>
+
 # softphone4s
 
 A purely functional SIP/VoIP client for the Typelevel ecosystem, built on
