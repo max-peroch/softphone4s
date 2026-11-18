@@ -16,6 +16,7 @@ A purely functional SIP/VoIP client for the Typelevel ecosystem, built on
 | Module               | Description |
 |----------------------|-------------|
 | `softphone4s`        | Core SIP/RTP client (this README) |
+| `softphone4s-pureconfig` | Reads `SoftphoneConfig` and its parts with [pureconfig](https://pureconfig.github.io/) |
 | `softphone4s-otel4s` | OpenTelemetry tracing wrapper around `Softphone[F]` |
 | `softphone4s-opus`   | The Opus codec, through libopus (JDK 22 or later) |
 | `softphone4s-interop`| Tests against a real Asterisk in Docker (not published; see [Interop tests](#interop-tests)) |
@@ -26,6 +27,9 @@ A purely functional SIP/VoIP client for the Typelevel ecosystem, built on
 
 ```scala
 libraryDependencies += "io.github.max-peroch" %% "softphone4s" % "<latest version>"
+
+// optional: read the configuration from a file, with pureconfig
+libraryDependencies += "io.github.max-peroch" %% "softphone4s-pureconfig" % "<latest version>"
 
 // optional: tracing
 libraryDependencies += "io.github.max-peroch" %% "softphone4s-otel4s" % "<latest version>"
@@ -147,7 +151,7 @@ softphone4s handles outbound SIP calls end-to-end:
   OpusCodec.resource[IO](OpusSettings(sampleRate = OpusSampleRate.Hz16000)).flatMap { opus =>
     SoftphoneStreaming.resource[IO](
       config.copy(codecs = List(CodecChoice.Named("opus"))),
-      new AudioFormat(16000f, 16, 1, true, false),
+      AudioFormat(16000, 16, 1),
       logger,
       List(opus)
     )
@@ -322,7 +326,10 @@ discard log output.
 
 ### Configuration
 
-softphone4s reads config via [pureconfig](https://pureconfig.github.io/).
+`SoftphoneConfig` is a plain case class: build it in code, or read it from a file
+with the `softphone4s-pureconfig` module, which uses
+[pureconfig](https://pureconfig.github.io/). pureconfig is for the JVM only, which
+is why the readers are not in `softphone4s` itself.
 Add the required fields to your `application.conf`:
 
 ```hocon
@@ -335,6 +342,7 @@ softphone {
 
 ```scala
 import pureconfig.*
+import softphone4s.config.PureConfigReaders.given
 import softphone4s.config.SoftphoneConfig
 
 val config = ConfigSource.default.at("softphone").loadOrThrow[SoftphoneConfig]
@@ -366,9 +374,9 @@ import cats.effect.*
 import fs2.Stream
 import softphone4s.SoftphoneStreaming
 import org.typelevel.log4cats.slf4j.Slf4jLogger
-import javax.sound.sampled.AudioFormat
+import sound4s.AudioFormat
 
-val audioFormat = AudioFormat(8000f, 16, 1, true, false)
+val audioFormat = AudioFormat(8000, 16, 1)
 
 val program: IO[Unit] =
   Slf4jLogger.create[IO].flatMap { logger =>
@@ -614,7 +622,12 @@ call.dtmfEvents
 avoid the stream hanging on remote hangup.
 
 The [`softphone4s-demo`](softphone4s-demo) module is a complete runnable
-example wiring in tracing and audio hardware.
+example wiring in tracing and audio hardware. `OutboundCallDemo` places one
+call. `SoftphoneDemo` is a softphone with an AWT window: registration, outgoing
+and incoming calls, hold, DTMF, messages, published presence, and watching the
+presence, message waiting and dialogs of others. Run it with
+`sbt "softphone4sDemo/runMain SoftphoneDemo"`; it reads the account from
+`demo.softphone` and needs a display and audio hardware.
 
 ### Several accounts
 

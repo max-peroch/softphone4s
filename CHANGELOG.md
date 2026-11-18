@@ -9,6 +9,39 @@ what to change when it does.
 
 ## [Unreleased]
 
+### Added
+
+- `softphone4s-pureconfig`, a module with `PureConfigReaders`: the pureconfig
+  readers of `SoftphoneConfig` and its parts, now apart from `softphone4s`.
+- `SoftphoneDemo`, an AWT softphone in `softphone4s-demo`.
+
+### Fixed
+
+- Digest authentication built its hex digits with `"%02x".format(byte)`, which
+  Scala.js renders as 8 digits for a negative byte. It does not affect the JVM.
+
+### Changed
+
+- **Breaking.** `softphone4s` no longer depends on pureconfig, and its types no
+  longer carry a `ConfigReader`. To read a configuration file, add
+  `softphone4s-pureconfig` and `import softphone4s.config.PureConfigReaders.given`
+  (see [MIGRATION.md](MIGRATION.md)). pureconfig has no Scala.js or Scala Native
+  build, so this is a step to publishing for them.
+- **Breaking.** `SoftphoneStreaming.resource` and `resourceWith` take a
+  `sound4s.AudioFormat` where they took a `javax.sound.sampled.AudioFormat`,
+  which Scala.js does not have. `softphone4s` depends on sound4s 0.4.0 for it
+  (see [MIGRATION.md](MIGRATION.md)).
+- **Breaking.** `KeyStoreConfig.path` is an `fs2.io.file.Path`, not a
+  `java.nio.file.Path`, which Scala.js has no way to make. Use
+  `Path.fromNioPath(path)` to convert (see [MIGRATION.md](MIGRATION.md)). A
+  configuration file is read as before.
+- The sources of `softphone4s` are in `softphone4s/shared`, `softphone4s/jvm` and
+  `softphone4s/js`, for a build on Scala.js (Node) that is not published yet.
+  The JVM artifact is the same.
+  `softphone4s.config.NetworkReaders` is gone with it.
+- The demo's `Demo` is now `OutboundCallDemo`; run it with
+  `softphone4sDemo/run`.
+
 ## [0.2.0] - 2026-11-04
 
 ### Added

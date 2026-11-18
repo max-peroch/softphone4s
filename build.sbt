@@ -17,6 +17,7 @@ ThisBuild / scalacOptions     := Seq(
 )
 
 import Dependencies._
+import org.scalajs.jsenv.nodejs.NodeJSEnv
 
 // The published modules are checked, in binary compatibility, against the
 // version released before the one being built (`mimaReportBinaryIssues`).
@@ -26,12 +27,14 @@ lazy val againstLastRelease = Seq(
     .toSet
 )
 
-lazy val softphone4s = project
+// The library is built for the JVM and for Scala.js on Node. What is shared is
+// in softphone4s/shared; what needs the platform (crypto, DNS, TLS, sockets) is
+// in softphone4s/jvm and softphone4s/js.
+lazy val softphone4s = crossProject(JVMPlatform, JSPlatform)
+  .crossType(CrossType.Full)
   .in(file("softphone4s"))
   .settings(
-    againstLastRelease,
     name := "softphone4s",
-    scalacOptions ++= Seq("-release", "17"),
     // Many suites bind real sockets on fixed ports, and the ports of one are
     // another's. They run one after the other.
     Test / parallelExecution := false,
@@ -44,17 +47,41 @@ lazy val softphone4s = project
       fs2Core,
       fs2Io,
       fs2DataXml,
+      sound4s,
+      log4catsCore,
+      log4catsTesting
+    )
+  )
+  .jvmSettings(
+    againstLastRelease,
+    scalacOptions ++= Seq("-release", "17"),
+    libraryDependencies += dnsjava
+  )
+  .jsSettings(
+    // Not published until it is whole: see ARCHITECTURE.md
+    publish / skip := true,
+    Test / jsEnv   := Def.uncached(new NodeJSEnv()),
+    scalaJSLinkerConfig ~= (_.withModuleKind(ModuleKind.CommonJSModule))
+  )
+
+// Reads the settings of the library with pureconfig, which is for the JVM only.
+lazy val softphone4sPureconfig = project
+  .in(file("softphone4s-pureconfig"))
+  .dependsOn(softphone4s.jvm % "compile->compile;test->test")
+  .settings(
+    name := "softphone4s-pureconfig",
+    scalacOptions ++= Seq("-release", "17"),
+    libraryDependencies ++= Seq(
       pureconfigCore,
       pureconfigGeneric,
-      log4catsCore,
-      log4catsTesting,
-      dnsjava
+      munit,
+      munitCatsEffect
     )
   )
 
 lazy val softphone4sOtel4s = project
   .in(file("softphone4s-otel4s"))
-  .dependsOn(softphone4s)
+  .dependsOn(softphone4s.jvm)
   .settings(
     againstLastRelease,
     name := "softphone4s-otel4s",
@@ -72,7 +99,7 @@ lazy val softphone4sOtel4s = project
 // Opus, through libopus; needs --enable-native-access=ALL-UNNAMED and libopus
 lazy val softphone4sOpus = project
   .in(file("softphone4s-opus"))
-  .dependsOn(softphone4s)
+  .dependsOn(softphone4s.jvm)
   .settings(
     name := "softphone4s-opus",
     libraryDependencies ++= Seq(munit, munitCatsEffect, catsEffectTestkit),
@@ -86,7 +113,7 @@ lazy val softphone4sOpus = project
 // `sbt testFull` does not need Docker: sbt softphone4sInterop/test
 lazy val softphone4sInterop = project
   .in(file("softphone4s-interop"))
-  .dependsOn(softphone4s)
+  .dependsOn(softphone4s.jvm)
   .settings(
     name           := "softphone4s-interop",
     publish / skip := true,
@@ -99,7 +126,7 @@ lazy val softphone4sInterop = project
 lazy val softphone4sBench = project
   .in(file("softphone4s-bench"))
   .enablePlugins(JmhPlugin)
-  .dependsOn(softphone4s)
+  .dependsOn(softphone4s.jvm)
   .settings(
     name           := "softphone4s-bench",
     publish / skip := true,
@@ -111,10 +138,10 @@ lazy val softphone4sBench = project
 
 lazy val softphone4sDemo = project
   .in(file("softphone4s-demo"))
-  .dependsOn(softphone4s, softphone4sOtel4s)
+  .dependsOn(softphone4s.jvm, softphone4sOtel4s, softphone4sPureconfig)
   .settings(
     name               := "softphone4s-demo",
-    mainClass          := Some("Demo"),
+    mainClass          := Some("OutboundCallDemo"),
     run / fork         := true,
     run / connectInput := true,
     publish / skip     := true,
@@ -142,7 +169,9 @@ lazy val softphone4sDemo = project
 // need Docker and are run on their own.
 lazy val root = (project in file("."))
   .aggregate(
-    softphone4s,
+    softphone4s.jvm,
+    softphone4s.js,
+    softphone4sPureconfig,
     softphone4sOtel4s,
     softphone4sOpus,
     softphone4sBench,

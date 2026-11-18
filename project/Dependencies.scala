@@ -13,7 +13,7 @@ object Dependencies {
   private val dnsjavaVersion = "3.7.1"
 
   // Audio
-  val sound4s = "io.github.max-peroch" %% "sound4s" % "0.3.0"
+  val sound4s = "io.github.max-peroch" %% "sound4s" % "0.4.0"
 
   // Effects & streaming
   val catsEffect = "org.typelevel" %% "cats-effect" % catsEffectVersion

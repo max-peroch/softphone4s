@@ -11,6 +11,50 @@ Both published modules are affected differently: `softphone4s-otel4s` has no
 binary incompatibility with its 0.1.0 (`TracedSoftphone` is where it was), but it
 wraps a `Softphone`, so what follows applies to it too.
 
+## Reading a configuration file now needs `softphone4s-pureconfig`
+
+`softphone4s` no longer depends on pureconfig, so `ConfigSource...load[SoftphoneConfig]`
+does not compile with `softphone4s` alone. Add the module and import the readers:
+
+```scala
+libraryDependencies += "io.github.max-peroch" %% "softphone4s-pureconfig" % "<version>"
+
+import pureconfig.ConfigSource
+import softphone4s.config.PureConfigReaders.given
+
+ConfigSource.default.at("softphone").load[SoftphoneConfig]
+```
+
+The keys, the values and the error messages are the same. A program that builds
+its configuration in code changes nothing, and no longer has pureconfig on its
+classpath. `softphone4s.config.NetworkReaders` (package-private) is gone.
+
+## `AudioFormat` is sound4s's
+
+`SoftphoneStreaming.resource` and `resourceWith` take a `sound4s.AudioFormat`,
+not a `javax.sound.sampled.AudioFormat`, so that the library does not need the
+JDK's sound API. It needs sound4s 0.4.0, which already brings it in.
+
+```scala
+// before
+import javax.sound.sampled.AudioFormat
+val format = new AudioFormat(8000f, 16, 1, true, false)
+
+// now
+import sound4s.AudioFormat
+val format = AudioFormat(8000, 16, 1) // signed and little-endian, as before
+```
+
+The sample rate is an `Int`. A program that already uses sound4s 0.3.0 has to
+move to 0.4.0, which has the same change for its own API.
+
+## `KeyStoreConfig.path` is an `fs2.io.file.Path`
+
+A `KeyStoreConfig` built in code takes an `fs2.io.file.Path`, so that it can be
+made on every platform. Convert a `java.nio.file.Path` with
+`Path.fromNioPath`, or write `Path("/etc/softphone/keys.p12")`. A configuration
+file is read as before.
+
 ## Configuration
 
 `SoftphoneConfig` holds validated types where it held strings:

@@ -10,6 +10,7 @@ rules for working on it are in [AGENTS.md](AGENTS.md).
 | Module | Contents |
 |---|---|
 | `softphone4s` | The library: protocol machines, transports, DNS, media, and the public `Softphone[F]` API |
+| `softphone4s-pureconfig` | Reads the configuration types with pureconfig (`PureConfigReaders`), so that `softphone4s` does not depend on it |
 | `softphone4s-otel4s` | OpenTelemetry tracing and metrics (`TracedSoftphone`, `OtelMetrics`, `OtelTransactionTracing`) |
 | `softphone4s-opus` | The Opus codec, through libopus and the Foreign Function & Memory API (Java 22 and later) |
 | `softphone4s-demo` | An example application |
@@ -38,6 +39,29 @@ are marked.
 | `metrics`, `logging` | The metrics hook, and the names of the log fields |
 | `config`, `runtime` | Typed configuration, and timers |
 | (root) | `Softphone`, `SoftphoneStreaming` and its services and routing |
+
+## Platforms
+
+`softphone4s` is built for the JVM, and for Scala.js on Node (not published yet,
+and not whole: the demo and the interop tests are JVM only). The sources are in
+`softphone4s/shared`, which is most of them, `softphone4s/jvm` and
+`softphone4s/js`. What the platform decides is behind an object of the same name
+and members in `jvm` and `js`, so that the shared code does not know which it
+is on:
+
+| Object | What it does | On Node |
+|---|---|---|
+| `runtime.Crypto` | AES, HMAC-SHA1, digests, constant-time equality, random bytes | `crypto` of Node |
+| `LocalRoute` | The address the OS sends from to reach a host | a connected `dgram` socket |
+| `dns.PlatformDns` | SRV, NAPTR and address lookups | `dns/promises` of Node |
+| `transport.TlsPlatform` | The TLS context, its parameters, the names in a certificate | the `tls` module, through fs2 |
+
+What is not done on Node, and said in the doc comment of each: a trust store
+(Node trusts its own roots, and a `trustStore` is refused), a JKS key store (a
+PKCS12 one is read), `cipherSuites`, and the names in the certificate of the
+other end (so that a connection serves only the host it was opened for). Node
+gives no TTL for an SRV or NAPTR record, and `DnsRecords` has none to give. A
+browser cannot open UDP or TCP, so it is not a target.
 
 ## Design principles
 

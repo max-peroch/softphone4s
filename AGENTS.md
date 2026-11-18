@@ -38,11 +38,11 @@ Read [ARCHITECTURE.md](ARCHITECTURE.md) before you change the design, and
 
    ```
    sbt "scalafmtSbtCheck; scalafmtCheckAll; softphone4sInterop/scalafmtCheckAll; \
-        softphone4s/testFull; softphone4sOtel4s/testFull; softphone4sDemo/compile; \
+        softphone4sJVM/testFull; softphone4sJS/testFull; softphone4sPureconfig/testFull; softphone4sOtel4s/testFull; softphone4sDemo/compile; \
         softphone4sBench/compile; softphone4sInterop/Test/compile; doc"
    ```
 
-   One suite: `sbt "softphone4s/testOnly softphone4s.presence.*"`. One test:
+   One suite: `sbt "softphone4sJVM/testOnly softphone4s.presence.*"`. One test:
    `... -- --tests=.*regex.*`. A test run that times out can leave the sbt server
    spinning: check `ps` and restart sbt before you measure anything.
 7. **Performance.** ALWAYS measure. Run `uptime` first, and compare allocation and

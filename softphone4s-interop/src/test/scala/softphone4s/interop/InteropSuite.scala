@@ -10,7 +10,7 @@ import softphone4s.config.SoftphoneConfig
 import softphone4s.model.{Secret, User}
 
 import java.net.DatagramSocket
-import javax.sound.sampled.AudioFormat
+import sound4s.AudioFormat
 import scala.concurrent.duration.*
 
 /** The base of the interop tests: an Asterisk to talk to, and a softphone
@@ -21,7 +21,7 @@ abstract class InteropSuite extends CatsEffectSuite {
 
   override def munitIOTimeout: Duration = 5.minutes
 
-  private val audio = new AudioFormat(8000f, 16, 1, true, false)
+  private val audio = AudioFormat(8000, 16, 1)
 
   private def user(name: String): User =
     User(name).fold(e => fail(e), identity)

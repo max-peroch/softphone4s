@@ -45,7 +45,7 @@ jobs:
 
       - name: Test the library
         if: matrix.java == '17'
-        run: sbt "softphone4s/testFull;softphone4sOtel4s/testFull"
+        run: sbt "softphone4sJVM/testFull;softphone4sJS/testFull;softphone4sPureconfig/testFull;softphone4sOtel4s/testFull"
 
       - name: Test everything
         if: matrix.java == '25'
@@ -60,7 +60,7 @@ jobs:
       - name: Report binary compatibility with the last release
         if: matrix.java == '25'
         continue-on-error: true
-        run: sbt "softphone4s/mimaReportBinaryIssues;softphone4sOtel4s/mimaReportBinaryIssues"
+        run: sbt "softphone4sJVM/mimaReportBinaryIssues;softphone4sOtel4s/mimaReportBinaryIssues"
 
   publish:
     name: Publish Artifacts

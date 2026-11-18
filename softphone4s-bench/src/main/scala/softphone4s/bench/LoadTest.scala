@@ -10,7 +10,7 @@ import softphone4s.model.{Callee, PositiveDuration, Secret, User}
 import softphone4s.{Call, Softphone, SoftphoneStreaming}
 
 import java.lang.management.ManagementFactory
-import javax.sound.sampled.AudioFormat
+import sound4s.AudioFormat
 import scala.concurrent.duration.*
 
 /** Load and soak tests: two softphones in one process, calling each other over
@@ -29,7 +29,7 @@ import scala.concurrent.duration.*
   */
 object LoadTest extends IOApp {
 
-  private val audio = new AudioFormat(8000f, 16, 1, true, false)
+  private val audio = AudioFormat(8000, 16, 1)
 
   /** One frame of 20 ms of loud audio, as a microphone would give. */
   private val frame: Chunk[Byte] =
