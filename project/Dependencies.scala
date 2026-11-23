@@ -3,7 +3,7 @@ import sbt._
 object Dependencies {
 
   private val catsEffectVersion    = "3.7.1"
-  private val fs2Version           = "3.14.0"
+  private val fs2Version           = "3.16.0"
   private val pureconfigVersion    = "0.17.11"
   private val log4catsVersion      = "2.8.0"
   private val otel4sVersion        = "1.2.0"
