@@ -29,8 +29,10 @@ Read [ARCHITECTURE.md](ARCHITECTURE.md) before you change the design, and
    is a race in the code: repeat it hundreds of times in one test and look at the
    odd result.
 5. **Sockets in tests.** Suites bind fixed ports and run one at a time. Before you
-   add one, search for the port. NEVER sleep for a fixed time to wait for a
-   socket.
+   add one, search for the port. The JVM and Scala.js builds of `softphone4s` share
+   them too: NEVER run `sbt testFull` on the root, which tests both at once (they
+   fail with `EADDRINUSE`). Name the projects, as the command below does. NEVER
+   sleep for a fixed time to wait for a socket.
 6. **Build.** Run `sbt` from the repository root only, and put settings in
    `build.sbt`. `-Wunused:all -Werror` makes an unused import a build error.
    scalafmt runs on compile and re-wraps lines: read a file again before you edit

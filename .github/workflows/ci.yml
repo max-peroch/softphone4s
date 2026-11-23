@@ -47,9 +47,11 @@ jobs:
         if: matrix.java == '17'
         run: sbt "softphone4sJVM/testFull;softphone4sJS/testFull;softphone4sPureconfig/testFull;softphone4sOtel4s/testFull"
 
+      # One project after the other: `sbt testFull` on the root tests the JVM and
+      # Scala.js at once, and their suites bind the same fixed ports.
       - name: Test everything
         if: matrix.java == '25'
-        run: sbt testFull
+        run: sbt "softphone4sJVM/testFull;softphone4sJS/testFull;softphone4sPureconfig/testFull;softphone4sOtel4s/testFull;softphone4sOpus/testFull"
 
       - name: Generate documentation
         if: matrix.java == '25'
