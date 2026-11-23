@@ -25,6 +25,19 @@ final class RecordingMetrics private (
   def reports: IO[Vector[CallReport]] =
     recorded.map(_.collect { case CallEnded(report) => report })
 
+  /** Waits until a registration has been reported as `state`. */
+  def registrationReported(state: RegistrationState): IO[Unit] =
+    recorded.flatMap { seen =>
+      val reported = seen.exists {
+        case Registration(_, reported) => reported == state
+        case _                         => false
+      }
+      if reported then IO.unit
+      else
+        IO.sleep(scala.concurrent.duration.DurationInt(10).millis) >>
+          registrationReported(state)
+    }
+
   /** Waits until `count` calls have ended, and gives their reports. */
   def reportsOf(count: Int): IO[Vector[CallReport]] =
     reports.flatMap(r =>

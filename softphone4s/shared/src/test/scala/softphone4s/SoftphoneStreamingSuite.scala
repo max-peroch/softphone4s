@@ -884,9 +884,18 @@ class SoftphoneStreamingSuite extends CatsEffectSuite {
         }
         softphone.register.allocated.flatMap { case (registration, release) =>
           for {
-            first     <- requestOf(peer, SipMethod.Register)
-            _         <- answer(first, 3600)
-            _         <- registration.awaitRegistered.timeout(5.seconds)
+            first <- requestOf(peer, SipMethod.Register)
+            // The metrics read the state as it changes, and a state that is
+            // replaced before they read it is not reported: each is waited
+            // for before the next step.
+            _ <- metrics
+              .registrationReported(RegistrationState.Registering)
+              .timeout(5.seconds)
+            _ <- answer(first, 3600)
+            _ <- registration.awaitRegistered.timeout(5.seconds)
+            _ <- metrics
+              .registrationReported(RegistrationState.Registered(3600.seconds))
+              .timeout(5.seconds)
             releasing <- release.start
             removal   <- requestOf(peer, SipMethod.Register)
             _         <- answer(removal, 0)

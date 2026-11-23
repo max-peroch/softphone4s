@@ -55,8 +55,10 @@ private[softphone4s] final class CallObserver[F[_]: Async](
         )
         .void
 
-  /** Reports every state of the registration of `account` that `state` goes
-    * through, and that it is gone when it is released.
+  /** Reports the states of the registration of `account` that `state` goes
+    * through, and that it is gone when it is released. A state that is replaced
+    * before it is read is not reported: `state` gives its latest value to a
+    * reader that is slower than it is.
     *
     * It returns once it follows `state`, so acquire it before the registration
     * begins: `state` gives its current value to a new subscriber, and the ones
