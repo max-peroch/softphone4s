@@ -50,6 +50,11 @@ object Registration {
     *   the Request-URI of the REGISTER, normally the account's domain.
     * @param requested
     *   the lifetime asked for.
+    * @param watch
+    *   acquired before registering begins, so that it can follow `state` from
+    *   its first value: a watcher that subscribes to `state` of a registration
+    *   that is already running can miss the states before it. It is released
+    *   after the binding is removed.
     */
   def resource[F[_]: Async](
       layer: TransactionLayer[F],
@@ -59,7 +64,9 @@ object Registration {
       entropy: Entropy[F],
       requested: Expires,
       stopTimeout: FiniteDuration,
-      phoneLogger: StructuredLogger[F]
+      phoneLogger: StructuredLogger[F],
+      watch: Signal[F, RegistrationState] => Resource[F, Unit] =
+        (_: Signal[F, RegistrationState]) => Resource.unit[F]
   ): Resource[F, Registration[F]] =
     for {
       supervisor <- Supervisor[F](await = false)
@@ -82,6 +89,7 @@ object Registration {
       )
       _ <- Resource.eval(supervisor.supervise(agent.run))
       _ <- Resource.eval(supervisor.supervise(agent.followAddress))
+      _ <- watch(agent.state)
       _ <- Resource.make(agent.start)(_ => agent.stop(stopTimeout))
     } yield agent
 

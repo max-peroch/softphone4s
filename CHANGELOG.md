@@ -19,6 +19,11 @@ what to change when it does.
 
 - Digest authentication built its hex digits with `"%02x".format(byte)`, which
   Scala.js renders as 8 digits for a negative byte. It does not affect the JVM.
+- A registration's metrics could miss its first states (the initial
+  `Unregistered`, or `Registering`): the observer subscribed to the state after
+  registering had begun. `Registration.resource` now takes a `watch` resource,
+  acquired before it begins, and the observer returns once it follows the
+  state.
 
 ### Changed
 

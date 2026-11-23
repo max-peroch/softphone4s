@@ -185,9 +185,9 @@ class SoftphoneStreaming[F[_]: Async: Network] private (
         entropy,
         Expires.forRegistration(account.config.registerExpires),
         config.hangupTimeout.value,
-        logger
+        logger,
+        observer.registered(account.id, _)
       )
-      _ <- observer.registered(account.id, registration)
     } yield registration
 
   private def buildCall(

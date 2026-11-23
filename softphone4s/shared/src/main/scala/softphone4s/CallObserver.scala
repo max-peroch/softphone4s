@@ -1,13 +1,15 @@
 package softphone4s
 
 import cats.effect.std.Supervisor
-import cats.effect.{Async, Resource}
+import cats.effect.syntax.all.*
+import cats.effect.{Async, Deferred, Ref, Resource}
 import cats.syntax.all.*
+import fs2.concurrent.Signal
 import softphone4s.fsm.TerminationReason
 import softphone4s.media.JitterStats
 import softphone4s.metrics.{CallDirection, CallOutcome, CallReport, Metrics}
 import softphone4s.model.AccountId
-import softphone4s.registration.{Registration, RegistrationState}
+import softphone4s.registration.RegistrationState
 
 /** Tells [[Metrics]] what happens to calls and registrations, from outside
   * them: what a call already says (`awaitPickup`, and why it ended) or a
@@ -53,25 +55,50 @@ private[softphone4s] final class CallObserver[F[_]: Async](
         )
         .void
 
-  /** Reports every state `registration` of `account` goes through, and that it
-    * is gone when it is released.
+  /** Reports every state of the registration of `account` that `state` goes
+    * through, and that it is gone when it is released.
+    *
+    * It returns once it follows `state`, so acquire it before the registration
+    * begins: `state` gives its current value to a new subscriber, and the ones
+    * before it are lost. It is released after the registration is removed,
+    * which is when `state` reports `Unregistered`; if that was not seen (the
+    * registrar did not answer in time), it is reported here.
     */
   def registered(
       account: AccountId,
-      registration: Registration[F]
+      state: Signal[F, RegistrationState]
   ): Resource[F, Unit] =
     Resource
       .make(
-        supervisor.supervise(
-          registration.state.discrete
-            .evalMap(metrics.registration(account, _))
-            .compile
-            .drain
-        )
-      )(fiber =>
+        for {
+          last       <- Ref.of[F, Option[RegistrationState]](None)
+          subscribed <- Deferred[F, Unit]
+          fiber      <- supervisor.supervise(
+            state.discrete
+              .evalMap { current =>
+                // `subscribed` first: a slow `Metrics` must not hold up the
+                // registration. Cancelling waits for the report to end, so
+                // `last` is what was reported.
+                subscribed.complete(()) >>
+                  Async[F].uncancelable(_ =>
+                    metrics.registration(account, current) >>
+                      last.set(Some(current))
+                  )
+              }
+              .compile
+              .drain
+              .guarantee(subscribed.complete(()).void)
+          )
+          _ <- subscribed.get
+        } yield (fiber, last)
+      ) { (fiber, last) =>
         fiber.cancel >>
-          metrics.registration(account, RegistrationState.Unregistered)
-      )
+          last.get.flatMap(reported =>
+            metrics
+              .registration(account, RegistrationState.Unregistered)
+              .unlessA(reported.contains(RegistrationState.Unregistered))
+          )
+      }
       .void
 }
 

@@ -3,8 +3,8 @@ package softphone4s.registration
 import cats.data.NonEmptyList
 import cats.effect.testkit.TestControl
 import cats.effect.std.Random
-import cats.effect.{IO, Resource}
-import fs2.concurrent.SignallingRef
+import cats.effect.{IO, Ref, Resource}
+import fs2.concurrent.{Signal, SignallingRef}
 import com.comcast.ip4s.*
 import munit.CatsEffectSuite
 import org.typelevel.log4cats.noop.NoOpLogger
@@ -50,7 +50,9 @@ class RegistrationSuite extends CatsEffectSuite {
       stopTimeout: FiniteDuration = 5.seconds,
       uplinks: NonEmptyList[Uplink] = NonEmptyList.one(Uplink(endpoint, them)),
       reach: Transport[IO] => Transport[IO] = identity,
-      seen: Option[SignallingRef[IO, Option[SocketAddress[IpAddress]]]] = None
+      seen: Option[SignallingRef[IO, Option[SocketAddress[IpAddress]]]] = None,
+      watch: Signal[IO, RegistrationState] => Resource[IO, Unit] =
+        (_: Signal[IO, RegistrationState]) => Resource.unit[IO]
   ): Resource[IO, (Registration[IO], Transport[IO])] =
     for {
       outside <- Resource.eval(
@@ -75,7 +77,8 @@ class RegistrationSuite extends CatsEffectSuite {
         Entropy.fromRandom(random),
         expires(requested),
         stopTimeout,
-        NoOpLogger.impl[IO]
+        NoOpLogger.impl[IO],
+        watch
       )
     } yield (reg, pair._2)
 
@@ -119,6 +122,23 @@ class RegistrationSuite extends CatsEffectSuite {
   private def within(actual: FiniteDuration, base: FiniteDuration) = {
     val max = base * 1.1 + 1.millis
     assert(actual >= base && actual <= max, s"$actual not within [$base, $max]")
+  }
+
+  test("a watcher is acquired before registering begins") {
+    TestControl.executeEmbed(
+      Ref.of[IO, Option[RegistrationState]](None).flatMap { stateAtWatch =>
+        // A watcher that is slow to follow `state` still sees it from the
+        // start, as nothing begins before it is acquired.
+        val slow = (state: Signal[IO, RegistrationState]) =>
+          Resource.eval(
+            IO.sleep(1.second) >> state.get
+              .flatMap(s => stateAtWatch.set(Some(s)))
+          )
+        agent(watch = slow).use((_, _) => IO.unit) >>
+          stateAtWatch.get
+            .map(s => assertEquals(s, Some(RegistrationState.Unregistered)))
+      }
+    )
   }
 
   test(
