@@ -19,6 +19,7 @@ import sound4s.{AudioFile, ResourceName, SoundStreaming}
 import java.awt.{List as _, *}
 import java.awt.event.*
 import java.time.LocalTime
+import javax.sound.sampled.AudioFormat as JavaAudioFormat
 import sound4s.AudioFormat
 import scala.concurrent.duration.*
 
@@ -38,8 +39,14 @@ object SoftphoneDemo extends IOApp.Simple {
 
   ScribeConfig.configure()
 
-  private val audioFormat: AudioFormat =
-    AudioFormat(8000, 16, 1)
+  /** The format as the JDK describes it, converted to sound4s's. */
+  private val audioFormat: IO[AudioFormat] =
+    IO.fromEither(
+      AudioFormat
+        .fromJavaFormat(JavaAudioFormat(8000f, 16, 1, true, false))
+        .left
+        .map(error => new IllegalArgumentException(error.toString))
+    )
 
   /** What we say about ourselves. */
   private enum Mood(
@@ -288,6 +295,7 @@ object SoftphoneDemo extends IOApp.Simple {
       softphone: Softphone[IO],
       publication: Publication[IO],
       sound: SoundStreaming[IO],
+      format: AudioFormat,
       line: Ref[IO, Line],
       hold: Ref[IO, Hold],
       mood: Ref[IO, Mood],
@@ -308,7 +316,7 @@ object SoftphoneDemo extends IOApp.Simple {
             ResourceName(file).left.map(new IllegalArgumentException(_))
           )
         )
-        .flatMap(AudioFile[IO](_, audioFormat).source)
+        .flatMap(AudioFile[IO](_, format).source)
         .repeat
         .through(sound.sink)
         .compile
@@ -635,8 +643,9 @@ object SoftphoneDemo extends IOApp.Simple {
     (for {
       config    <- Resource.eval(loadConfig)
       logger    <- Resource.eval(Slf4jLogger.create[IO])
-      sound     <- SoundStreaming.resource[IO](audioFormat, logger)
-      softphone <- SoftphoneStreaming.resource(config, audioFormat, logger)
+      format    <- Resource.eval(audioFormat)
+      sound     <- SoundStreaming.resource[IO](format, logger)
+      softphone <- SoftphoneStreaming.resource(config, format, logger)
       account = softphone.accounts.head
       ui <- Resource.make(IO(new Ui(account.render)))(ui =>
         IO(ui.frame.dispose())
@@ -654,6 +663,7 @@ object SoftphoneDemo extends IOApp.Simple {
         softphone,
         publication,
         sound,
+        format,
         line,
         hold,
         mood,

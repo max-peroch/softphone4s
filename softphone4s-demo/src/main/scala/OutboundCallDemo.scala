@@ -13,6 +13,7 @@ import sound4s.{AudioFile, SoundStreaming, ResourceName}
 import fs2.Stream
 
 import java.io.EOFException
+import javax.sound.sampled.AudioFormat as JavaAudioFormat
 import sound4s.AudioFormat
 
 object OutboundCallDemo extends IOApp {
@@ -30,17 +31,23 @@ object OutboundCallDemo extends IOApp {
   private lazy val config: DemoConfig =
     ConfigSource.default.at("demo").loadOrThrow[DemoConfig]
 
-  private val audioFormat: AudioFormat =
-    AudioFormat(8000, 16, 1)
+  /** The format as the JDK describes it, converted to sound4s's. */
+  private val audioFormat: IO[AudioFormat] =
+    IO.fromEither(
+      AudioFormat
+        .fromJavaFormat(JavaAudioFormat(8000f, 16, 1, true, false))
+        .left
+        .map(error => new IllegalArgumentException(error.toString))
+    )
 
-  private def progressSoundStream: Stream[IO, Byte] =
+  private def progressSoundStream(format: AudioFormat): Stream[IO, Byte] =
     Stream
       .eval(
         IO.fromEither(
           ResourceName("progress.wav").left.map(new IllegalArgumentException(_))
         )
       )
-      .flatMap(AudioFile[IO](_, audioFormat).source)
+      .flatMap(AudioFile[IO](_, format).source)
       .repeat
 
   /** Completes when enter is pressed. With no keyboard (a tool runs it under
@@ -62,7 +69,8 @@ object OutboundCallDemo extends IOApp {
   private def makeCall(
       logger: StructuredLogger[IO],
       softphone: Softphone[IO],
-      jss: SoundStreaming[IO]
+      jss: SoundStreaming[IO],
+      format: AudioFormat
   ): IO[Unit] =
     for {
       _ <- logger.info(Map("callee" -> config.callTo.value))(
@@ -72,7 +80,7 @@ object OutboundCallDemo extends IOApp {
       _            <- softphone.call(config.callTo).use { call =>
         call.awaitPickup
           .race(
-            progressSoundStream
+            progressSoundStream(format)
               .through(jss.sink)
               .compile
               .drain
@@ -110,15 +118,16 @@ object OutboundCallDemo extends IOApp {
       meter        <- Resource.eval(otel.meterProvider.get("softphone4s-demo"))
       metrics      <- Resource.eval(OtelMetrics[IO](meter))
       logger       <- Resource.eval(Slf4jLogger.create[IO])
-      jss          <- SoundStreaming.resource[IO](audioFormat, logger)
+      format       <- Resource.eval(audioFormat)
+      jss          <- SoundStreaming.resource[IO](format, logger)
       rawSoftphone <- SoftphoneStreaming.resource(
         config.softphone,
-        audioFormat,
+        format,
         logger,
         metrics = Some(metrics),
         tracing = Some(OtelTransactionTracing[IO](tracer))
       )
       softphone = TracedSoftphone(rawSoftphone, tracer)
-      _ <- Resource.eval(makeCall(logger, softphone, jss))
+      _ <- Resource.eval(makeCall(logger, softphone, jss, format))
     } yield ()).use_.as(ExitCode.Success)
 }

@@ -48,6 +48,11 @@ val format = AudioFormat(8000, 16, 1) // signed and little-endian, as before
 The sample rate is an `Int`. A program that already uses sound4s 0.3.0 has to
 move to 0.4.0, which has the same change for its own API.
 
+To keep a `javax.sound.sampled.AudioFormat` (JVM only), convert it with
+`AudioFormat.fromJavaFormat`, from sound4s 0.4.1. It returns an
+`Either[AudioError, AudioFormat]`: it refuses what is not PCM, or has no sample
+rate, sample size or channel count.
+
 ## `KeyStoreConfig.path` is an `fs2.io.file.Path`
 
 A `KeyStoreConfig` built in code takes an `fs2.io.file.Path`, so that it can be
